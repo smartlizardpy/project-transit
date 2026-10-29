@@ -1,0 +1,57 @@
+:root {
+  /* world */
+  --ground: #ebe8e0;
+
+  /* surfaces */
+  --card: #161c19;
+  --card-raised: #202823;
+  --card-hover: #28312b;
+  --card-deep: #0f1412;
+  --seg-active: #2e3d3f;
+  --seg-active-money: #2f4436;
+  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline-strong: rgba(255, 255, 255, 0.11);
+
+  /* text */
+  --text: #f3f2ec;
+  --text-2: #a9b4ac;
+  --text-3: #738078;
+
+  /* semantic */
+  --accent: #4fa3e0;
+  --accent-ink: #0c2233;
+  --accent-soft: rgba(79, 163, 224, 0.16);
+  --mint: #8fdcae;
+  --green: #5fd18e;
+  --amber: #f0c169;
+  --coral: #ef8f7d;
+  --brand: #e0573e;
+  --track: #334039;
+
+  /* shape */
+  --r-card: 14px;
+  --r-section: 10px;
+  --r-btn: 9px;
+  --shadow-card: 0 10px 30px rgba(18, 22, 20, 0.26), 0 2px 6px rgba(18, 22, 20, 0.16);
+  --shadow-pop: 0 14px 40px rgba(12, 16, 14, 0.34), 0 3px 10px rgba(12, 16, 14, 0.2);
+
+  /* motion */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --t-fast: 120ms;
+  --t-panel: 220ms;
+
+  /* layout */
+  --edge: 16px;
+  --rail-w: 52px;
+  --inspector-w: 360px;
+  --panel-w: 400px;
+
+  --font: 'Figtree', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+@media (max-width: 1440px) {
+  :root {
+    --inspector-w: 336px;
+    --panel-w: 372px;
+  }
+}

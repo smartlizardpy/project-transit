@@ -1,0 +1,4 @@
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; overflow: hidden; background: var(--ground); }
+.app { position: fixed; inset: 0; }
+.map-root, .map-root.maplibregl-map { position: absolute; inset: 0; }
