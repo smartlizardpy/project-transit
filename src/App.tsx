@@ -5,10 +5,18 @@ import { ToolRail, MapControls, Attribution, Legends, Toast } from './ui/ToolRai
 import { Inspector } from './ui/Inspector.tsx';
 import { Panels } from './ui/Panels.tsx';
 import { RouteTray } from './ui/RouteTray.tsx';
+import { TimetableEditor } from './ui/TimetableEditor.tsx';
+import { StartMenu } from './ui/StartMenu.tsx';
+import { NewCompany } from './ui/NewCompany.tsx';
+import { GameMenu } from './ui/GameMenu.tsx';
+import { Onboarding, GameOver } from './ui/Onboarding.tsx';
 import { useKeyboard } from './ui/keyboard.ts';
 import { mapRuntime } from './map/runtime.ts';
-import { CompanyLogo } from './ui/TopBar.tsx';
+import { session, useSession } from './app/session.ts';
+import { useUI } from './state/store.ts';
+import { CompanyMark } from './ui/logos.tsx';
 import './styles/ui.css';
+import './styles/game.css';
 
 function Boot() {
   const [done, setDone] = useState(false);
@@ -28,30 +36,65 @@ function Boot() {
   return (
     <div className={`boot ${done ? 'done' : ''}`} aria-hidden={done}>
       <div className="boot-inner">
-        <div className="company-logo" style={{ width: 52, height: 52, borderRadius: 14 }}>
-          <CompanyLogo size={28} />
-        </div>
-        Building İstanbul…
+        <CompanyMark logo={0} colour="#e0573e" size={52} />
+        Loading Project Transit…
         <div className="boot-bar"><i /></div>
       </div>
     </div>
   );
 }
 
+/** Session notices (save recovered, tiles missing, save failed) as toasts. */
+function SessionNotices() {
+  const notice = useSession((s) => s.notice);
+  useEffect(() => {
+    if (!notice) return;
+    useUI.getState().notify(notice, 'warn');
+    useSession.setState({ notice: null });
+  }, [notice]);
+  return null;
+}
+
+function TimetableModal() {
+  const modal = useUI((s) => s.modal);
+  if (modal?.kind !== 'timetable') return null;
+  return <TimetableEditor routeId={modal.route} onClose={() => useUI.getState().openModal(null)} />;
+}
+
+/** Quietly save when the window is closed or hidden. */
+function useSaveOnExit() {
+  useEffect(() => {
+    const h = () => {
+      if (document.visibilityState === 'hidden' && session.game && useSession.getState().phase === 'playing') void session.save('auto');
+    };
+    document.addEventListener('visibilitychange', h);
+    return () => document.removeEventListener('visibilitychange', h);
+  }, []);
+}
+
 export function App() {
   useKeyboard();
+  useSaveOnExit();
+  const phase = useSession((s) => s.phase);
   const [hud, setHud] = useState(true);
   useEffect(() => {
+    void session.refreshSaves();
     const h = (e: KeyboardEvent) => {
       if (e.key === 'F10' || (e.key.toLowerCase() === 'u' && e.shiftKey)) setHud((x) => !x);
+      if (e.key === 'F11') {
+        e.preventDefault();
+        if (document.fullscreenElement) void document.exitFullscreen();
+        else void document.documentElement.requestFullscreen().catch(() => {});
+      }
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, []);
+  const playing = phase === 'playing';
   return (
-    <div className="app">
+    <div className={`app phase-${phase}`}>
       <MapView />
-      {hud && (
+      {playing && hud && (
         <div className="hud">
           <CompanyCard />
           <TimeControls />
@@ -62,11 +105,17 @@ export function App() {
           <RouteTray />
           <Legends />
           <MapControls />
-          <Toast />
+          <Onboarding />
         </div>
       )}
+      {playing && <TimetableModal />}
+      {playing && <GameOver />}
+      <StartMenu />
+      <NewCompany />
+      <GameMenu />
+      <Toast />
+      <SessionNotices />
       <Attribution />
-      <div className="proto">PROTOTYPE · simulated data</div>
       <Boot />
     </div>
   );

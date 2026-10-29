@@ -372,16 +372,16 @@ export const OBJECTIVES: ObjectiveDef[] = [
   {
     id: 'serve-university',
     title: 'Campus connection',
-    description: 'Serve a university or college with a stop within 350 m.',
+    description: 'Serve a university or college (stop within 350 m) on a line carrying 300 riders a day.',
     reward: { cash: 15_000, rep: 2, label: 'Student travel contract' },
-    check: (g) => (servesKind(g, ['university'], 350) ? 1 : 0),
+    check: (g) => servesKind(g, ['university'], 350, 300),
   },
   {
     id: 'serve-hospital',
     title: 'Health access',
-    description: 'Serve a hospital with a stop within 300 m.',
+    description: 'Serve a hospital (stop within 300 m) on a line carrying 300 riders a day.',
     reward: { cash: 15_000, rep: 2, label: 'Health board contract' },
-    check: (g) => (servesKind(g, ['hospital'], 300) ? 1 : 0),
+    check: (g) => servesKind(g, ['hospital'], 300, 300),
   },
   {
     id: 'peak-reliable',
@@ -427,14 +427,18 @@ export const OBJECTIVES: ObjectiveDef[] = [
   },
 ];
 
-function servesKind(game: Game, kinds: string[], within: number): boolean {
-  const served = new Set<Id>();
-  for (const r of hasRouteWith(game)) for (const id of r.stops) served.add(id);
-  for (const id of served) {
-    const s = game.state.stops[id];
-    if (s && game.geo.poisNear(s.lngLat, within).some((q) => kinds.includes(q.p.kind))) return true;
+/** Progress towards serving a kind of destination on a line with real ridership (0..1). */
+function servesKind(game: Game, kinds: string[], within: number, riders: number): number {
+  let best = 0;
+  for (const r of hasRouteWith(game)) {
+    const near = r.stops.some((id) => {
+      const s = game.state.stops[id];
+      return s && game.geo.poisNear(s.lngLat, within).some((q) => kinds.includes(q.p.kind));
+    });
+    if (!near) continue;
+    best = Math.max(best, 0.2 + 0.8 * Math.min(1, routeWindow(game.state, r.id, 24).boardings / riders));
   }
-  return false;
+  return best;
 }
 
 /** Re-evaluate objectives; grant rewards exactly once. */

@@ -7,9 +7,12 @@ import { CityLayer } from './cityLayer.ts';
 import { addMapImages } from './images.ts';
 import { mapRuntime } from './runtime.ts';
 import { installController } from './controller.ts';
-import { HOME_VIEW, DEMO_ORIGIN } from '../sim/demoCity.ts';
+import { PRESETS } from '../app/presets.ts';
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl);
+
+/** The bundled (offline) city is shown behind the start menu. */
+const MENU_CITY = PRESETS[0];
 
 export function MapView() {
   const ref = useRef<HTMLDivElement>(null);
@@ -20,10 +23,10 @@ export function MapView() {
     const map = new maplibregl.Map({
       container: ref.current,
       style: buildStyle(origin),
-      center: HOME_VIEW.center,
-      zoom: HOME_VIEW.zoom,
-      pitch: HOME_VIEW.pitch,
-      bearing: HOME_VIEW.bearing,
+      center: MENU_CITY.centre,
+      zoom: MENU_CITY.view.zoom,
+      pitch: MENU_CITY.view.pitch,
+      bearing: MENU_CITY.view.bearing,
       maxPitch: 68,
       minZoom: 3,
       maxZoom: 19.5,
@@ -31,7 +34,7 @@ export function MapView() {
       canvasContextAttributes: { antialias: true, preserveDrawingBuffer: false },
       fadeDuration: 180,
     });
-    const city = new CityLayer(DEMO_ORIGIN);
+    const city = new CityLayer(MENU_CITY.centre);
     map.on('load', () => {
       addMapImages(map);
       map.addLayer(city, 'oneway-arrows');

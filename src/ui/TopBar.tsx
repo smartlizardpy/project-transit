@@ -1,25 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pause, Play, FastForward, CaretDoubleRight, ListBullets, MapPin, Wallet, TrendUp, TrendDown, Smiley, SmileyMeh, Bell, Bus, ChartLineUp, Path, GearSix, Buildings, Globe } from '@phosphor-icons/react';
-import { sim } from '../sim/sim.ts';
-import { congestionAt } from '../sim/traffic.ts';
+import { Pause, Play, FastForward, CaretDoubleRight, CaretRight, ListBullets, MapPin, Wallet, TrendUp, TrendDown, Smiley, SmileyMeh, SmileySad, Bell, Bus, ChartLineUp, Path, Buildings, FloppyDisk, Trophy, Warning } from '@phosphor-icons/react';
 import { useUI } from '../state/store.ts';
-import { useSimMinute } from './hooks.ts';
-import { clock, money, weekday } from './format.ts';
+import { useGameUpdates } from './hooks.ts';
 import { Tip, LoadBar } from './primitives.tsx';
-import { CITIES, flyToCity, currentCityId } from './cities.ts';
+import { CompanyMark } from './logos.tsx';
+import { hhmm, weekdayOf, WEEKDAYS_LONG, hourOfDay } from '../game/time.ts';
+import { window as statWindow, SAT_COMPONENTS } from '../game/progress.ts';
+import { dayTotals } from '../game/finance.ts';
+import { session, useSession } from '../app/session.ts';
+import { focusDepot, focusLine, focusStop, focusVehicle, focusZone } from './camera.ts';
+import type { Game } from '../game/engine.ts';
+import type { Notification } from '../game/types.ts';
 
-export function CompanyLogo({ size = 22 }: { size?: number }) {
-  // Original mark: two bridge arches over the water line.
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path d="M3 15.5c1.6-4.2 3.6-6.3 6-6.3s4.4 2.1 6 6.3" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
-      <path d="M11.5 15.5c1.3-3 2.8-4.5 4.6-4.5 1.8 0 3.3 1.5 4.4 4.5" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" opacity="0.72" />
-      <path d="M2.5 19.2c1.6 0 1.6-1 3.2-1s1.6 1 3.2 1 1.6-1 3.2-1 1.6 1 3.2 1 1.6-1 3.2-1 1.6 1 3 1" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" opacity="0.85" />
-    </svg>
-  );
-}
-
-function useOutside(ref: React.RefObject<HTMLElement | null>, onClose: () => void, active: boolean) {
+export function useOutside(ref: React.RefObject<HTMLElement | null>, onClose: () => void, active: boolean) {
   useEffect(() => {
     if (!active) return;
     const h = (e: MouseEvent) => {
@@ -33,43 +26,52 @@ function useOutside(ref: React.RefObject<HTMLElement | null>, onClose: () => voi
   }, [active, onClose, ref]);
 }
 
+export function repTitle(rep: number) {
+  return rep < 25 ? 'New operator' : rep < 45 ? 'Local operator' : rep < 65 ? 'Trusted operator' : rep < 82 ? 'City operator' : 'Metropolitan operator';
+}
+
 export function CompanyCard() {
+  const game = useGameUpdates(1);
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const openPanel = useUI((s) => s.openPanel);
-  const notify = useUI((s) => s.notify);
+  const openModal = useUI((s) => s.openModal);
+  const saving = useSession((s) => s.saving);
+  const lastSaved = useSession((s) => s.lastSaved);
   useOutside(menuRef, () => setOpen(false), open);
-  const go = (p: 'lines' | 'fleet' | 'finance') => {
+  if (!game) return null;
+  const c = game.state.company;
+  const rep = c.reputation;
+  const go = (p: 'lines' | 'fleet' | 'finance' | 'company') => {
     openPanel(p);
     setOpen(false);
   };
-  const city = currentCityId();
+  const r = game.state.region;
   return (
     <>
       <div className="card company">
-        <div className="company-logo">
-          <CompanyLogo />
-        </div>
+        <CompanyMark logo={c.logo} colour={c.colour} size={40} />
         <div className="company-text">
-          <div className="company-name">Haliç Transit</div>
+          <div className="company-name">{c.name}</div>
           <div className="company-meta">
-            <MapPin size={13} weight="fill" /> İstanbul · Beyoğlu &amp; Eminönü
+            <MapPin size={13} weight="fill" /> {r.city}
+            {r.area ? ` · ${r.area}` : ''}
           </div>
         </div>
-        <div className="company-level has-tip">
+        <button className="company-level has-tip" onClick={() => go('company')}>
           <div className="level-ring">
             <svg width="30" height="30" viewBox="0 0 30 30">
               <circle cx="15" cy="15" r="12.5" fill="none" stroke="#2b352f" strokeWidth="3" />
-              <circle cx="15" cy="15" r="12.5" fill="none" stroke="var(--mint)" strokeWidth="3" strokeLinecap="round" strokeDasharray={`${0.62 * 78.5} 78.5`} />
+              <circle cx="15" cy="15" r="12.5" fill="none" stroke="var(--mint)" strokeWidth="3" strokeLinecap="round" strokeDasharray={`${(rep / 100) * 78.5} 78.5`} transform="rotate(-90 15 15)" />
             </svg>
-            <b>4</b>
+            <b>{Math.floor(rep)}</b>
           </div>
           <div className="level-meta">
-            <b>City operator</b>
-            62% to level 5
+            <b>{repTitle(rep)}</b>
+            Reputation {Math.floor(rep)}/100
           </div>
-          <Tip label="Company level 4" hint="Reputation grows with satisfied passengers and reliable service." side="below" />
-        </div>
+          <Tip label="Reputation" hint="Grows with satisfied passengers and reliable service. Unlocks new areas and bus models." side="below" />
+        </button>
         <button className="icon-btn has-tip" onClick={() => setOpen((o) => !o)} aria-label="Menu">
           <ListBullets size={18} weight="bold" />
           <Tip label="Company menu" side="below" />
@@ -81,34 +83,34 @@ export function CompanyCard() {
             <Path size={18} /> <span className="grow">Lines &amp; stops</span> <kbd className="key">L</kbd>
           </button>
           <button className="menu-item" onClick={() => go('fleet')}>
-            <Bus size={18} /> <span className="grow">Fleet</span> <kbd className="key">G</kbd>
+            <Bus size={18} /> <span className="grow">Fleet &amp; depots</span> <kbd className="key">G</kbd>
           </button>
           <button className="menu-item" onClick={() => go('finance')}>
             <ChartLineUp size={18} /> <span className="grow">Finances</span> <kbd className="key">M</kbd>
           </button>
-          <button className="menu-item" disabled>
-            <Buildings size={18} /> <span className="grow">Depots &amp; research</span> <span className="meta">Not in demo</span>
+          <button className="menu-item" onClick={() => go('company')}>
+            <Trophy size={18} /> <span className="grow">Company, goals &amp; areas</span> <kbd className="key">C</kbd>
           </button>
           <div className="menu-sep" />
-          <div className="menu-title label">Explore another city</div>
-          {CITIES.map((c) => (
-            <button
-              key={c.id}
-              className="menu-item"
-              onClick={() => {
-                flyToCity(c.id);
-                setOpen(false);
-                if (c.id !== 'istanbul') notify(`${c.name}: real 3D city only. The prototype network runs in Istanbul.`);
-              }}
-            >
-              <span className={`city-dot ${city === c.id ? 'on' : ''}`} />
-              <span className="grow">{c.name}</span>
-              <span className="meta">{c.note}</span>
-            </button>
-          ))}
-          <div className="menu-sep" />
-          <button className="menu-item" disabled>
-            <GearSix size={18} /> <span className="grow">Settings</span> <span className="meta">Not in demo</span>
+          <button
+            className="menu-item"
+            onClick={async () => {
+              const ok = await session.save('manual');
+              if (ok) useUI.getState().notify('Game saved', 'good');
+              setOpen(false);
+            }}
+          >
+            <FloppyDisk size={18} /> <span className="grow">{saving ? 'Saving…' : 'Save game'}</span>
+            <span className="meta">{lastSaved ? `saved ${new Date(lastSaved).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
+          </button>
+          <button
+            className="menu-item"
+            onClick={() => {
+              openModal({ kind: 'menu' });
+              setOpen(false);
+            }}
+          >
+            <Buildings size={18} /> <span className="grow">Game menu</span> <kbd className="key">Esc</kbd>
           </button>
         </div>
       )}
@@ -116,23 +118,23 @@ export function CompanyCard() {
   );
 }
 
-const SPEEDS = [
+const SPEED_BUTTONS = [
   { v: 0, icon: <Pause size={17} weight="fill" />, label: 'Pause', k: 'Space' },
-  { v: 1, icon: <Play size={17} weight="fill" />, label: 'Normal speed', k: '1' },
-  { v: 2, icon: <FastForward size={18} weight="fill" />, label: 'Fast', k: '2' },
-  { v: 4, icon: <CaretDoubleRight size={18} weight="bold" />, label: 'Fastest', k: '3' },
+  { v: 1, icon: <Play size={17} weight="fill" />, label: 'Normal speed (1 min ≈ 7.5 s)', k: '1' },
+  { v: 2, icon: <CaretRight size={18} weight="bold" />, label: 'Fast (1 h ≈ 2 min)', k: '2' },
+  { v: 3, icon: <FastForward size={18} weight="fill" />, label: 'Faster (1 h ≈ 30 s)', k: '3' },
+  { v: 4, icon: <CaretDoubleRight size={18} weight="bold" />, label: 'Fastest (1 day ≈ 3 min)', k: '4' },
 ];
 
-function DayBar() {
-  // Congestion profile across the day with a "now" marker.
+function DayBar({ game }: { game: Game }) {
   const w = 132, h = 18;
+  const weekend = game.isWeekend(game.t);
   const pts: string[] = [];
   for (let i = 0; i <= 48; i++) {
-    const hour = (i / 48) * 24;
-    const c = congestionAt(hour);
+    const c = Math.min(1, game.traffic.profile((i / 48) * 24, weekend) * game.trafficIntensity);
     pts.push(`${(i / 48) * w},${h - c * (h - 2)}`);
   }
-  const now = (sim.hour / 24) * w;
+  const now = (hourOfDay(game.t) / 24) * w;
   return (
     <div className="daybar has-tip">
       <div className="daybar-track">
@@ -155,22 +157,25 @@ function DayBar() {
         <span>18</span>
         <span>24</span>
       </div>
-      <Tip label="Typical traffic today" hint="Simulated profile: morning and evening peaks slow your buses." side="below" />
+      <Tip label={`Typical traffic, ${weekend ? 'weekend' : 'weekday'}`} hint="Simulated estimate, not live data. Peaks slow your buses down." side="below" />
     </div>
   );
 }
 
 export function TimeControls() {
-  useSimMinute();
-  const idx = SPEEDS.findIndex((s) => s.v === sim.speed);
-  const [h, m] = clock(sim.minutes);
-  const paused = sim.speed === 0;
+  const game = useGameUpdates(4);
+  if (!game) return null;
+  const speed = game.speed;
+  const paused = speed === 0;
+  const [hh, mm] = hhmm(game.t).split(':');
+  const day = Math.floor(game.t / 86400) + 1;
+  const wd = WEEKDAYS_LONG[weekdayOf(game.state.clock.startWeekday, game.t)];
   return (
     <div className="card time">
-      <div className="speed-seg">
-        <div className={`ind ${paused ? 'paused' : ''}`} style={{ transform: `translateX(${idx * 42}px)` }} />
-        {SPEEDS.map((s) => (
-          <button key={s.v} className={`has-tip ${s.v === sim.speed ? 'on' : ''}`} onClick={() => sim.setSpeed(s.v)} aria-label={s.label}>
+      <div className="speed-seg five">
+        <div className={`ind ${paused ? 'paused' : ''}`} style={{ transform: `translateX(${speed * 38}px)` }} />
+        {SPEED_BUTTONS.map((s) => (
+          <button key={s.v} className={`has-tip ${s.v === speed ? 'on' : ''}`} onClick={() => game.setSpeed(s.v)} aria-label={s.label} disabled={game.halted && s.v > 0}>
             {s.icon}
             <Tip label={s.label} k={s.k} side="below" />
           </button>
@@ -178,66 +183,96 @@ export function TimeControls() {
       </div>
       <div className="time-readout">
         <div className={`clock ${paused ? 'paused' : ''}`}>
-          {h}
+          {hh}
           <span className="colon">:</span>
-          {m}
+          {mm}
         </div>
         <div className="date">
-          {weekday(sim.day)} · Day {sim.day}
+          {wd} · Day {day}
           {paused && <span className="amber"> · Paused</span>}
         </div>
       </div>
-      <DayBar />
+      <DayBar game={game} />
     </div>
   );
 }
 
+function satTone(v: number | null) {
+  return v === null ? 'var(--muted)' : v >= 0.72 ? 'var(--mint)' : v >= 0.55 ? 'var(--amber)' : 'var(--coral)';
+}
+
+function SatIcon({ v }: { v: number | null }) {
+  if (v !== null && v < 0.55) return <SmileySad size={18} weight="fill" />;
+  if (v !== null && v < 0.72) return <SmileyMeh size={18} weight="fill" />;
+  return <Smiley size={18} weight="fill" />;
+}
+
+const COMP_ADVICE = [
+  'Passengers wait too long. Run buses more often or add buses to busy lines.',
+  'Trips are slow compared with driving. Use fewer detours and avoid congested streets.',
+  'Buses are crowded. Add buses at peak times or use larger models.',
+  'Buses are not running to time. Allow more layover or assign enough buses for the timetable.',
+  'Passengers find the fare expensive. Consider lowering it in Finances.',
+];
+
 export function Stats() {
-  useSimMinute();
+  const game = useGameUpdates(2);
   const [satOpen, setSatOpen] = useState(false);
+  const [bellOpen, setBellOpen] = useState(false);
   const popRef = useRef<HTMLDivElement>(null);
+  const bellRef = useRef<HTMLDivElement>(null);
   useOutside(popRef, () => setSatOpen(false), satOpen);
+  useOutside(bellRef, () => setBellOpen(false), bellOpen);
   const openPanel = useUI((s) => s.openPanel);
-  const daily = sim.lines.reduce((s, l) => s + l.perf.profitPerDay, 0);
-  const sat = 0.74;
+  if (!game) return null;
+  const s = game.state;
+  const today = Math.floor(game.t / 86400);
+  const tToday = dayTotals(s, today);
+  const tYesterday = today > 0 ? dayTotals(s, today - 1) : null;
+  const w = statWindow(s, 24);
+  const sat = w.satisfaction;
+  const status = s.company.status;
+  const unread = s.notifications.filter((n) => !n.read).length;
+  const balTone = s.finance.balance < 0 || status === 'insolvent' ? 'coral' : status === 'warning' ? 'amber' : 'mint';
+  const worst = w.satisfaction !== null ? w.comp.indexOf(Math.min(...w.comp)) : -1;
   return (
     <>
       <div className="stats">
         <div className="card stats-card">
           <button className="stat has-tip" onClick={() => openPanel('finance')}>
-            <div className="stat-icon" style={{ background: 'rgba(143,220,174,0.12)', color: 'var(--mint)' }}>
-              <Wallet size={17} weight="fill" />
+            <div className="stat-icon" style={{ background: balTone === 'mint' ? 'rgba(143,220,174,0.12)' : 'rgba(239,143,125,0.14)', color: `var(--${balTone})` }}>
+              {balTone === 'mint' ? <Wallet size={17} weight="fill" /> : <Warning size={17} weight="fill" />}
             </div>
             <div>
-              <b className="mint">{money(sim.funds)}</b>
-              <span>Balance</span>
+              <b className={balTone}>{game.money(s.finance.balance)}</b>
+              <span>{status === 'insolvent' ? 'Insolvent' : s.finance.balance < 0 ? 'Overdrawn' : 'Balance'}</span>
             </div>
-            <Tip label="Open finances" k="M" side="below" />
+            <Tip label="Open finances" k="M" hint={s.finance.loan ? `Loan outstanding: ${game.money(s.finance.loan)}` : undefined} side="below" />
           </button>
           <button className="stat has-tip hide-sm" onClick={() => openPanel('finance')}>
-            <div className="stat-icon" style={{ background: daily >= 0 ? 'rgba(143,220,174,0.12)' : 'rgba(239,143,125,0.12)', color: daily >= 0 ? 'var(--mint)' : 'var(--coral)' }}>
-              {daily >= 0 ? <TrendUp size={17} weight="bold" /> : <TrendDown size={17} weight="bold" />}
+            <div className="stat-icon" style={{ background: tToday.result >= 0 ? 'rgba(143,220,174,0.12)' : 'rgba(239,143,125,0.12)', color: tToday.result >= 0 ? 'var(--mint)' : 'var(--coral)' }}>
+              {tToday.result >= 0 ? <TrendUp size={17} weight="bold" /> : <TrendDown size={17} weight="bold" />}
             </div>
             <div>
-              <b>{money(daily, { sign: true })}</b>
-              <span>Profit / day</span>
+              <b>{game.money(tToday.result, { sign: true })}</b>
+              <span>Today</span>
             </div>
-            <Tip label="Operating result, last 24 h" side="below" />
+            <Tip label="Operating result today" hint={tYesterday ? `Yesterday: ${game.money(tYesterday.result, { sign: true })}. Fares minus running costs; purchases excluded.` : 'Fares minus running costs; purchases excluded.'} side="below" />
           </button>
           <button className="stat has-tip" onClick={() => setSatOpen((o) => !o)}>
-            <div className="stat-icon" style={{ background: 'rgba(240,193,105,0.12)', color: 'var(--amber)' }}>
-              <Smiley size={18} weight="fill" />
+            <div className="stat-icon" style={{ background: 'rgba(240,193,105,0.12)', color: satTone(sat) }}>
+              <SatIcon v={sat} />
             </div>
             <div>
-              <b>{Math.round(sat * 100)}%</b>
+              <b>{sat === null ? '–' : `${Math.round(sat * 100)}%`}</b>
               <span>Satisfaction</span>
             </div>
-            <Tip label="Passenger satisfaction" side="below" />
+            <Tip label="Passenger satisfaction" hint="Last 24 hours. Click for the breakdown." side="below" />
           </button>
         </div>
-        <button className="card bell has-tip" onClick={() => useUI.getState().notify('Line 32 is losing money at peak hours. Consider a shorter loop.', 'warn')}>
+        <button className="card bell has-tip" onClick={() => setBellOpen((o) => !o)} aria-label="Notifications">
           <Bell size={20} weight="bold" />
-          <span className="dot" />
+          {unread > 0 && <span className="dot" />}
           <Tip label="Notifications" side="left" />
         </button>
       </div>
@@ -246,39 +281,119 @@ export function Stats() {
           <div className="section-head">
             <div>
               <div className="p-title" style={{ fontSize: 15 }}>Passenger satisfaction</div>
-              <div className="p-sub">Whole network · last 24 h</div>
+              <div className="p-sub">Whole network · last 24 h · {w.trips.toLocaleString()} journeys rated</div>
             </div>
-            <span className="pill good">Good</span>
+            {sat !== null && <span className={`pill ${sat >= 0.72 ? 'good' : sat >= 0.55 ? 'warn' : 'bad'}`}>{sat >= 0.72 ? 'Good' : sat >= 0.55 ? 'Mixed' : 'Poor'}</span>}
           </div>
-          <div className="list">
-            {[
-              { k: 'Waiting time', s: 'avg 7.2 min at stops', v: 0.66, c: 'var(--amber)' },
-              { k: 'Journey time', s: 'avg 14 min · target 16', v: 0.93, c: 'var(--green)' },
-              { k: 'Space on board', s: 'avg occupancy 41%', v: 0.88, c: 'var(--green)' },
-              { k: 'Reliability', s: '86% on time', v: 0.58, c: 'var(--amber)' },
-            ].map((r) => (
-              <div className="section tight" key={r.k}>
-                <div className="row" style={{ minHeight: 0 }}>
-                  <span>{r.k}</span>
-                  <span className="v" style={{ color: r.c }}>{Math.round(r.v * 100)}%</span>
-                </div>
-                <div className="row" style={{ minHeight: 22 }}>
-                  <span className="k" style={{ fontSize: 12 }}>{r.s}</span>
-                </div>
-                <LoadBar value={r.v} solid colour={r.c} marker={false} />
+          {sat === null ? (
+            <div className="empty-note">No completed journeys yet. Satisfaction is measured when passengers finish a trip.</div>
+          ) : (
+            <>
+              <div className="list">
+                {SAT_COMPONENTS.map((k, i) => {
+                  const v = w.comp[i];
+                  const detail = [
+                    `avg wait ${(w.avgWait / 60).toFixed(1)} min`,
+                    'compared with driving the same trip',
+                    w.load !== null ? `avg occupancy ${Math.round(w.load * 100)}%` : 'no load data yet',
+                    w.ontime !== null ? `${Math.round(w.ontime * 100)}% of departures on time${w.missed ? ` · ${w.missed} missed` : ''}` : 'no departures yet',
+                    `fare ${game.money(s.company.fare, { fine: true })}`,
+                  ][i];
+                  return (
+                    <div className="section tight" key={k}>
+                      <div className="row" style={{ minHeight: 0 }}>
+                        <span>{k}</span>
+                        <span className="v" style={{ color: satTone(v) }}>{Math.round(v * 100)}%</span>
+                      </div>
+                      <div className="row" style={{ minHeight: 22 }}>
+                        <span className="k" style={{ fontSize: 12 }}>{detail}</span>
+                      </div>
+                      <LoadBar value={v} solid colour={satTone(v)} marker={false} />
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-          <div className="issue" style={{ marginTop: 8 }}>
-            <SmileyMeh size={16} weight="fill" />
-            Riders on line 32 wait too long at Unkapanı. Prototype data.
-          </div>
+              {worst >= 0 && w.comp[worst] < 0.75 && (
+                <div className="issue" style={{ marginTop: 8 }}>
+                  <SmileyMeh size={16} weight="fill" />
+                  {COMP_ADVICE[worst]}
+                </div>
+              )}
+              {w.abandoned > 0 && <div className="p-sub" style={{ marginTop: 8 }}>{w.abandoned.toLocaleString()} passengers gave up waiting in the last 24 h.</div>}
+            </>
+          )}
+        </div>
+      )}
+      {bellOpen && (
+        <div className="card notif-pop" ref={bellRef}>
+          <Notifications game={game} onClose={() => setBellOpen(false)} />
         </div>
       )}
     </>
   );
 }
 
-export function GlobeIcon() {
-  return <Globe size={18} />;
+function openRef(n: Notification) {
+  const ui = useUI.getState();
+  const r = n.ref;
+  if (!r) return;
+  if (r.kind === 'vehicle') {
+    ui.select({ kind: 'vehicle', id: r.id });
+    focusVehicle(r.id);
+  } else if (r.kind === 'route') {
+    ui.select({ kind: 'line', id: r.id });
+    focusLine(r.id);
+  } else if (r.kind === 'stop') {
+    ui.select({ kind: 'stop', id: r.id });
+    focusStop(r.id);
+  } else if (r.kind === 'depot') {
+    ui.select({ kind: 'depot', id: r.id });
+    focusDepot(r.id);
+  } else if (r.kind === 'zone') {
+    ui.select({ kind: 'zone', id: r.id });
+    focusZone(r.id);
+  }
+}
+
+function Notifications({ game, onClose }: { game: Game; onClose: () => void }) {
+  const list = [...game.state.notifications].reverse().slice(0, 40);
+  useEffect(() => {
+    // opening the list marks everything read
+    return () => {
+      for (const n of game.state.notifications) n.read = true;
+    };
+  }, [game]);
+  return (
+    <>
+      <div className="section-head">
+        <div>
+          <div className="p-title" style={{ fontSize: 15 }}>Notifications</div>
+          <div className="p-sub">{list.length ? 'Most recent first' : 'Nothing yet'}</div>
+        </div>
+      </div>
+      <div className="notif-list">
+        {list.map((n) => (
+          <button
+            key={n.id}
+            className={`notif ${n.tone} ${n.read ? '' : 'unread'}`}
+            onClick={() => {
+              openRef(n);
+              if (n.ref) onClose();
+            }}
+          >
+            <span className="notif-dot" />
+            <span className="notif-body">
+              <b>{n.title}</b>
+              {n.body && <span>{n.body}</span>}
+            </span>
+            <span className="notif-time">
+              {hhmm(n.t)}
+              <br />
+              Day {Math.floor(n.t / 86400) + 1}
+            </span>
+          </button>
+        ))}
+      </div>
+    </>
+  );
 }

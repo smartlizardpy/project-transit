@@ -86,6 +86,8 @@ export function stopHalts(state: GameState, id: Id): number[] {
   return s.alt !== undefined && s.alt >= 0 && s.alt !== s.node ? [s.node, s.alt] : [s.node];
 }
 
+const LANDMARK = new Set(['station', 'ferry', 'university', 'school', 'hospital', 'park', 'culture', 'civic', 'worship', 'mall', 'market']);
+
 export function suggestStopName(state: GameState, geo: Geo, at: LngLat): string {
   const taken = new Set(Object.values(state.stops).map((s) => s.name));
   const unique = (n: string) => {
@@ -95,7 +97,8 @@ export function suggestStopName(state: GameState, geo: Geo, at: LngLat): string 
   };
   const osm = geo.osmStopNear(at, 70);
   if (osm) return unique(osm);
-  const poi = geo.poisNear(at, 110).find((q) => q.p.weight >= 100);
+  // name stops after landmarks people navigate by, not after shops or offices
+  const poi = geo.poisNear(at, 110).find((q) => q.p.weight >= 100 && LANDMARK.has(q.p.kind));
   if (poi) return unique(poi.p.name);
   const street = geo.streetNear(at, 45);
   if (street) return unique(street);

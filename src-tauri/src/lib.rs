@@ -1,3 +1,5 @@
+mod saves;
+
 use std::path::PathBuf;
 
 /// Opt-in diagnostics for headless verification: when the app is launched with
@@ -28,7 +30,15 @@ fn diag_report(report: String, png_base64: Option<String>) -> Result<(), String>
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![diag_enabled, diag_report])
+    .invoke_handler(tauri::generate_handler![
+      diag_enabled,
+      diag_report,
+      saves::saves_list,
+      saves::save_read,
+      saves::save_write,
+      saves::save_delete,
+      saves::app_exit
+    ])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

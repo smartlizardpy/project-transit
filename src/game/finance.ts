@@ -5,7 +5,8 @@ import { DAY } from './content.ts';
 import type { FinanceState, GameState, Id, LedgerCategory, LedgerEntry } from './types.ts';
 
 export const INCOME: LedgerCategory[] = ['fares', 'grant', 'contract', 'vehicle_sale', 'loan'];
-export const OPERATING_INCOME: LedgerCategory[] = ['fares', 'grant', 'contract'];
+/** one-off grants and awards are not operating income */
+export const OPERATING_INCOME: LedgerCategory[] = ['fares', 'contract'];
 export const OPERATING_COST: LedgerCategory[] = ['driver', 'fuel', 'maintenance', 'fleet_fixed', 'depot', 'stops', 'interest'];
 export const CAPITAL: LedgerCategory[] = ['equity', 'vehicle_purchase', 'vehicle_sale', 'construction', 'licence', 'loan', 'repayment'];
 
@@ -52,7 +53,8 @@ export function post(state: GameState, entry: Omit<LedgerEntry, 'id' | 't'> & { 
 function aggregate(f: FinanceState, day: number, cat: LedgerCategory, amt: number, route?: Id) {
   const d = (f.daily[day] ??= {});
   d[cat] = round2((d[cat] ?? 0) + amt);
-  if (route) {
+  // line profitability counts operating money only (not purchases, licences or construction)
+  if (route && (OPERATING_INCOME.includes(cat) || OPERATING_COST.includes(cat))) {
     const r = ((f.routeDaily[day] ??= {})[route] ??= { rev: 0, cost: 0 });
     if (amt >= 0) r.rev = round2(r.rev + amt);
     else r.cost = round2(r.cost - amt);

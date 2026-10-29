@@ -1,0 +1,45 @@
+.tt-scrim { position: fixed; inset: 0; z-index: 50; background: rgba(8, 11, 10, 0.62); display: grid; place-items: center; padding: 20px; }
+.tt-dialog { width: min(820px, 100%); max-height: calc(100vh - 40px); display: flex; flex-direction: column; overflow: hidden; }
+.tt-body { flex: 1; min-height: 0; }
+.tt-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tt-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tt-axis { position: relative; height: 16px; margin: 0 0 4px; font-size: 11px; font-weight: 700; color: var(--text-3); }
+.tt-axis span { position: absolute; transform: translateX(-50%); }
+.tt-axis span:first-child { transform: none; }
+.tt-axis span:last-child { transform: translateX(-100%); }
+.tt-track { position: relative; height: 96px; border-radius: 8px; background: repeating-linear-gradient(135deg, rgba(255,255,255,0.025) 0 6px, transparent 6px 12px), var(--card-deep); cursor: copy; overflow: hidden; }
+.tt-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--hairline); pointer-events: none; }
+.tt-tick.major { background: var(--hairline-strong); }
+.tt-band { position: absolute; top: 0; bottom: 0; cursor: pointer; }
+.tt-body-btn { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: center; }
+.tt-fill { position: absolute; left: 1px; right: 1px; bottom: 0; height: var(--h); background: var(--c); opacity: 0.62; border-radius: 5px 5px 0 0; transition: height var(--t-fast) var(--ease-out), opacity var(--t-fast); }
+.tt-band:hover .tt-fill { opacity: 0.8; }
+.tt-band.sel .tt-fill { opacity: 0.95; box-shadow: 0 0 0 2px var(--text) inset; }
+.tt-lbl { position: relative; margin-bottom: 6px; font-size: 12px; font-weight: 800; color: #0c1210; mix-blend-mode: normal; white-space: nowrap; overflow: hidden; }
+.tt-band.sel .tt-lbl { color: #0c1210; }
+.tt-handle { position: absolute; top: 0; bottom: 0; width: 10px; cursor: ew-resize; z-index: 2; touch-action: none; }
+.tt-handle.l { left: -4px; } .tt-handle.r { right: -4px; }
+.tt-band.sel .tt-handle::after { content: ''; position: absolute; top: 38%; bottom: 38%; left: 4px; width: 3px; border-radius: 2px; background: var(--text); }
+.tt-empty { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--text-3); pointer-events: none; }
+.tt-hint { font-size: 11px; margin-top: 8px; }
+.tt-stepper { display: inline-flex; align-items: center; gap: 6px; }
+.tt-stepper output { min-width: 64px; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums; }
+.tt-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.tt-chips .pill { cursor: pointer; }
+.tt-actions { display: flex; gap: 8px; }
+.tt-none { font-size: 12px; font-weight: 600; padding: 8px 0; }
+.tt-presets { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tt-presets .btn { height: auto; padding: 7px 10px; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; }
+.tt-presets small { font-size: 10.5px; font-weight: 500; color: var(--text-2); }
+.tt-warn { display: flex; gap: 8px; align-items: flex-start; padding: 9px 11px; border-radius: 8px; background: rgba(239,143,125,0.13); color: var(--coral); font-size: 12.5px; font-weight: 700; margin-bottom: 8px; }
+.tt-warn svg { flex: none; margin-top: 1px; }
+.tt-bars { display: flex; flex-direction: column; gap: 5px; margin: 8px 0; }
+.tt-barrow { display: grid; grid-template-columns: 96px 1fr 24px; gap: 8px; align-items: center; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tt-barrow .t { color: var(--text-2); }
+.tt-barrow .n { text-align: right; }
+.tt-barrow .bar { position: relative; height: 8px; border-radius: 4px; background: var(--track); }
+.tt-barrow .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--mint); }
+.tt-barrow .bar i.bad { background: var(--coral); }
+.tt-barrow .bar em { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); border-radius: 1px; }
+.tt-stats { margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; }
+@media (max-width: 720px) { .tt-cols, .tt-stats { grid-template-columns: 1fr; } }

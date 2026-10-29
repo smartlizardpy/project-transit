@@ -1,16 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Cursor, Path, Graph, TrafficSignal, Fire, ListBullets, Bus, ChartLineUp, Plus, Minus, Cube, House, Info } from '@phosphor-icons/react';
+import { Cursor, Path, Graph, TrafficSignal, Fire, ListBullets, Bus, ChartLineUp, Plus, Minus, Cube, House, Info, MapPinPlus, Garage, MapTrifold, Trophy } from '@phosphor-icons/react';
 import { useUI, type Tool, type Panel } from '../state/store.ts';
 import { Tip } from './primitives.tsx';
 import { mapRuntime } from '../map/runtime.ts';
-import { HOME_VIEW } from '../sim/demoCity.ts';
-import { sim } from '../sim/sim.ts';
-import { clock } from './format.ts';
-import { useSimMinute } from './hooks.ts';
+import { hhmm } from '../game/time.ts';
+import { useGameUpdates } from './hooks.ts';
+import { startDrafting } from './routeDraft.ts';
+import { focusZone, flyToRegion } from './camera.ts';
+import { session } from '../app/session.ts';
+import { ECON } from '../game/content.ts';
+
+const DEFAULT_PITCH = 54;
 
 const TOOLS: { id: Tool; icon: (on: boolean) => React.ReactNode; label: string; k: string; hint: string }[] = [
-  { id: 'select', icon: (on) => <Cursor size={19} weight={on ? 'fill' : 'bold'} />, label: 'Select', k: 'V', hint: 'Inspect buses, lines and stops' },
-  { id: 'route', icon: (on) => <Path size={20} weight={on ? 'fill' : 'bold'} />, label: 'Create route', k: 'R', hint: 'Click existing bus stops in order; the line follows real roads' },
+  { id: 'select', icon: (on) => <Cursor size={19} weight={on ? 'fill' : 'bold'} />, label: 'Select', k: 'V', hint: 'Inspect buses, lines, stops, depots and areas' },
+  { id: 'stop', icon: (on) => <MapPinPlus size={20} weight={on ? 'fill' : 'bold'} />, label: 'Build stops', k: 'B', hint: 'Click a street in your licensed area. Grey dots mark real stop locations.' },
+  { id: 'route', icon: (on) => <Path size={20} weight={on ? 'fill' : 'bold'} />, label: 'New line', k: 'R', hint: 'Click stops in order (or streets to build new ones). Shift-click the line to route it through a street.' },
+  { id: 'depot', icon: (on) => <Garage size={20} weight={on ? 'fill' : 'bold'} />, label: 'Build depot', k: '⇧D', hint: 'Buses park and are maintained at depots' },
 ];
 
 export function ToolRail() {
@@ -29,7 +35,12 @@ export function ToolRail() {
   return (
     <div className="card rail" role="toolbar" aria-label="Map tools">
       {TOOLS.map((t) => (
-        <button key={t.id} className={`rail-btn has-tip ${tool === t.id ? 'on' : ''}`} onClick={() => setTool(tool === t.id && t.id !== 'select' ? 'select' : t.id)} aria-label={t.label}>
+        <button
+          key={t.id}
+          className={`rail-btn has-tip ${tool === t.id ? 'on' : ''}`}
+          onClick={() => (t.id === 'route' && tool !== 'route' ? startDrafting(null) : setTool(tool === t.id && t.id !== 'select' ? 'select' : t.id))}
+          aria-label={t.label}
+        >
           {t.icon(tool === t.id)}
           <Tip label={t.label} k={t.k} hint={t.hint} />
         </button>
@@ -45,19 +56,31 @@ export function ToolRail() {
       </button>
       <button className={`rail-btn has-tip ${overlays.demand ? 'toggle-on' : ''}`} onClick={() => toggle('demand')} aria-label="Demand">
         <Fire size={20} weight={overlays.demand ? 'fill' : 'bold'} />
-        <Tip label="Passenger demand" k="P" hint="Estimated trip potential from building density" />
+        <Tip label="Passenger demand" k="P" hint="Estimated homes and jobs from map data" />
+      </button>
+      <button className={`rail-btn has-tip ${overlays.areas ? 'toggle-on' : ''}`} onClick={() => toggle('areas')} aria-label="Operating areas">
+        <MapTrifold size={20} weight={overlays.areas ? 'fill' : 'bold'} />
+        <Tip label="Operating areas" k="O" hint="Where you hold a licence, and areas you can expand into" />
       </button>
       <div className="rail-sep" />
-      {panelBtn('lines', <ListBullets size={20} weight="bold" />, 'Lines', 'L')}
-      {panelBtn('fleet', <Bus size={20} weight="bold" />, 'Fleet', 'G')}
+      {panelBtn('lines', <ListBullets size={20} weight="bold" />, 'Lines & stops', 'L')}
+      {panelBtn('fleet', <Bus size={20} weight="bold" />, 'Fleet & depots', 'G')}
       {panelBtn('finance', <ChartLineUp size={20} weight="bold" />, 'Finances', 'M')}
+      {panelBtn('company', <Trophy size={20} weight="bold" />, 'Company & goals', 'C')}
     </div>
   );
 }
 
+/** Home view: the company's home area. */
+export function goHome() {
+  const g = session.game;
+  if (g) focusZone(g.state.territory.home);
+  else flyToRegion();
+}
+
 export function MapControls() {
   const [bearing, setBearing] = useState(0);
-  const [pitch, setPitch] = useState(HOME_VIEW.pitch);
+  const [pitch, setPitch] = useState(DEFAULT_PITCH);
   useEffect(
     () =>
       mapRuntime.onReady(() => {
@@ -85,11 +108,11 @@ export function MapControls() {
           </span>
           <Tip label="Reset north" k="Q / E rotate" side="left" />
         </button>
-        <button className="icon-btn has-tip" onClick={() => map()?.easeTo({ pitch: pitch > 20 ? 0 : HOME_VIEW.pitch, duration: 700 })} aria-label="Toggle tilt">
+        <button className="icon-btn has-tip" onClick={() => map()?.easeTo({ pitch: pitch > 20 ? 0 : DEFAULT_PITCH, duration: 700 })} aria-label="Toggle tilt">
           <Cube size={18} weight={pitch > 20 ? 'fill' : 'bold'} />
           <Tip label={pitch > 20 ? 'Top-down view' : 'Miniature view'} hint="Right-drag to tilt and rotate" side="left" />
         </button>
-        <button className="icon-btn has-tip" onClick={() => map()?.flyTo({ ...HOME_VIEW, duration: 1400 })} aria-label="Home view">
+        <button className="icon-btn has-tip" onClick={goHome} aria-label="Home view">
           <House size={18} weight="bold" />
           <Tip label="Home view" k="H" side="left" />
         </button>
@@ -119,9 +142,12 @@ export function Attribution() {
 }
 
 export function Legends() {
-  useSimMinute();
+  const game = useGameUpdates(1);
   const overlays = useUI((s) => s.overlays);
-  const [h, m] = clock(Math.floor(sim.minutes / 10) * 10);
+  const tool = useUI((s) => s.tool);
+  if (!game) return null;
+  const [h, m] = hhmm(Math.floor(game.t / 600) * 600).split(':');
+  const areas = overlays.areas || tool === 'stop' || tool === 'depot';
   return (
     <>
       {overlays.traffic && (
@@ -132,18 +158,30 @@ export function Legends() {
           </div>
           <div className="ramp" style={{ background: 'linear-gradient(90deg,#62c98d,#9fd35f,#f0c04f,#ee8b55,#de5a5a)' }} />
           <div className="ramp-labels"><span>Free flowing</span><span>Heavy</span><span>Standstill</span></div>
-          <div className="estimate"><Info size={13} weight="bold" /> Simulated estimate, not live data</div>
+          <div className="estimate"><Info size={13} weight="bold" /> {game.traffic.label}: a model, not live data</div>
         </div>
       )}
       {overlays.demand && (
         <div className="card legend">
           <div className="section-head" style={{ marginBottom: 0 }}>
             <span style={{ fontSize: 13, fontWeight: 800 }}>Passenger demand</span>
-            <span className="faint" style={{ fontSize: 12, fontWeight: 700 }}>All day</span>
+            <span className="faint" style={{ fontSize: 12, fontWeight: 700 }}>Homes + jobs</span>
           </div>
           <div className="ramp" style={{ background: 'linear-gradient(90deg,rgba(70,170,180,.5),rgba(150,205,120,.8),#f2c652,#ee8054,#de566e)' }} />
           <div className="ramp-labels"><span>Low</span><span>Medium</span><span>High</span></div>
-          <div className="estimate"><Info size={13} weight="bold" /> Estimated from OSM building floor area</div>
+          <div className="estimate"><Info size={13} weight="bold" /> Estimated from OpenStreetMap buildings and land use</div>
+        </div>
+      )}
+      {areas && (
+        <div className="card legend">
+          <div className="section-head" style={{ marginBottom: 0 }}>
+            <span style={{ fontSize: 13, fontWeight: 800 }}>Operating areas</span>
+            <span className="faint" style={{ fontSize: 12, fontWeight: 700 }}>{game.state.territory.owned.length} licensed</span>
+          </div>
+          <div className="area-key"><i className="owned" /> Licensed: build stops and depots</div>
+          <div className="area-key"><i className="available" /> Available: buy a licence ({game.money(18_000, { compact: true })}+)</div>
+          <div className="area-key"><i className="locked" /> Locked: buses may drive through</div>
+          {tool === 'stop' && <div className="estimate"><Info size={13} weight="bold" /> Each stop costs {game.money(ECON.stopCost)}</div>}
         </div>
       )}
     </>
@@ -158,15 +196,16 @@ export function Toast() {
     if (!toast) return;
     setShown(toast);
     setOut(false);
-    const a = setTimeout(() => setOut(true), 3600);
-    const b = setTimeout(() => setShown(null), 3850);
+    const life = Math.min(9000, 2600 + toast.text.length * 45);
+    const a = setTimeout(() => setOut(true), life);
+    const b = setTimeout(() => setShown(null), life + 250);
     return () => {
       clearTimeout(a);
       clearTimeout(b);
     };
   }, [toast]);
   if (!shown) return null;
-  const colour = shown.tone === 'warn' ? 'var(--amber)' : shown.tone === 'good' ? 'var(--mint)' : '#8cc6ef';
+  const colour = shown.tone === 'warn' ? 'var(--amber)' : shown.tone === 'good' ? 'var(--mint)' : shown.tone === 'bad' ? 'var(--coral)' : '#8cc6ef';
   return (
     <div className={`card toast ${out ? 'out' : ''}`} key={shown.id}>
       <span style={{ width: 8, height: 8, borderRadius: 4, background: colour }} />
