@@ -28,6 +28,7 @@ await ready();
 await page.getByRole('button', { name: /New company/i }).first().click();
 await page.locator('.mn-preset', { hasText: 'İstanbul' }).click();
 await page.waitForSelector('.mn-panel.setup', { timeout: 30000 });
+await page.getByRole('button', { name: /^Next/ }).click();
 await page.getByRole('button', { name: /Found company/i }).click();
 await page.waitForFunction(() => window.__game, null, { timeout: 20000 });
 await page.evaluate(() => window.__game.state.onboarding.active = false);

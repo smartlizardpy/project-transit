@@ -125,3 +125,30 @@
   .mn-start-col { width: 500px; }
   .mn-panel { width: 640px; }
 }
+
+/* company step: the panel hugs its content instead of filling the height */
+.mn-panel.compact { bottom: auto; max-height: calc(100% - 2 * clamp(16px, 4vh, 56px)); }
+.mn-panel.compact .mn-scroll { flex: none; }
+.mn-home { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(79,163,224,0.35); color: var(--accent); }
+.mn-home > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mn-home b { font-size: 14px; font-weight: 800; color: var(--text); }
+.mn-home span { font-size: 12px; font-weight: 600; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mn-panel-foot .btn.primary { display: inline-flex; align-items: center; gap: 6px; }
+
+/* start menu: the title and items arrive one after another */
+@keyframes mn-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes mn-glide { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+.mn-title h1 { animation: mn-rise 700ms var(--ease-out) 120ms backwards; }
+.mn-title p { animation: mn-rise 700ms var(--ease-out) 260ms backwards; }
+.mn-start .mn-menu { animation: mn-rise 600ms var(--ease-out) 380ms backwards; }
+.mn-start .mn-item { animation: mn-glide 420ms var(--ease-out) backwards; }
+.mn-start .mn-item:nth-child(1) { animation-delay: 480ms; }
+.mn-start .mn-item:nth-child(2) { animation-delay: 540ms; }
+.mn-start .mn-item:nth-child(3) { animation-delay: 600ms; }
+.mn-start .mn-item:nth-child(4) { animation-delay: 660ms; }
+.mn-start .mn-item:nth-child(5) { animation-delay: 720ms; }
+.mn-foot { animation: mn-rise 600ms var(--ease-out) 820ms backwards; }
+.mn-flow .mn-panel { animation: mn-glide 360ms var(--ease-out) backwards; }
+@media (prefers-reduced-motion: reduce) {
+  .mn-title h1, .mn-title p, .mn-start .mn-menu, .mn-start .mn-item, .mn-foot, .mn-flow .mn-panel { animation: none; }
+}

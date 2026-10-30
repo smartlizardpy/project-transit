@@ -30,6 +30,7 @@ await page.waitForSelector('.mn-panel.setup', { timeout: 40000 });
 await settle(800);
 await page.screenshot({ path: `${out}/2-setup.png` });
 await page.locator('.mn-zone').first().click();
+await page.getByRole('button', { name: /^Next/ }).click();
 await page.getByRole('button', { name: /Found company/i }).click();
 await page.waitForFunction(() => window.__game, null, { timeout: 20000 });
 const built = await page.evaluate(() => {

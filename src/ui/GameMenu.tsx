@@ -17,8 +17,10 @@ export function relTime(ms: number): string {
   return new Date(ms).toLocaleDateString();
 }
 
-function useEsc(fn: () => void) {
+/** Esc closes this layer (and nothing below it) while `active`. */
+function useEsc(fn: () => void, active = true) {
   useEffect(() => {
+    if (!active) return;
     const h = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
@@ -27,7 +29,7 @@ function useEsc(fn: () => void) {
     };
     window.addEventListener('keydown', h, true);
     return () => window.removeEventListener('keydown', h, true);
-  }, [fn]);
+  }, [fn, active]);
 }
 
 export function Dialog({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
@@ -154,7 +156,7 @@ export function GameMenu() {
     if (isMenu) { setView('main'); setSaved(false); }
   }, [isMenu]);
   const close = () => openModal(null);
-  useEsc(() => (view === 'main' ? close() : setView('main')));
+  useEsc(() => (view === 'main' ? close() : setView('main')), isMenu);
   if (modal?.kind === 'settings') return <SettingsDialog />;
   if (!isMenu) return null;
   const save = async () => {

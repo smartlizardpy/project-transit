@@ -169,6 +169,16 @@ export class VehicleLayer {
     this.attach(session.game);
   }
 
+  /** Draw another game's buses (the start-menu showcase) while nothing is being played. */
+  show(g: Game) {
+    if (!session.game) this.attach(g);
+  }
+
+  /** Stop drawing `g` if it is the game being drawn. */
+  release(g: Game) {
+    if (this.game === g) this.attach(session.game);
+  }
+
   private attach(g: Game | null) {
     this.game = g;
     for (const m of this.meshes.values()) this.city.dynamicRoot.remove(m);

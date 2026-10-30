@@ -13,6 +13,7 @@ import { routeWithFallback, type LngLat } from '../game/world/graph.ts';
 import { ECON } from '../game/content.ts';
 import { activeSeq, addWaypoint, appendStop, computePreview, useDraftPreview } from '../ui/routeDraft.ts';
 import { focusPoint, fitPoints } from '../ui/camera.ts';
+import { installShowcase } from './showcase.ts';
 
 export interface Controller {
   vehicles: VehicleLayer;
@@ -27,6 +28,7 @@ export function installController(map: MlMap, city: CityLayer): Controller {
   const container = map.getContainer();
   const vehicles = new VehicleLayer(city, container);
   const markers = new MarkerLayer(map, { stop: (id, e) => onStopClick(id, e), depot: (id) => onDepotClick(id) });
+  const showcase = installShowcase(map, city, vehicles, overlays);
   let game: Game | null = session.game;
 
   // ───────────────────────── session → map
@@ -72,7 +74,7 @@ export function installController(map: MlMap, city: CityLayer): Controller {
         waitingTick = 0;
         markers.refreshWaiting();
       }
-    }
+    } else showcase.frame(dt);
     map.triggerRepaint();
     raf = requestAnimationFrame(loop);
   };
@@ -240,7 +242,7 @@ export function installController(map: MlMap, city: CityLayer): Controller {
       const phase = useSession.getState().phase;
       const at: LngLat = [e.lngLat.lng, e.lngLat.lat];
       if (phase === 'setup') {
-        const f = map.queryRenderedFeatures(e.point, { layers: ['zones-fill'] })[0];
+        const f = useSession.getState().setupStep === 'area' ? map.queryRenderedFeatures(e.point, { layers: ['zones-fill'] })[0] : undefined;
         overlays.setZoneHover((f?.properties?.id as string) ?? null);
         container.classList.toggle('hovering', !!f);
         return;
@@ -309,7 +311,7 @@ export function installController(map: MlMap, city: CityLayer): Controller {
     const at: LngLat = [e.lngLat.lng, e.lngLat.lat];
     if (phase === 'setup') {
       const f = map.queryRenderedFeatures(e.point, { layers: ['zones-fill'] })[0];
-      if (f?.properties?.id) useSession.setState({ homeZone: f.properties.id as string });
+      if (f?.properties?.id && useSession.getState().setupStep === 'area') useSession.setState({ homeZone: f.properties.id as string });
       return;
     }
     if (phase !== 'playing' || !game) return;

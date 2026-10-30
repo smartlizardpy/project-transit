@@ -73,6 +73,8 @@ const focusCase = (on: number, off: number): ExpressionSpecification => ['case',
 export const routeFid = (id: string) => Number(id.replace(/\D/g, '')) || 0;
 
 export interface Overlays {
+  /** Draw the start-menu showcase's lines while no game is played (null to stop). */
+  setShowcase(g: Game | null): void;
   setDraft(colour: string, parts: { out?: LngLat[] | null; ret?: LngLat[] | null; preview?: LngLat[] | null; via?: LngLat[] }): void;
   setStopHover(id: number | null): void;
   refreshAll(): void;
@@ -246,6 +248,8 @@ export function installOverlays(map: MlMap): Overlays {
 
   // ───────────────────────── data
   let game: Game | null = null;
+  /** the start-menu showcase, drawn while no game is played */
+  let showcase: Game | null = null;
   let region: Region | null = null;
   let stopHover: number | null = null;
   let lastTraffic = 0;
@@ -334,8 +338,10 @@ export function installOverlays(map: MlMap): Overlays {
     src('osm-stops').setData({ type: 'FeatureCollection', features: feats });
   };
 
+  const linesGame = () => game ?? showcase;
   /** Lines split into runs with a lane index so lines sharing a street sit side by side. */
   const refreshLines = () => {
+    const game = linesGame();
     if (!game) {
       src('lines').setData(EMPTY);
       routeIds = [];
@@ -506,6 +512,10 @@ export function installOverlays(map: MlMap): Overlays {
       if (stopHover) map.setFeatureState({ source: 'osm-stops', id: stopHover }, { hover: false });
       stopHover = id;
       if (stopHover) map.setFeatureState({ source: 'osm-stops', id: stopHover }, { hover: true });
+    },
+    setShowcase(g) {
+      showcase = g;
+      refreshLines();
     },
     setDraft(colour, parts) {
       const features: Feature[] = [];

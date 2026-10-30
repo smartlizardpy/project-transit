@@ -91,6 +91,8 @@ for (const [w, h] of SIZES) {
   await ui(async (preset) => { const { PRESETS, presetSpec } = await import('/src/app/presets.ts'); await window.__session.beginNew(presetSpec(PRESETS[preset])); }, PRESET);
   await page.waitForFunction(() => window.__session && document.querySelector('.mn-panel.setup'), null, { timeout: 30000 }).catch(() => {});
   await shot('company-setup', 1200);
+  await page.getByRole('button', { name: /^Next/ }).click();
+  await shot('company-details', 1300);
   await ui(() => {
     const reg = window.__session.region;
     const c = reg.spec.centre;

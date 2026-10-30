@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, MagnifyingGlass, Crosshair, WifiSlash, X } from '@phosphor-icons/react';
+import { ArrowLeft, ArrowRight, MagnifyingGlass, Crosshair, MapPin, WifiSlash, X } from '@phosphor-icons/react';
+import { LngLatBounds } from 'maplibre-gl';
 import { create } from 'zustand';
 import '../styles/menu.css';
 import { useSession, session } from '../app/session.ts';
@@ -7,7 +8,7 @@ import { PRESETS, presetSpec, customSpec } from '../app/presets.ts';
 import { mapRuntime } from '../map/runtime.ts';
 import { COMPANY_COLOURS, ECON, STARTING_REPUTATION } from '../game/content.ts';
 import { currencyFor, formatMoney } from '../game/currency.ts';
-import { focusZone, flyToRegion } from './camera.ts';
+import { flyToRegion } from './camera.ts';
 import { CompanyMark, LOGOS } from './logos.tsx';
 
 /** Whether the player chose "New company" on the start menu. */
@@ -86,7 +87,7 @@ function Location() {
       <div className="card mn-panel">
         <div className="mn-panel-head">
           <button className="icon-btn" onClick={closeFlow} aria-label="Back"><ArrowLeft size={18} /></button>
-          <div><h2>Where will your company run?</h2><p>Step 1 of 2 · Choose a place</p></div>
+          <div><h2>Where will your company run?</h2><p>Step 1 of 3 · Choose a place</p></div>
         </div>
         <div className="mn-scroll">
           {loadError && (
@@ -158,15 +159,33 @@ function Loading() {
   );
 }
 
+/** Frame an area on the map beside the setup panel. */
+function showZone(id: string) {
+  const map = mapRuntime.map;
+  const z = session.region?.zones.find((x) => x.id === id);
+  if (!map || !z) return;
+  const b = new LngLatBounds();
+  for (const p of z.ring) b.extend(p as [number, number]);
+  const right = document.querySelector('.mn-panel')?.getBoundingClientRect().right ?? 0;
+  map.fitBounds(b, { padding: { left: right + 40, right: 60, top: 80, bottom: 80 }, maxZoom: 16, pitch: 50, bearing: map.getBearing(), duration: 1100 });
+}
+
 function Setup() {
   const region = session.region;
   const spec = useSession((s) => s.pending?.spec);
-  const homeZone = useSession((s) => s.homeZone);
+  const step = useSession((s) => s.setupStep);
   const city = spec?.city ?? region?.spec.city ?? '';
+  // kept here so going back to the area step does not lose them
   const [name, setName] = useState(`${city} Transit`);
   const [colour, setColour] = useState(COMPANY_COLOURS[0]);
   const [logo, setLogo] = useState(0);
   useEffect(() => { flyToRegion(); }, []);
+  return step === 'area' ? <AreaStep city={city} /> : <CompanyStep city={city} name={name} setName={setName} colour={colour} setColour={setColour} logo={logo} setLogo={setLogo} />;
+}
+
+function AreaStep({ city }: { city: string }) {
+  const region = session.region;
+  const homeZone = useSession((s) => s.homeZone);
   const zones = useMemo(() => [...(region?.zones ?? [])].sort((a, b) => b.residents + b.jobs - (a.residents + a.jobs)), [region]);
   // suggest the busiest area; the player can pick any other
   useEffect(() => {
@@ -176,9 +195,8 @@ function Setup() {
   useEffect(() => {
     if (homeZone) refs.current.get(homeZone)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [homeZone]);
-  const cur = currencyFor(spec?.country ?? region?.spec.country);
   const n = (v: number) => Math.round(v / 100) * 100;
-  const ready = name.trim().length > 0 && !!homeZone;
+  const next = () => homeZone && useSession.setState({ setupStep: 'company' });
 
   return (
     <div className="mn-flow">
@@ -186,11 +204,10 @@ function Setup() {
       <div className="card mn-panel setup">
         <div className="mn-panel-head">
           <button className="icon-btn" onClick={() => session.cancelSetup()} aria-label="Back"><ArrowLeft size={18} /></button>
-          <div><h2>Found your company</h2><p>Step 2 of 2 · {city}</p></div>
+          <div><h2>Choose your home area</h2><p>Step 2 of 3 · {city}</p></div>
         </div>
         <div className="mn-scroll">
-          <div className="label">Choose your home area</div>
-          <p className="mn-note">Your first licensed area. Pick from the list or click an area on the map. Figures are estimates.</p>
+          <p className="mn-note">Your first licence: you can build stops and depots here, and expand to neighbouring areas later. Pick one from the list or click it on the map. Figures are estimates.</p>
           <div className="mn-zones">
             {zones.map((z) => (
               <button
@@ -198,7 +215,8 @@ function Setup() {
                 ref={(el) => { if (el) refs.current.set(z.id, el); }}
                 className={'mn-zone' + (homeZone === z.id ? ' on' : '')}
                 aria-pressed={homeZone === z.id}
-                onClick={() => { useSession.setState({ homeZone: z.id }); focusZone(z.id); }}
+                onClick={() => { useSession.setState({ homeZone: z.id }); showZone(z.id); }}
+                onDoubleClick={next}
               >
                 <span className="mn-zone-top"><b>{z.name}</b><span className={'pill mn-tag' + (z.named ? '' : ' gen')}>{z.named ? 'Neighbourhood' : 'Generated area'}</span></span>
                 <span className="mn-zone-sub">≈{n(z.residents).toLocaleString()} residents · ≈{n(z.jobs).toLocaleString()} jobs</span>
@@ -206,25 +224,83 @@ function Setup() {
               </button>
             ))}
           </div>
+        </div>
+        <div className="mn-panel-foot">
+          <button className="btn" onClick={() => session.cancelSetup()}>Back</button>
+          <button className="btn primary" disabled={!homeZone} onClick={next}>Next: your company <ArrowRight size={14} weight="bold" /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-          <div className="label mn-gap">Your company</div>
+interface CompanyStepProps {
+  city: string;
+  name: string;
+  setName: (v: string) => void;
+  colour: string;
+  setColour: (v: string) => void;
+  logo: number;
+  setLogo: (v: number) => void;
+}
+
+function CompanyStep({ city, name, setName, colour, setColour, logo, setLogo }: CompanyStepProps) {
+  const region = session.region;
+  const spec = useSession((s) => s.pending?.spec);
+  const homeZone = useSession((s) => s.homeZone);
+  const zone = region?.zones.find((z) => z.id === homeZone);
+  useEffect(() => {
+    if (homeZone) showZone(homeZone);
+  }, [homeZone]);
+  const cur = currencyFor(spec?.country ?? region?.spec.country);
+  const n = (v: number) => Math.round(v / 100) * 100;
+  const back = () => useSession.setState({ setupStep: 'area' });
+  const ready = name.trim().length > 0 && !!homeZone;
+  const found = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (ready && homeZone) session.startNew({ name: name.trim(), colour, logo }, homeZone);
+  };
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && back();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
+
+  return (
+    <div className="mn-flow">
+      <div className="mn-scrim" />
+      <form className="card mn-panel setup compact" onSubmit={found}>
+        <div className="mn-panel-head">
+          <button type="button" className="icon-btn" onClick={back} aria-label="Back"><ArrowLeft size={18} /></button>
+          <div><h2>Found your company</h2><p>Step 3 of 3 · {zone ? `${zone.name}, ` : ''}{city}</p></div>
+        </div>
+        <div className="mn-scroll">
+          {zone && (
+            <div className="mn-home">
+              <MapPin size={18} weight="fill" />
+              <div><b>{zone.name}</b><span>Home area · ≈{n(zone.residents).toLocaleString()} residents · ≈{n(zone.jobs).toLocaleString()} jobs</span></div>
+              <button type="button" className="btn sm" onClick={back}>Change</button>
+            </div>
+          )}
+          <div className="label mn-gap">Name</div>
           <div className="mn-id">
             <CompanyMark logo={logo} colour={colour} size={52} />
-            <input value={name} maxLength={40} onChange={(e) => setName(e.target.value)} aria-label="Company name" />
+            <input value={name} maxLength={40} autoFocus onChange={(e) => setName(e.target.value)} aria-label="Company name" />
           </div>
+          <div className="label mn-gap">Colour</div>
           <div className="mn-swatches" role="radiogroup" aria-label="Company colour">
             {COMPANY_COLOURS.map((c) => (
-              <button key={c} role="radio" aria-checked={c === colour} aria-label={c} className={c === colour ? 'on' : ''} style={{ background: c }} onClick={() => setColour(c)} />
+              <button type="button" key={c} role="radio" aria-checked={c === colour} aria-label={c} className={c === colour ? 'on' : ''} style={{ background: c }} onClick={() => setColour(c)} />
             ))}
           </div>
+          <div className="label mn-gap">Logo</div>
           <div className="mn-logos" role="radiogroup" aria-label="Company logo">
             {LOGOS.map((_, i) => (
-              <button key={i} role="radio" aria-checked={i === logo} aria-label={`Logo ${i + 1}`} className={i === logo ? 'on' : ''} onClick={() => setLogo(i)}>
+              <button type="button" key={i} role="radio" aria-checked={i === logo} aria-label={`Logo ${i + 1}`} className={i === logo ? 'on' : ''} onClick={() => setLogo(i)}>
                 <CompanyMark logo={i} colour={colour} size={38} />
               </button>
             ))}
           </div>
-
           <div className="mn-summary">
             <div><b className="num">{formatMoney(cur, ECON.startingFunds)}</b><span>Starting funds</span></div>
             <div><b className="num">{STARTING_REPUTATION}</b><span>Reputation</span></div>
@@ -232,10 +308,10 @@ function Setup() {
           </div>
         </div>
         <div className="mn-panel-foot">
-          <button className="btn" onClick={() => session.cancelSetup()}>Back</button>
-          <button className="btn primary" disabled={!ready} onClick={() => homeZone && session.startNew({ name: name.trim(), colour, logo }, homeZone)}>Found company</button>
+          <button type="button" className="btn" onClick={back}>Back</button>
+          <button type="submit" className="btn primary" disabled={!ready}>Found company</button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

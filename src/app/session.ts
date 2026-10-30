@@ -28,6 +28,8 @@ interface SessionStore {
   pending: { spec: RegionSpec } | null;
   /** home area picked on the map during setup */
   homeZone: string | null;
+  /** new company setup: choose the home area first, then name the company */
+  setupStep: 'area' | 'company';
   notice: string | null;
 }
 
@@ -40,6 +42,7 @@ export const useSession = create<SessionStore>(() => ({
   saving: false,
   pending: null,
   homeZone: null,
+  setupStep: 'area',
   notice: null,
 }));
 
@@ -87,6 +90,8 @@ class Session {
   private regionKey = '';
   private listeners = new Set<GameListener>();
   private worker: Worker | null = null;
+  /** the region being built right now (shared by callers asking for the same area) */
+  private inflight: { key: string; promise: Promise<Region>; quiet: boolean; cancel: () => void } | null = null;
   private autosaveTimer = 0;
   private lastAutosave = 0;
   /** saves run one at a time, in the order they were asked for */
@@ -112,44 +117,67 @@ class Session {
     }
   }
 
-  /** Build (or reuse) the playable region for a spec, reporting progress. */
-  loadRegion(spec: RegionSpec): Promise<Region> {
+  /**
+   * Build (or reuse) the playable region for a spec, reporting progress. `quiet` loads (the
+   * start-menu showcase) report nothing and give way to any other load.
+   */
+  loadRegion(spec: RegionSpec, opts: { quiet?: boolean } = {}): Promise<Region> {
+    const quiet = !!opts.quiet;
     const key = `${spec.id}|${spec.tiles.map((t) => t.join(',')).join(';')}`;
     if (this.region && this.regionKey === key) return Promise.resolve(this.region);
-    this.worker?.terminate();
-    useSession.setState({ progress: { stage: 'Preparing', done: 0, total: 1 }, error: null });
-    return new Promise((resolve, reject) => {
-      const w = new Worker(new URL('./regionWorker.ts', import.meta.url), { type: 'module' });
-      this.worker = w;
+    const running = this.inflight;
+    if (running && running.key === key) {
+      if (!quiet && running.quiet) {
+        running.quiet = false;
+        useSession.setState({ progress: { stage: 'Preparing', done: 0, total: 1 }, error: null });
+      }
+      return running.promise;
+    }
+    if (running) {
+      if (quiet) return Promise.reject(new Error('Another area is loading.'));
+      running.cancel();
+    }
+    if (!quiet) useSession.setState({ progress: { stage: 'Preparing', done: 0, total: 1 }, error: null });
+    const w = new Worker(new URL('./regionWorker.ts', import.meta.url), { type: 'module' });
+    this.worker = w;
+    let entry!: NonNullable<Session['inflight']>;
+    const promise = new Promise<Region>((resolve, reject) => {
+      const finish = () => {
+        w.terminate();
+        if (this.worker === w) this.worker = null;
+        if (this.inflight === entry) this.inflight = null;
+      };
+      entry = { key, promise: null as unknown as Promise<Region>, quiet, cancel: () => { finish(); reject(new Error('Loading was cancelled.')); } };
       w.onmessage = (e: MessageEvent<RegionWorkerMessage>) => {
         const m = e.data;
-        if (m.type === 'progress') useSession.setState({ progress: { stage: m.stage, done: m.done, total: m.total } });
-        else if (m.type === 'error') {
-          w.terminate();
-          this.worker = null;
+        if (m.type === 'progress') {
+          if (!entry.quiet) useSession.setState({ progress: { stage: m.stage, done: m.done, total: m.total } });
+        } else if (m.type === 'error') {
+          finish();
           reject(new Error(m.message));
         } else {
-          w.terminate();
-          this.worker = null;
+          finish();
           const region = prepareRegion(m.data as RegionData);
           this.region = region;
           this.regionKey = key;
-          if (m.missing) useSession.setState({ notice: `${m.missing} map tile${m.missing > 1 ? 's' : ''} could not be downloaded; parts of the area may be missing streets.` });
+          if (m.missing && !entry.quiet) useSession.setState({ notice: `${m.missing} map tile${m.missing > 1 ? 's' : ''} could not be downloaded; parts of the area may be missing streets.` });
           resolve(region);
         }
       };
       w.onerror = (e) => {
-        w.terminate();
-        this.worker = null;
+        finish();
         reject(new Error(e.message || 'The map data could not be processed.'));
       };
-      w.postMessage({ spec });
     });
+    entry.promise = promise;
+    this.inflight = entry;
+    w.postMessage({ spec });
+    return promise;
   }
 
   /** New company flow, step 1: load the chosen area, then let the player pick a home area. */
   async beginNew(spec: RegionSpec) {
-    useSession.setState({ phase: 'loading', pending: { spec }, error: null, homeZone: null });
+    useSession.setState({ phase: 'loading', pending: { spec }, error: null, homeZone: null, setupStep: 'area' });
     try {
       await this.loadRegion(spec);
       useSession.setState({ phase: 'setup', progress: null });
