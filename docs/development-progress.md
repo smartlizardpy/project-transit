@@ -35,7 +35,7 @@ Last updated: 2026-10-30.
 | Operating costs (drivers, energy, maintenance, fixed, depots, stops, interest) | ✅ | `docs/economy.md`; finance panel by category |
 | Financial ledger and reconciliation | ✅ | `core.test.ts`, `balance.test.ts`, `progression.test.ts` (reconciles every day for 40 days) |
 | Profitability per line and per day | ✅ | Finance → Lines; the line inspector's money section counts operating money only |
-| Save/load (manual, autosave, versioning, migration, recovery) | 🟡 | `core.test.ts` (round trip and determinism; a newer-version save is rejected); `regressions.test.ts` (redrawn areas on load); play-through (save → quit → continue gives identical state in the browser, IndexedDB). Desktop: the Rust save commands (atomic write, backup) pass `cargo test`. The full desktop save/reopen journey has not been run in the native window, because the screen was locked during this session. |
+| Save/load (manual, autosave, versioning, migration, recovery) | ✅ | `core.test.ts` (round trip and determinism; a newer-version save is rejected); `regressions.test.ts` (redrawn areas on load); browser play-through (save → quit → continue gives identical state, IndexedDB; also in WebKit). Desktop: `cargo test` for the Rust save commands, and `scripts/dev/native-saves.sh` runs the real app three times: save → close window (autosave) → reopen and load → quit the way ⌘Q does (autosave) → reopen and load. Each load matched the state at close or quit exactly (time, balance, passengers waiting and on board), the audit was clean, and the test saves were deleted afterwards. |
 | Basic company management (name, colour, logo, fare, loans) | ✅ | Company and Finance panels |
 
 **Acceptance (make money, lose money, buy assets, run for days) is met.** `balance.test.ts`: a good line is profitable every day, and a thin line loses money. Bankruptcy ends the game with a summary screen.
@@ -69,7 +69,7 @@ Last updated: 2026-10-30.
 | Error and empty states | ✅ | `scripts/dev/edge-cases.mjs`: offline download error shown in the place picker; buying without a depot (banner + Place a depot); stops on service roads/water and outside the licence explained; insufficient funds states the cost and balance; disconnected roads reported by the line editor |
 | Keyboard shortcuts, fullscreen (F11), hide HUD (F10, ⇧U) | ✅ | `src/ui/keyboard.ts` |
 | Bridge rendering | ✅ | Golden Horn bridges inspected up close (metro, Galata, Atatürk); no deck walls |
-| Desktop app build | 🟡 | release build compiles; the native window was not inspected this session (screen locked) |
+| Desktop app build | 🟡 | release build compiles and runs: the native save round trip passes in it (see Save/load). The window's visuals were not inspected this session (screen locked), so check the HUD in the native window once. |
 | High-DPI and window sizes | ✅ | screenshots at 1366×768, 1920×1080 and 2560×1440 |
 
 **Acceptance (understandable without developer help) needs a human playtest.** The scripted play-through only uses visible controls, apart from the ones noted in the script.
@@ -105,7 +105,7 @@ Fallbacks:
 
 ## Known gaps and next steps
 
-1. **Native desktop check:** run `Project Transit.app`, then save, quit, reopen and Continue in the real window (it needs an unlocked screen).
+1. **Native window visuals:** saving, closing, quitting and reopening are verified in the real app. Still to do: look at the HUD in the native window, and press ⌘Q by hand once (the test sends the same event as the menu item). Both need an unlocked screen.
 2. **Human playtest of pacing:** how quickly a new player reaches a second and third area.
 3. **Trip history:** finished trips are pruned at the end of each service day. Per-bus history is kept in daily stats only.
 4. **Selected line behind tall buildings:** in dense grids (Barcelona) a selected line can be hidden by buildings at a steep pitch. The line still shows in the network view (N).
@@ -141,3 +141,5 @@ Fallbacks:
   - The first-steps card no longer covers the map legend.
   - Barcelona, Tokyo and Hamburg verified.
   - 3D buses keep left in left-hand-traffic countries (UK, Japan), matching the line overlays.
+  - Desktop quitting: macOS ⌘Q used to terminate at once, skipping the save. The app menu's Quit item is now our own: it asks the game to save (at most 3 s), then exits, with a 5 s fallback.
+  - Native save round trip: `scripts/dev/native-saves.sh` covers three launches of the release app. All steps pass.

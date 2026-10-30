@@ -13,7 +13,7 @@ import { Onboarding, GameOver } from './ui/Onboarding.tsx';
 import { useKeyboard } from './ui/keyboard.ts';
 import { mapRuntime } from './map/runtime.ts';
 import { session, useSession } from './app/session.ts';
-import { isDesktop, toggleFullscreen } from './app/persistence.ts';
+import { exitApp, isDesktop, toggleFullscreen } from './app/persistence.ts';
 import { useUI } from './state/store.ts';
 import { CompanyMark } from './ui/logos.tsx';
 import './styles/ui.css';
@@ -70,21 +70,29 @@ function useSaveOnExit() {
       if (document.visibilityState === 'hidden' && playing()) void session.save('auto');
     };
     document.addEventListener('visibilitychange', h);
-    // desktop: save before the window closes (at most a few seconds, so closing never hangs)
-    let unlisten: (() => void) | null = null;
+    // Desktop: save before the window closes or the app quits (Cmd+Q comes from our own menu
+    // item, see src-tauri/src/lib.rs). At most a few seconds, so quitting never hangs.
+    const saveNow = async (): Promise<void> => {
+      if (playing()) await Promise.race([session.save('auto'), new Promise((r) => setTimeout(r, 3000))]);
+    };
+    const offs: (() => void)[] = [];
     let disposed = false;
     if (isDesktop())
-      void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
-        const off = await getCurrentWindow().onCloseRequested(async () => {
-          if (playing()) await Promise.race([session.save('auto'), new Promise((r) => setTimeout(r, 3000))]);
-        });
-        if (disposed) off();
-        else unlisten = off;
+      void Promise.all([import('@tauri-apps/api/window'), import('@tauri-apps/api/event')]).then(async ([{ getCurrentWindow }, { listen }]) => {
+        const got = [
+          await getCurrentWindow().onCloseRequested(saveNow),
+          await listen('pt-quit-requested', async () => {
+            await saveNow();
+            await exitApp();
+          }),
+        ];
+        if (disposed) got.forEach((f) => f());
+        else offs.push(...got);
       });
     return () => {
       disposed = true;
       document.removeEventListener('visibilitychange', h);
-      unlisten?.();
+      offs.forEach((f) => f());
     };
   }, []);
 }

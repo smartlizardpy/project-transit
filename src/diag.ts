@@ -21,6 +21,8 @@ export async function startDiagnostics() {
     return;
   }
   if (!enabled) return;
+  const saveMode = await invoke<string | null>('diag_save_mode').catch(() => null);
+  if (saveMode) void import('./diagSave.ts').then((m) => m.runSaveCheck(saveMode));
   window.addEventListener('error', (e) => errors.push(`${e.message} @ ${e.filename}:${e.lineno}`));
   window.addEventListener('unhandledrejection', (e) => errors.push(`rejection: ${String(e.reason)}`));
   stages.push('boot');

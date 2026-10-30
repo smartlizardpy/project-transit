@@ -112,6 +112,7 @@ There is no online account, no multiplayer and no paid service.
 | `pnpm play` | End-to-end play-through in Chromium with real clicks: new company → depot → buy → draw a line → assign → run → save → quit → continue (needs `pnpm dev`). Pass an output folder and a size: `node scripts/play.mjs out 1920 1080`. |
 | `pnpm shots` | Screenshots of 16 screens of the real game at 1920×1080, 2560×1440 and 1366×768 into `docs/screenshots/` (needs `pnpm dev`). `PRESET=1` starts in another city. |
 | `node scripts/dev/webkit-play.mjs out` | Plays, saves, reloads and continues in WebKit, the engine behind Tauri's macOS window (needs `pnpm build && pnpm preview --port 4173`). |
+| `scripts/dev/native-saves.sh out` | Save round trip in the real desktop app across three launches: save, close the window, reopen and load, quit (⌘Q path), reopen and load, delete the test saves. Build first with `pnpm tauri build --bundles app`. Works with the screen locked. |
 | `node scripts/dev/scene.mjs out 1 8` | Builds a running network in a preset city (index 1 = Durham) at a given hour and captures close-up, line, traffic and demand views. |
 | `pnpm check:webkit` | Loads the production build in WebKit and saves a screenshot. |
 
