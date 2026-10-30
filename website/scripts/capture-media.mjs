@@ -410,7 +410,8 @@ if (has('video')) {
   const FRAMES = Number(process.env.FRAMES || 300);
   const dir = join(OUT, '_frames');
   rmSync(dir, { recursive: true, force: true }); mkdirSync(dir, { recursive: true });
-  const page = await openGame(1920, 1080, 1);
+  const DSF = Number(process.env.VIDEO_DSF || 4 / 3), XF = Number(process.env.VIDEO_XFADE ?? 20);
+  const page = await openGame(1920, 1080, DSF);
   await setup(page, IST);
   await setHud(page, false);
   const h = HERO.find((x) => x.id === (process.env.VIDEO_VIEW || HERO_BEST)) ?? HERO[0];
@@ -422,23 +423,227 @@ if (has('video')) {
   for (let f = 0; f <= FRAMES; f += 50) await view(page, cam(f), 400);
   await view(page, cam(0), 800);
   await page.evaluate(() => { const g = window.__game; window.__adv = g.advance.bind(g); g.advance = () => 0; g.setSpeed(1); });
-  for (let f = 0; f < FRAMES; f++) {
+  for (let f = 0; f < FRAMES + XF; f++) { // the extra XF frames are cross-faded into the first XF to hide the loop jump
     await page.evaluate((c) => { window.__adv(1 / 30); window.__map.jumpTo(c); window.__map.triggerRepaint(); }, cam(f));
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
     if (f % 25 === 0) await page.waitForFunction(() => !window.__city?.busy && window.__map.areTilesLoaded(), null, { timeout: 20000 }).catch(() => {});
     await page.screenshot({ path: join(dir, String(f).padStart(4, '0') + '.png') });
-    if (f % 50 === 0) log('  frame', f);
+    if (f % 50 === 0) log('  frame', f, 'size', page.dsf);
   }
   await page.close();
   const run = (a) => execFileSync(FFMPEG, ['-y', '-loglevel', 'error', ...a]);
-  const inp = ['-framerate', '30', '-i', join(dir, '%04d.png')];
-  run([...inp, '-c:v', 'libx264', '-crf', process.env.CRF || '26', '-preset', 'slow', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', join(OUT, 'video-istanbul.mp4')]);
-  run([...inp, '-c:v', 'libvpx-vp9', '-crf', '36', '-b:v', '0', '-row-mt', '1', '-an', join(OUT, 'video-istanbul.webm')]);
-  run([...inp, '-frames:v', '1', '-q:v', '3', join(OUT, 'video-istanbul-poster.jpg')]);
-  rec('video-istanbul.mp4', 'İstanbul', 'Ten-second looping camera drift over the Golden Horn with buses moving along their lines, rendered frame by frame at 8x speed, interface hidden.', false, 1920, 1080, 'H.264, no audio; buses jump at the loop point, the camera path is closed');
-  rec('video-istanbul.webm', 'İstanbul', 'WebM (VP9) version of the same video.', false, 1920, 1080);
-  rec('video-istanbul-poster.jpg', 'İstanbul', 'Poster frame (frame 0) of the video.', false, 1920, 1080);
-  rmSync(dir, { recursive: true, force: true });
+  const fr = (n) => join(dir, String(n).padStart(4, '0') + '.png');
+  // output = [cross-fade of frames FRAMES..FRAMES+XF-1 (out) into 0..XF-1 (in)] + frames XF..FRAMES-1, so the last frame flows into the first
+  const seq = XF > 0
+    ? ['-framerate', '30', '-start_number', String(FRAMES), '-i', join(dir, '%04d.png'), '-framerate', '30', '-start_number', '0', '-i', join(dir, '%04d.png'), '-framerate', '30', '-start_number', String(XF), '-i', join(dir, '%04d.png'),
+       '-filter_complex', `[0:v]trim=end_frame=${XF},setpts=PTS-STARTPTS[o];[1:v]trim=end_frame=${XF},setpts=PTS-STARTPTS[i];[o][i]blend=all_expr='A*(1-N/${XF})+B*(N/${XF})'[x];[2:v]trim=end_frame=${FRAMES - XF},setpts=PTS-STARTPTS[r];[x][r]concat=n=2:v=1[v]`, '-map', '[v]']
+    : ['-framerate', '30', '-i', join(dir, '%04d.png')];
+  const pre = ['-r', '30'];
+  run([...seq, ...pre, '-c:v', 'libx264', '-profile:v', 'high', '-crf', process.env.CRF || '24', '-preset', 'slow', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', join(OUT, 'video-istanbul.mp4')]);
+  run([...seq, ...pre, '-c:v', 'libvpx-vp9', '-crf', process.env.CRFW || '40', '-b:v', '0', '-row-mt', '1', '-deadline', 'good', '-cpu-used', '2', '-pix_fmt', 'yuv420p', '-an', join(OUT, 'video-istanbul.webm')]);
+  run(['-i', fr(FRAMES), '-frames:v', '1', '-q:v', '2', join(OUT, 'video-istanbul-poster.jpg')]);
+  const W = Math.round(1920 * DSF), H = Math.round(1080 * DSF);
+  rec('video-istanbul.mp4', 'İstanbul', 'Ten-second seamlessly looping camera drift over the Golden Horn with buses moving along their lines, rendered frame by frame at 8x speed, interface hidden.', false, W, H, `H.264 high CRF 19, no audio; last ${XF} frames cross-faded into the first so the loop point is smooth (camera path is closed)`);
+  rec('video-istanbul.webm', 'İstanbul', 'WebM (VP9) version of the same video.', false, W, H);
+  rec('video-istanbul-poster.jpg', 'İstanbul', 'Poster frame of the video.', false, W, H);
+  if (!process.env.KEEP) rmSync(dir, { recursive: true, force: true });
+}
+
+// Route-tool clip: Barcelona / Eixample, ~16.5 s. A real line is drafted with the game's own route tool (placeStop +
+// the draft store), confirmed, given buses and a timetable through the normal commands, then a bus is followed.
+// Deterministic frame-by-frame like `video`. The F10 HUD toggle hides the in-game interface (the draft line and
+// numbered draft stops are map layers/markers, so they stay); a CSS rule hides toasts/attribution that sit outside the HUD.
+//   node website/scripts/capture-media.mjs <outDir> video-route      (STILLS=f1,f2,.. dumps only those frames)
+if (has('video-route')) {
+  log('video-route');
+  const FPS = 30, FR = Number(process.env.FRAMES || 495);
+  const STILLS = process.env.STILLS ? process.env.STILLS.split(',').map(Number) : null;
+  const dir = join(OUT, '_frames_route');
+  rmSync(dir, { recursive: true, force: true }); mkdirSync(dir, { recursive: true });
+  const BASE = [2.1620, 41.3930], SX = 0.0018, SY = 0.0013;
+  const gp = (i, j) => [BASE[0] + i * SX, BASE[1] + j * SY];
+  const STOPS = (process.env.ROUTE_GRID ? JSON.parse(process.env.ROUTE_GRID) : [[-2, 1], [-1, 0], [0, -1], [1, 0], [2, 1]]).map(([i, j]) => gp(i, j));
+  const T = { start: 2.0, add: [2.4, 3.2, 4.0, 4.8, 5.6], commit: 7.0, assign: [7.5, 7.7, 7.9, 8.1], tt: 8.6, ramp: 8.7, follow: 8.8 };
+  const c = CITIES[2];
+  const page = await openGame(1920, 1080, 1);
+  await page.addStyleTag({ content: '.toast,.attrib,.update-banner,.maplibregl-ctrl-bottom-right,.maplibregl-ctrl-bottom-left{display:none !important}' });
+  // bare city: company, territory, a depot and four parked buses, but no lines
+  const info = await page.evaluate(async ([c, STOPS]) => {
+    const { PRESETS, presetSpec } = await import('/src/app/presets.ts');
+    await window.__session.beginNew(presetSpec(PRESETS[c.idx]));
+    const reg = window.__session.region, ctr = reg.spec.centre;
+    const sc = (z) => (z.residents + z.jobs) / (1 + Math.hypot(z.centroid[0] - ctr[0], z.centroid[1] - ctr[1]) * 80);
+    const z = [...reg.zones].sort((a, b) => sc(b) - sc(a))[0];
+    window.__session.startNew({ name: c.company.name, colour: c.company.colour, logo: 1 }, z.id);
+    const g = window.__game;
+    g.state.onboarding.active = false;
+    { const { post } = await import('/src/game/finance.ts'); post(g.state, { amt: 1400000, cat: 'equity', memo: 'Investor capital' }); }
+    const P = g.geo.P, gr = g.region.graph;
+    const [cx, cy] = P.toXY(z.centroid[0], z.centroid[1]);
+    for (const q of reg.zones) { const [qx, qy] = P.toXY(q.centroid[0], q.centroid[1]); if (Math.hypot(qx - cx, qy - cy) < 3600 && !g.state.territory.owned.includes(q.id)) g.state.territory.owned.push(q.id); }
+    const owned = new Set(g.state.territory.owned);
+    const main = [];
+    for (let e = 0; e < gr.m; e++) {
+      if (gr.cls[e] < 2 || gr.cls[e] > 4 || (gr.flags[e] & 6)) continue;
+      const v = gr.ea[e];
+      if (owned.has(g.geo.zoneAt([gr.lng[v], gr.lat[v]]).id)) main.push(v);
+    }
+    // depot: a main-road node 350-650 m from the first stop, nearest to a point beside it
+    const [fx, fy] = P.toXY(STOPS[0][0], STOPS[0][1]);
+    const want = [fx - 190, fy - 190];
+    const cand = main.filter((v) => { const d = Math.hypot(gr.x[v] - fx, gr.y[v] - fy); return d > 170 && d < 330; })
+      .sort((a, b) => Math.hypot(gr.x[a] - want[0], gr.y[a] - want[1]) - Math.hypot(gr.x[b] - want[0], gr.y[b] - want[1]));
+    let depot = null, dll = null;
+    for (const v of cand.slice(0, 200)) { const r = g.buildDepot([gr.lng[v], gr.lat[v]]); if (r.ok) { depot = r.value; dll = [gr.lng[v], gr.lat[v]]; break; } }
+    const buses = [];
+    for (let i = 0; i < 4; i++) { const b = g.buyVehicle('city12', depot); if (b.ok) buses.push(b.value); }
+    g.run(86400 + 8.5 * 3600 - (g.t % 86400));
+    g.emit('changed', 0);
+    g.setSpeed(0);
+    return { zone: z.name, depot, dll, buses: buses.length };
+  }, [c, STOPS]);
+  log(' bare city', JSON.stringify(info));
+  await setHud(page, false);
+  // ---- camera: Hermite keyframes (smooth velocity), bus follow blended in on top ----
+  const cx = (STOPS.reduce((a, p) => a + p[0], 0) / STOPS.length), cy = (STOPS.reduce((a, p) => a + p[1], 0) / STOPS.length);
+  const mid = [(cx * 2 + info.dll[0]) / 3, (cy * 2 + info.dll[1]) / 3]; // between the route and the depot
+  const KEYS = [
+    { t: 0, c: [(mid[0] + info.dll[0]) / 2, (mid[1] + info.dll[1]) / 2], z: 15.7, p: 50, b: -52 },
+    { t: 2.2, c: mid, z: 16.15, p: 52, b: -49 },
+    { t: 5.0, c: [cx, cy], z: 16.55, p: 52, b: -43 },
+    { t: 8.5, c: [cx, cy], z: 16.6, p: 54, b: -20 },
+    { t: 11, c: [cx, cy], z: 16.9, p: 58, b: 15 },
+    { t: 16.5, c: [cx, cy], z: 17.5, p: 62, b: 40 },
+  ];
+  const cfg = { KEYS, T, FPS, STOPS };
+  const camFns = () => {
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const ss = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+    const dims = (k) => [k.c[0], k.c[1], k.z, k.p, k.b];
+    const base = (t) => {
+      const K = window.__cfg.KEYS, n = K.length;
+      if (t <= K[0].t) return dims(K[0]);
+      if (t >= K[n - 1].t) return dims(K[n - 1]);
+      let i = 0; while (t > K[i + 1].t) i++;
+      const a = dims(K[i]), b = dims(K[i + 1]), h = K[i + 1].t - K[i].t, u = (t - K[i].t) / h;
+      const tan = (j, d) => { const lo = Math.max(0, j - 1), hi = Math.min(n - 1, j + 1); return (dims(K[hi])[d] - dims(K[lo])[d]) / (K[hi].t - K[lo].t); };
+      return a.map((_, d) => {
+        const m0 = tan(i, d) * h, m1 = tan(i + 1, d) * h, u2 = u * u, u3 = u2 * u;
+        return (2 * u3 - 3 * u2 + 1) * a[d] + (u3 - 2 * u2 + u) * m0 + (-2 * u3 + 3 * u2) * b[d] + (u3 - u2) * m1;
+      });
+    };
+    window.__base = base;
+    window.__ss = ss; window.__lerp = lerp;
+  };
+  await page.evaluate(([cfg, src]) => { window.__cfg = cfg; new Function('return (' + src + ')')()(); }, [cfg, camFns.toString()]);
+  // pre-warm tiles along the whole path (base path, plus the route corridor at follow zoom)
+  const cam0 = (t) => page.evaluate((t) => { const v = window.__base(t); return { center: [v[0], v[1]], zoom: v[2], pitch: v[3], bearing: v[4] }; }, t);
+  for (let t = 0; t <= 16.5; t += 1.5) await view(page, await cam0(t), 300);
+  const corridor = [info.dll, ...STOPS];
+  for (let k = 0; k < corridor.length; k++) await view(page, { center: corridor[k], zoom: 17.6, pitch: 62, bearing: -30 }, 500);
+  await view(page, await cam0(0), 1200);
+  await page.evaluate(() => { const g = window.__game; window.__adv = g.advance.bind(g); g.advance = () => 0; g.setSpeed(1); window.__follow = null; window.__sm = null; window.__route = null; });
+  const act = {
+    start: async () => page.evaluate(async () => { const { startDrafting } = await import('/src/ui/routeDraft.ts'); startDrafting(null); }),
+    add: (i) => page.evaluate(async ([ll]) => {
+      const { appendStop } = await import('/src/ui/routeDraft.ts');
+      const g = window.__game, ui = window.__ui.getState();
+      let r = g.placeStop(ll), k = 0;
+      while (!r.ok && k++ < 6) r = g.placeStop([ll[0] + 0.00015 * k, ll[1] + 0.0001 * k]);
+      if (!r.ok) throw new Error('placeStop ' + r.error);
+      ui.editDraft((d) => { const x = appendStop(d, r.value); return typeof x === 'string' ? {} : x; });
+    }, [STOPS[i]]),
+    commit: () => page.evaluate(async () => {
+      const { commitDraft } = await import('/src/ui/routeDraft.ts');
+      const ok = commitDraft();
+      window.__route = Object.keys(window.__game.state.routes)[0];
+      window.__ui.getState().select(null);
+      return ok;
+    }),
+    assign: (i) => page.evaluate((i) => { const g = window.__game; const v = Object.values(g.state.vehicles)[i]; return g.assignVehicle(v.id, window.__route).ok; }, i),
+    timetable: () => page.evaluate(() => {
+      const g = window.__game, bands = [{ from: 360, to: 1380, headway: 3 }];
+      const r = g.setTimetable(window.__route, { weekday: { bands }, weekend: { bands }, layover: 3 });
+      if (!r.ok) return r.error;
+      // buses stand still in the depot while the clock waits for the first departure: skip that dead time invisibly
+      for (let i = 0; i < 2400 && !Object.values(g.state.vehicles).some((v) => ['to_route', 'in_service', 'at_stop'].includes(v.status)); i++) g.run(1);
+      g.run(10); g.emit('changed', 0);
+      return 'ok';
+    }),
+  };
+  const frame = (f, scale) => page.evaluate(([f, scale]) => {
+    const g = window.__game, cfg = window.__cfg, t = f / cfg.FPS;
+    window.__adv(scale / cfg.FPS);
+    let v = window.__base(t);
+    // follow: pick the first bus that is out on the road, ease the camera on to it
+    if (t >= cfg.T.follow) {
+      if (!window.__follow) {
+        const vs = Object.values(g.state.vehicles).filter((x) => x.route === window.__route && ['to_route', 'in_service', 'at_stop'].includes(x.status));
+        vs.sort((a, b) => a.id.localeCompare(b.id));
+        if (vs[0]) window.__follow = vs[0].id;
+      }
+      const bus = window.__follow && g.state.vehicles[window.__follow];
+      const p = bus && g.pose(bus);
+      if (p) {
+        const ll = g.geo.P.toLngLat(p.x, p.y);
+        if (!window.__sm) window.__sm = [...ll];
+        const k = 1 - Math.exp(-(1 / cfg.FPS) / 0.4);
+        window.__sm = [window.__sm[0] + (ll[0] - window.__sm[0]) * k, window.__sm[1] + (ll[1] - window.__sm[1]) * k];
+        // chase bearing: direction of travel from the last ~0.8 s of motion, low-passed on the angle
+        const hist = (window.__hist ||= []);
+        hist.push(p.x, p.y); if (hist.length > 50) hist.splice(0, 2);
+        if (hist.length >= 20) {
+          const dx = p.x - hist[0], dy = p.y - hist[1];
+          if (Math.hypot(dx, dy) > 4) {
+            const tb = (Math.atan2(dx, dy) * 180) / Math.PI;
+            if (window.__hb === undefined) window.__hb = v[4];
+            let dd = tb - window.__hb; dd = ((dd + 540) % 360) - 180;
+            window.__hb += dd * (1 - Math.exp(-(1 / cfg.FPS) / 0.9));
+          }
+        }
+        const hb = window.__hb ?? v[4];
+        let db = hb - v[4]; db = ((db + 540) % 360) - 180;
+        const w = window.__ss((t - cfg.T.follow) / 3.6);
+        const e = [window.__lerp(v[0], window.__sm[0], w), window.__lerp(v[1], window.__sm[1], w), window.__lerp(v[2], 18.1, w), window.__lerp(v[3], 57, w), v[4] + db * w];
+        v = e; window.__pad = 260 * w;
+      }
+    }
+    window.__map.jumpTo({ center: [v[0], v[1]], zoom: v[2], pitch: v[3], bearing: v[4], padding: { top: window.__pad || 0, bottom: 0, left: 0, right: 0 } });
+    window.__map.triggerRepaint();
+    const bus = window.__follow && g.state.vehicles[window.__follow];
+    return { z: +window.__map.getZoom().toFixed(2), p: +window.__map.getPitch().toFixed(1), b: +window.__map.getBearing().toFixed(0), st: bus?.status ?? null, gt: Math.round(g.t % 86400), vs: Object.values(g.state.vehicles).map((x) => x.status.slice(0, 2)).join(' ') };
+  }, [f, scale]);
+  let sc = 0.125; // 1x until the buses are assigned, then ramp to ~6x
+  const events = [[T.start, () => act.start()], ...T.add.map((t, i) => [t, () => act.add(i)]), [T.commit, async () => log(' commit', await act.commit())],
+    ...T.assign.map((t, i) => [t, () => act.assign(i)]), [T.tt, async () => log(' timetable', await act.timetable())]];
+  const done = new Set();
+  for (let f = 0; f < FR; f++) {
+    const t = f / FPS;
+    events.forEach(([et, fn], i) => { if (t >= et && !done.has(i)) { done.add(i); events[i].p = fn(); } });
+    for (const e of events) if (e.p) { await e.p; e.p = null; }
+    if (t >= T.ramp) sc = 0.125 + (1.25 - 0.125) * Math.min(1, (t - T.ramp) / 1.2) ** 2 * (3 - 2 * Math.min(1, (t - T.ramp) / 1.2));
+    const st = await frame(f, sc);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    await page.waitForFunction(() => !window.__city?.busy && window.__map.areTilesLoaded() && !document.body.innerText.includes('Loading more'), null, { timeout: 20000 }).catch(() => log('  tiles timeout at', f));
+    if (!STILLS || STILLS.includes(f)) await page.screenshot({ path: join(dir, String(f).padStart(4, '0') + '.png') });
+    if (f % 30 === 0) log('  frame', f, JSON.stringify(st));
+  }
+  await page.close();
+  if (!STILLS) {
+    const run = (a) => execFileSync(FFMPEG, ['-y', '-loglevel', 'error', ...a]);
+    const inp = ['-framerate', String(FPS), '-i', join(dir, '%04d.png')];
+    run([...inp, '-c:v', 'libx264', '-crf', process.env.CRF || '31', '-preset', 'slow', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', join(OUT, 'video-route.mp4')]);
+    run([...inp, '-c:v', 'libvpx-vp9', '-crf', process.env.CRFW || '60', '-b:v', '0', '-row-mt', '1', '-an', join(OUT, 'video-route.webm')]);
+    run(['-ss', '13', '-i', join(OUT, 'video-route.mp4'), '-frames:v', '1', '-q:v', '3', join(OUT, 'video-route-poster.jpg')]);
+    const picks = Array.from({ length: 8 }, (_, i) => Math.round(((i + 0.5) / 8) * (FR - 1)));
+    run([...picks.flatMap((f) => ['-i', join(dir, String(f).padStart(4, '0') + '.png')]), '-filter_complex', '[0][1][2][3]hstack=4[a];[4][5][6][7]hstack=4[b];[a][b]vstack,scale=2400:-1', '-frames:v', '1', '-q:v', '4', join(OUT, 'video-route-sheet.jpg')]);
+    const n = 'Barcelona / Eixample, 1920x1080 30 fps, ~16.5 s, rendered frame by frame from the game (no compositing); interface hidden with F10 plus a CSS rule for toasts/attribution.';
+    rec('video-route.mp4', 'Barcelona', `Route tool in real gameplay: five stops added one by one, the draft grows along the streets, the line is confirmed, four buses assigned, a timetable set, then a bus is followed. ${n}`, false, 1920, 1080, 'H.264, no audio. Timeline: 0-2 s establishing, 2-7 s stops/draft, 7 s confirm, 7.5-8.1 s assign buses, 8.6 s timetable, 8.9+ s sim ramps to ~6x, 10.2 s follow camera');
+    rec('video-route.webm', 'Barcelona', 'WebM (VP9) version of video-route.mp4.', false, 1920, 1080);
+    rec('video-route-poster.jpg', 'Barcelona', 'Poster: frame at 13 s of video-route, finished line with buses.', false, 1920, 1080);
+    rec('video-route-sheet.jpg', 'Barcelona', 'Contact sheet of eight evenly spaced frames, for review only.', false, 2400, 675);
+    if (!process.env.KEEP) rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 if (has('close2')) {

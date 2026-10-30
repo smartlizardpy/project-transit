@@ -45,8 +45,9 @@ function HeroMedia() {
             onPlaying={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
           >
-            {HERO.video.webm && <source src={HERO.video.webm} type="video/webm" />}
+            {/* H.264 first: every browser plays it, while some WebKit builds stall on VP9 WebM */}
             <source src={HERO.video.mp4} type="video/mp4" />
+            {HERO.video.webm && <source src={HERO.video.webm} type="video/webm" />}
           </video>
           <button className="hero-video-toggle" onClick={toggle} aria-label={playing ? 'Pause the background video' : 'Play the background video'}>
             {playing ? <Pause /> : <Play />}

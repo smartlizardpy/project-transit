@@ -5,7 +5,8 @@
       "src": "video-istanbul-poster.jpg",
       "widths": [
         1280,
-        1920
+        1920,
+        2560
       ]
     },
     {
@@ -114,6 +115,15 @@
         1400,
         2200
       ]
+    },
+    {
+      "id": "route-poster",
+      "src": "video-route-poster.jpg",
+      "widths": [
+        960,
+        1600,
+        1920
+      ]
     }
   ],
   "videos": [
@@ -121,6 +131,11 @@
       "id": "hero",
       "mp4": "video-istanbul.mp4",
       "webm": "video-istanbul.webm"
+    },
+    {
+      "id": "route",
+      "mp4": "video-route.mp4",
+      "webm": "video-route.webm"
     }
   ],
   "og": {
