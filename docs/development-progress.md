@@ -65,7 +65,7 @@ Last updated: 2026-10-30.
 | Zoom-dependent vehicle markers | ✅ | 3D buses up close, line-coloured markers far away; screenshot `*-operating-areas.png` |
 | Detailed inspectors (bus, line, stop, depot, area) | ✅ | screenshots |
 | Line editor (loops, custom return, forced streets, undo/redo, warnings) | ✅ | play-through; `regressions.test.ts` (editing a line) |
-| Settings (autosave interval, edge pan, FPS) | ✅ | game menu → Settings |
+| Settings (autosave interval, fullscreen) | ✅ | game menu → Settings |
 | Error and empty states | ✅ | `scripts/dev/edge-cases.mjs`: offline download error shown in the place picker; buying without a depot (banner + Place a depot); stops on service roads/water and outside the licence explained; insufficient funds states the cost and balance; disconnected roads reported by the line editor |
 | Keyboard shortcuts, fullscreen (F11), hide HUD (F10, ⇧U) | ✅ | `src/ui/keyboard.ts` |
 | Bridge rendering | ✅ | Golden Horn bridges inspected up close (metro, Galata, Atatürk); no deck walls |
@@ -93,7 +93,7 @@ Last updated: 2026-10-30.
 | Durham, UK (small town) | ✅ | downloaded from OpenFreeMap; left-hand traffic, £, rural roads; line built and running (`scripts/dev/scene.mjs … 1`) |
 | Barcelona (Eixample grid, €) | ✅ | downloaded; line built and running; one-way grid warnings are correct |
 | Tokyo (Shibuya, ¥, left-hand traffic) | ✅ | downloaded; line built and running |
-| Hamburg preset | 🟡 | same pipeline; not run this session |
+| Hamburg (Altstadt & St. Pauli, €) | ✅ | downloaded; line built and running, audit clean |
 | Any place via search (Nominatim, on Enter only) | 🟡 | search UI works in the browser; allowed in the desktop CSP |
 
 Fallbacks:
@@ -108,7 +108,7 @@ Fallbacks:
 1. **Native desktop check:** run `Project Transit.app`, then save, quit, reopen and Continue in the real window (it needs an unlocked screen).
 2. **Human playtest of pacing:** how quickly a new player reaches a second and third area.
 3. **Trip history:** finished trips are pruned at the end of each service day. Per-bus history is kept in daily stats only.
-4. **More presets:** play-test Barcelona's grid and Tokyo's narrow streets.
+4. **Selected line behind tall buildings:** in dense grids (Barcelona) a selected line can be hidden by buildings at a steep pitch. The line still shows in the network view (N).
 
 ## Log
 
@@ -139,4 +139,5 @@ Fallbacks:
     - the desktop window saves before closing.
   - The offline download error is now visible in the place picker.
   - The first-steps card no longer covers the map legend.
-  - Barcelona and Tokyo verified.
+  - Barcelona, Tokyo and Hamburg verified.
+  - 3D buses keep left in left-hand-traffic countries (UK, Japan), matching the line overlays.

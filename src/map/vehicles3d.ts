@@ -12,6 +12,7 @@ import { MODEL, MODELS, type VehicleModel } from '../game/content.ts';
 import type { Game } from '../game/engine.ts';
 import type { Vehicle } from '../game/types.ts';
 import { useUI } from '../state/store.ts';
+import { drivesOnLeft } from '../game/world/locale.ts';
 
 export const BRAND = '#e0573e';
 const VISUAL_SCALE = 1.32; // slightly enlarged for legibility, as in most transport games
@@ -237,6 +238,8 @@ export class VehicleLayer {
     const scale = VISUAL_SCALE * zoomBoost;
     const flat = Math.max(0, Math.min(1, (FADE_HI - zoom) / (FADE_HI - FADE_LO)));
     const show3d = flat < 0.98;
+    // keep to the driving side of the centreline (left in the UK, Japan, ...)
+    const off = drivesOnLeft(game.region.spec.country) ? -1.9 : 1.9;
     const seen = new Set<string>();
     const ctx = this.ctx;
     for (const v of game.vehicleList()) {
@@ -263,7 +266,6 @@ export class VehicleLayer {
         heading = Math.abs(d) > 2.6 ? heading : prev + d * 0.35;
       }
       this.headings.set(v.id, heading);
-      const off = 1.9; // keep to the right of the centreline
       const px = cx - Math.sin(heading) * off;
       const py = cy + Math.cos(heading) * off;
       mesh.position.set(px, py, 0);
