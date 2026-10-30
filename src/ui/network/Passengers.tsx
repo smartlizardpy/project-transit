@@ -4,13 +4,14 @@ import { useUI, type FlowOverlay } from '../../state/store.ts';
 import { fitPoints } from '../camera.ts';
 import { Segmented } from '../primitives.tsx';
 import { BANDS } from '../../game/analytics/types.ts';
-import { odMatrix, estimatedDemand, type OdFlow, type OdQuery, type DemandFlow } from '../../game/analytics/query.ts';
+import { odMatrix, estimatedDemand, type OdFlow, type OdQuery, type DemandEstimate } from '../../game/analytics/query.ts';
 import type { LngLat } from '../../game/world/graph.ts';
-import { FilterBar, SectionHead, coverageText, hoursOf, periodDays, todayNo, useNC, fmt } from './common.tsx';
+import { FilterBar, SectionHead, approx, coverageText, hoursOf, periodDays, share, todayNo, useNC, fmt } from './common.tsx';
 import { SaveReport } from './SaveReport.tsx';
 
-type Mode = 'observed' | 'estimated';
-type Level = 'stop' | 'zone';
+type Mode = 'observed' | 'estimated' | 'unserved';
+/** observed journeys: areas or stops; the model's estimate: areas or places */
+type Level = 'stop' | 'zone' | 'place';
 
 function bandsOf(h: [number, number] | null): number[] {
   if (!h) return [];
@@ -31,7 +32,7 @@ export function Passengers({ game }: { game: Game }) {
   const baseQ: OdQuery = useMemo(() => {
     const { days, includeToday } = periodDays(f, todayNo(game));
     const dt = f.dayType.startsWith('wd') ? { dayType: 'all' as const, weekday: Number(f.dayType.slice(2)) } : { dayType: f.dayType as 'all' | 'weekday' | 'weekend', weekday: null };
-    return { days, includeToday, ...dt, bands: bandsOf(hoursOf(f)), level, lines: f.line ? [f.line] : undefined };
+    return { days, includeToday, ...dt, bands: bandsOf(hoursOf(f)), level: level === 'stop' ? 'stop' : 'zone', lines: f.line ? [f.line] : undefined };
   }, [f, level, game]);
 
   const rev = game.state.analytics.days.length;
@@ -42,8 +43,11 @@ export function Passengers({ game }: { game: Game }) {
   const base = useMemo(() => odMatrix(game, baseQ), [game, key, rev, tick, nets]); // eslint-disable-line react-hooks/exhaustive-deps
   const filtered = !!(origin || dest);
   const res = useMemo(() => (filtered ? odMatrix(game, { ...baseQ, origin: origin || null, destination: dest || null }) : base), [game, base, filtered, origin, dest, key]); // eslint-disable-line react-hooks/exhaustive-deps
-  const est = useMemo(() => (mode === 'estimated' ? estimatedDemand(game, { level, origin: origin || null, limit: 200 }) : []), [game, mode, level, origin, Math.floor(game.t / 3600), nets]); // eslint-disable-line react-hooks/exhaustive-deps
-  const estRows = dest ? est.filter((x) => x.d === dest) : est;
+  const view = mode === 'unserved' ? 'unserved' : 'all';
+  const estLevel = level === 'place' ? 'place' : 'zone';
+  const estAll = useMemo(() => (mode === 'observed' ? null : estimatedDemand(game, { level: estLevel, view })), [game, mode, estLevel, Math.floor(game.t / 3600), nets]); // eslint-disable-line react-hooks/exhaustive-deps
+  const est = useMemo(() => (estAll && filtered ? estimatedDemand(game, { level: estLevel, view, origin: origin || null, destination: dest || null }) : estAll), [game, estAll, filtered, origin, dest, estLevel, view]);
+  const estRows = est?.flows ?? [];
 
   // an area's flows start and end in the middle of the company's stops there (an area's own
   // centre can fall in water or far from any stop)
@@ -69,8 +73,9 @@ export function Passengers({ game }: { game: Game }) {
       }
     } else {
       for (const x of estRows) {
-        const a = pos(x.o), b = pos(x.d);
-        if (a && b) out.push({ id: `${x.o}>${x.d}`, from: a, to: b, value: x.trips, kind: 'estimated', label: `${x.oLabel} → ${x.dLabel} · about ${Math.round(x.trips)} trips a day (estimate)` });
+        if (x.o === x.d) continue;
+        const a = x.oAt, b = x.dAt;
+        if (a && b) out.push({ id: `${x.o}>${x.d}`, from: a, to: b, value: x.trips, kind: 'estimated', label: `${x.oLabel} → ${x.dLabel} · about ${Math.round(x.trips)} trips a day${mode === 'unserved' ? ', none by your network' : ''} (estimate)` });
         if (out.length >= 24) break;
       }
     }
@@ -82,8 +87,10 @@ export function Passengers({ game }: { game: Game }) {
     const ui = useUI.getState();
     if (!showMap || !flows.length) return ui.setFlowOverlay(null);
     const cur = ui.flowOverlay?.selected;
-    const o = origin ? pos(origin) : null;
-    ui.setFlowOverlay({ flows, origin: o ? { at: o, label: level === 'stop' ? game.state.stops[origin]?.name ?? '' : game.geo.zone(origin)?.name ?? '' } : null, selected: cur && flows.some((x) => x.id === cur) ? cur : null });
+    const from = origin && mode !== 'observed' ? estAll?.flows.find((x) => x.o === origin) : null;
+    const o = !origin ? null : mode === 'observed' ? pos(origin) : from?.oAt ?? null;
+    const label = mode !== 'observed' ? from?.oLabel ?? '' : level === 'stop' ? game.state.stops[origin]?.name ?? '' : game.geo.zone(origin)?.name ?? '';
+    ui.setFlowOverlay({ flows, origin: o ? { at: o, label } : null, selected: cur && flows.some((x) => x.id === cur) ? cur : null });
   }, [flowKey, showMap]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => useUI.getState().setFlowOverlay(null), []);
 
@@ -95,6 +102,17 @@ export function Passengers({ game }: { game: Game }) {
     if (flow && cur?.selected !== id) fitPoints([flow.from, flow.to]);
   };
   const reset = (l: Level) => { setLevel(l); setOrigin(''); setDest(''); useUI.getState().setFlowOverlay(null); };
+  // stops exist only for observed journeys, places only in the model's estimate
+  const pickMode = (m: Mode) => { setMode(m); if (m === 'observed' ? level === 'place' : level === 'stop') reset('zone'); };
+  const estOpts = (side: 'o' | 'd') => {
+    const by = new Map<string, { id: string; label: string; journeys: number }>();
+    for (const x of estAll?.flows ?? []) {
+      const id = x[side], o = by.get(id) ?? { id, label: side === 'o' ? x.oLabel : x.dLabel, journeys: 0 };
+      o.journeys += x.trips;
+      by.set(id, o);
+    }
+    return [...by.values()].sort((a, b) => b.journeys - a.journeys);
+  };
 
   const opts = (list: { id: string; label: string; journeys: number }[]) => list.slice(0, 40);
   const nObs = base.total.journeys;
@@ -106,21 +124,21 @@ export function Passengers({ game }: { game: Game }) {
       <FilterBar game={game} line res={base} />
       <div className="section tight" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div className="nc-split">
-          <Segmented value={mode} onChange={setMode} options={[{ value: 'observed', label: 'Observed journeys' }, { value: 'estimated', label: 'Estimated demand' }]} />
+          <Segmented value={mode} onChange={pickMode} options={[{ value: 'observed', label: 'Observed journeys' }, { value: 'estimated', label: 'Estimated demand' }, { value: 'unserved', label: 'Unserved' }]} />
           <span className="grow" />
-          <Segmented value={level} onChange={reset} options={[{ value: 'zone', label: 'Areas' }, { value: 'stop', label: 'Stops' }]} />
+          <Segmented value={level} onChange={reset} options={mode === 'observed' ? [{ value: 'zone', label: 'Areas' }, { value: 'stop', label: 'Stops' }] : [{ value: 'zone', label: 'Areas' }, { value: 'place', label: 'Places' }]} />
         </div>
         <div className="nc-filters">
           <label>From
             <select className="pn-select" value={origin} onChange={(e) => setOrigin(e.target.value)} style={{ maxWidth: 190 }}>
               <option value="">Anywhere</option>
-              {mode === 'observed' ? opts(base.origins).map((o) => <option key={o.id} value={o.id}>{o.label}</option>) : opts(originsOf(game, level)).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+              {opts(mode === 'observed' ? base.origins : estOpts('o')).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </label>
           <label>To
             <select className="pn-select" value={dest} onChange={(e) => setDest(e.target.value)} style={{ maxWidth: 190 }}>
               <option value="">Anywhere</option>
-              {mode === 'observed' ? opts(base.destinations).map((o) => <option key={o.id} value={o.id}>{o.label}</option>) : opts(originsOf(game, level)).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+              {opts(mode === 'observed' ? base.destinations : estOpts('d')).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </label>
           <span className="grow" style={{ flex: 1 }} />
@@ -162,19 +180,10 @@ export function Passengers({ game }: { game: Game }) {
           <div className="nc-split"><SaveReport game={game} kind="od" od={{ ...baseQ, origin: origin || null, destination: dest || null }} columns={[]} suggest={`Journeys by ${level === 'zone' ? 'area' : 'stop'}`} /></div>
         </>
       ) : (
-        <EstimatedTable game={game} ready={game.demand.pairs.length > 0} rows={estRows} level={level} selected={selected} onPick={choose} onMap={new Set(flows.map((x) => x.id))} />
+        <EstimatedTable game={game} est={est} view={view} level={estLevel} selected={selected} onPick={choose} onMap={new Set(flows.map((x) => x.id))} />
       )}
     </>
   );
-}
-
-function originsOf(game: Game, level: Level) {
-  const seen = new Map<string, string>();
-  for (const s of Object.values(game.state.stops)) {
-    const id = level === 'zone' ? s.zone : s.id;
-    if (!seen.has(id)) seen.set(id, level === 'zone' ? game.geo.zone(id)?.name ?? id : s.name);
-  }
-  return [...seen].map(([id, label]) => ({ id, label, journeys: 0 })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
 function ObsRow({ x, on, onPick, map }: { x: OdFlow; on: boolean; onPick: () => void; map: boolean }) {
@@ -217,32 +226,64 @@ function Matrix({ res, level }: { res: ReturnType<typeof odMatrix>; level: Level
   );
 }
 
-function EstimatedTable({ ready, rows, level, selected, onPick, onMap }: { game: Game; ready: boolean; rows: DemandFlow[]; level: Level; selected: string | null; onPick: (id: string) => void; onMap: Set<string> }) {
+function EstimatedTable({ game, est, view, level, selected, onPick, onMap }: { game: Game; est: DemandEstimate | null; view: 'all' | 'unserved'; level: 'zone' | 'place'; selected: string | null; onPick: (id: string) => void; onMap: Set<string> }) {
+  const rows = est?.flows ?? [];
+  const t = est?.total ?? { trips: 0, network: 0, unserved: 0 };
+  const n = (v: number) => fmt(game, 'count', approx(v));
+  const pct = (v: number, of: number) => share(v, of);
+  const noStop = rows.reduce((a, x) => a + x.noStop, 0), noLink = rows.reduce((a, x) => a + x.noLink, 0);
+  const what = level === 'zone' ? 'areas' : 'places';
   return (
-    <div className="section">
-      <SectionHead title="Estimated demand" right={<span className="pn-tag nc-tag-est">Estimate</span>} />
-      <div className="pn-note" style={{ marginBottom: 8 }}>
-        A model estimate of trips per day by all modes between {level === 'zone' ? 'areas' : 'stops'} you serve, from homes, jobs and distance. These are not journeys your buses carried; map arcs are dashed.
+    <>
+      <div className="nc-kpis" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
+        {view === 'all' ? (
+          <>
+            <div className="nc-kpi"><b>{n(t.trips)}</b><span>Trips a day, all modes</span></div>
+            <div className="nc-kpi"><b>{n(t.network)}</b><span>Expected on your network ({pct(t.network, t.trips)})</span></div>
+            <div className="nc-kpi"><b>{n(t.unserved)}</b><span>No link on your network</span></div>
+          </>
+        ) : (
+          <>
+            <div className="nc-kpi"><b>{n(t.trips)}</b><span>Trips a day not served</span></div>
+            <div className="nc-kpi"><b>{n(noStop)}</b><span>No stop within a walk</span></div>
+            <div className="nc-kpi"><b>{n(noLink)}</b><span>No line links the stops</span></div>
+          </>
+        )}
       </div>
-      {rows.length === 0 ? <div className="pn-empty">{ready ? `No estimated demand between served ${level === 'zone' ? 'areas' : 'stops'} yet.` : 'The demand estimate is being prepared. It appears after the game has run for a minute.'}</div> : (
-        <div className="nc-scroll">
-          <table className="pn-table nc-table">
-            <thead><tr><th>From → to</th><th>Est. trips / day</th><th>Bus link</th></tr></thead>
-            <tbody>
-              {rows.slice(0, 40).map((x) => {
-                const id = `${x.o}>${x.d}`;
-                return (
-                  <tr key={id} className={`click ${selected === id ? 'on' : ''}`} onClick={() => onPick(id)} title={onMap.has(id) ? 'Click to highlight on the map' : 'Not drawn on the map (outside the top 24)'}>
-                    <td className="name" style={{ maxWidth: 260, whiteSpace: 'normal' }}><b style={{ fontWeight: 700 }}>{x.oLabel}</b><br /><span className="faint">→ {x.dLabel}</span></td>
-                    <td>about {Math.round(x.trips)}</td>
-                    <td><span className={`pn-tag ${x.served ? 'good' : ''}`}>{x.served ? 'Served' : 'No direct link'}</span></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      <div className="section">
+        <SectionHead title={view === 'all' ? 'Estimated demand by mode' : 'Unserved demand'} right={<span className="pn-tag nc-tag-est">Estimate</span>} />
+        <div className="pn-note" style={{ marginBottom: 8 }}>
+          {view === 'all'
+            ? `Trips a day by everyone, starting or ending in your areas, and how they travel, from the city model. “Your network” is what the model expects you to carry today. These are not journeys your buses carried; map arcs are dashed.`
+            : `Trips your network cannot carry at any hour today: one end has no stop within a walk, or no line links the stops. This is potential only: it brings no passengers and no fares until you serve it.`}{' '}
+          Metro, tram and ferry lines are not modelled yet, so trips that would use them count here as walking, car or taxi.
         </div>
-      )}
-    </div>
+        {rows.length === 0 ? <div className="pn-empty">{view === 'all' ? `No estimated trips between these ${what}.` : `Every modelled trip between these ${what} has a link on your network.`}</div> : (
+          <div className="nc-scroll">
+            <table className="pn-table nc-table">
+              <thead><tr><th>From → to</th><th>Trips / day</th><th>{view === 'all' ? 'Your network' : 'Why'}</th><th>Walk</th><th>Bike</th><th>Car</th><th>Taxi</th></tr></thead>
+              <tbody>
+                {rows.slice(0, 40).map((x) => {
+                  const id = `${x.o}>${x.d}`;
+                  const inner = x.o === x.d;
+                  return (
+                    <tr key={id} className={`click ${selected === id ? 'on' : ''}`} onClick={() => onPick(id)} title={inner ? 'Trips within the same area (not drawn on the map)' : onMap.has(id) ? 'Click to highlight on the map' : 'Not drawn on the map (outside the top 24)'}>
+                      <td className="name" style={{ maxWidth: 220, whiteSpace: 'normal' }}><b style={{ fontWeight: 700 }}>{x.oLabel}</b><br /><span className="faint">→ {inner ? 'within the area' : x.dLabel}</span></td>
+                      <td>about {n(x.trips)}</td>
+                      <td>
+                        {view === 'unserved'
+                          ? <span className="pn-tag warn">{x.noStop >= x.noLink ? 'No stop near' : 'No line links'}</span>
+                          : x.served ? <>{x.modes[4] < 0.5 ? '<1' : n(x.modes[4])} <span className="faint">{pct(x.modes[4], x.trips)}</span></> : <span className="pn-tag">No link</span>}
+                      </td>
+                      {[0, 1, 2, 3].map((m) => <td key={m}>{pct(x.modes[m], x.trips)}</td>)}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
   );
 }

@@ -12,7 +12,8 @@ import type { Id } from '../types.ts';
 import { DAY, ECON, MODEL } from '../content.ts';
 import { weekdayOf } from '../time.ts';
 import { compile, type EValue } from '../expr.ts';
-import { computeItineraries } from '../passengers.ts';
+import type { DayEstimate } from '../activity/model.ts';
+import type { LngLat } from '../world/graph.ts';
 import { BANDS, type DayRecord, type DaySummary } from './types.ts';
 
 export type GroupBy = 'network' | 'line' | 'stop' | 'vehicle' | 'zone' | 'day' | 'hour' | 'weekday';
@@ -642,62 +643,150 @@ export function odMatrix(game: Game, q: OdQuery): OdResult {
 
 // ───────────────────────────────────────────── estimated demand (the model, not observations)
 
+/** Areas (operating areas), or places with their own zone (stations, hospitals, campuses…) and the areas they link to. */
+export type DemandLevel = 'zone' | 'place';
+
 export interface DemandFlow {
   o: string;
   d: string;
   oLabel: string;
   dLabel: string;
-  /** estimated trips per day by all modes between the two (both directions summed per direction) */
+  /** where the map arc starts and ends: a place's entrance, or the middle of your stops in an area */
+  oAt: LngLat | null;
+  dAt: LngLat | null;
+  /** modelled trips per day by all modes, in this direction */
   trips: number;
-  /** a bus itinerary exists between them this hour */
+  /** the same by mode, in MODES order: walk, bike, car, taxi, your network */
+  modes: number[];
+  /** your network links at least part of it at some hour today */
+  served: boolean;
+  /** trips with no link on your network: no stop within a walk of one end, or no line between the stops */
+  noStop: number;
+  noLink: number;
+}
+
+export interface DemandEstimate {
+  flows: DemandFlow[];
+  total: { trips: number; network: number; unserved: number };
+}
+
+const estimates = new WeakMap<Game, { key: string; est: DayEstimate | null }>();
+
+/** The model's day estimate, kept until the network, day, fare or reputation changes. */
+function dayEstimate(game: Game): DayEstimate | null {
+  const st = game.state;
+  const key = `${game.rev}|${Math.floor(game.t / DAY)}|${st.company.fare}|${Math.round(st.company.reputation)}|${st.territory.owned.length}`;
+  const hit = estimates.get(game);
+  if (hit && hit.key === key) return hit.est;
+  const owned = new Set(st.territory.owned);
+  const dm = game.demand;
+  const zs = dm.activity.ensureZones(game);
+  const est = dm.estimateDay(game, (z) => owned.has(zs.list[z].area));
+  estimates.set(game, { key, est });
+  return est;
+}
+
+/**
+ * Estimated daily travel demand by mode (walk, bike, car, taxi, your network) from the City
+ * Activity Engine, for trips that start or end in your territory. It is an estimate, not an
+ * observation. `view: 'unserved'` keeps only the trips your network cannot carry at any hour
+ * today: potential, with no passengers and no fares.
+ */
+export function estimatedDemand(game: Game, opts: { level: DemandLevel; view?: 'all' | 'unserved'; origin?: string | null; destination?: string | null; limit?: number }): DemandEstimate {
+  const empty: DemandEstimate = { flows: [], total: { trips: 0, network: 0, unserved: 0 } };
+  const est = dayEstimate(game);
+  if (!est) return empty;
+  const am = game.demand.activity;
+  const zs = am.zones!;
+  const st = game.state;
+  const isPlace = (z: number) => zs.list[z].kind === 'place' || zs.list[z].kind === 'beyond';
+  const keyOf = (z: number) => (opts.level === 'place' && isPlace(z)) || !zs.list[z].area ? zs.list[z].id : zs.list[z].area;
+  const areaAt = new Map<string, LngLat | null>();
+  const where = (z: number): LngLat | null => {
+    const zone = zs.list[z];
+    if (isPlace(z) && keyOf(z) === zone.id) return zone.lngLat;
+    let at = areaAt.get(zone.area);
+    if (at === undefined) {
+      let x = 0, y = 0, n = 0;
+      for (const s of Object.values(st.stops)) {
+        if (s.zone !== zone.area) continue;
+        x += s.lngLat[0];
+        y += s.lngLat[1];
+        n++;
+      }
+      at = n ? [x / n, y / n] : game.geo.zone(zone.area)?.centroid ?? null;
+      areaAt.set(zone.area, at);
+    }
+    return at;
+  };
+  const label = (z: number) => (keyOf(z) === zs.list[z].id ? zs.list[z].name : game.geo.zone(zs.list[z].area)?.name ?? zs.list[z].area);
+  const out = new Map<string, DemandFlow>();
+  const total = { trips: 0, network: 0, unserved: 0 };
+  for (const [pk, m] of est.trips) {
+    const i = Math.floor(pk / est.Z), j = pk % est.Z;
+    if (opts.level === 'place' && !isPlace(i) && !isPlace(j)) continue;
+    const ko = keyOf(i), kd = keyOf(j);
+    if (opts.origin && ko !== opts.origin) continue;
+    if (opts.destination && kd !== opts.destination) continue;
+    const served = est.served.has(pk);
+    if (opts.view === 'unserved' && served) continue;
+    let sum = 0;
+    for (let x = 0; x < m.length; x++) sum += Math.max(0, m[x]);
+    if (!(sum > 0)) continue;
+    total.trips += sum;
+    total.network += Math.max(0, m[4]);
+    if (!served) total.unserved += sum;
+    const fk = `${ko}>${kd}`;
+    let f = out.get(fk);
+    if (!f) out.set(fk, (f = { o: ko, d: kd, oLabel: label(i), dLabel: label(j), oAt: where(i), dAt: where(j), trips: 0, modes: [0, 0, 0, 0, 0], served: false, noStop: 0, noLink: 0 }));
+    f.trips += sum;
+    for (let x = 0; x < m.length; x++) f.modes[x] += Math.max(0, m[x]);
+    if (served) f.served = true;
+    else if (am.access[i]?.length && am.access[j]?.length) f.noLink += sum;
+    else f.noStop += sum;
+  }
+  const flows = [...out.values()].sort((a, b) => b.trips - a.trips || (a.o + a.d).localeCompare(b.o + b.d));
+  return { flows: opts.limit ? flows.slice(0, opts.limit) : flows, total };
+}
+
+export interface PlaceTravel {
+  /** modelled trips a day to and from the place, from and to your areas */
+  trips: number;
+  /** by mode, in MODES order: walk, bike, car, taxi, your network */
+  modes: number[];
+  /** your network links it at some hour today */
   served: boolean;
 }
 
-/**
- * Estimated daily travel demand (all modes) between served stops, from the land-use gravity
- * model the passenger simulation uses. It is an estimate, not an observation.
- */
-const linked = new WeakMap<Game, { rev: number; itin: Map<number, unknown> }>();
+const placeSums = new WeakMap<DayEstimate, Map<number, PlaceTravel>>();
 
 /**
- * Stop pairs the network connects (directly or with one change) at any time of day. The live
- * demand model only knows the lines running this hour, which is none at night.
+ * How people travel to and from a place, from the model's day estimate (the place card). Null when
+ * the place has no zone of its own: its trips are counted with the area around it.
  */
-function connectedPairs(game: Game): Map<number, unknown> {
-  const hit = linked.get(game);
-  if (hit && hit.rev === game.rev) return hit.itin;
-  const dm = game.demand;
-  const services = game.patternServices(game.t, dm.index).map((s) => ({ ...s, available: true }));
-  const itin = computeItineraries(dm.stops.length, services);
-  linked.set(game, { rev: game.rev, itin });
-  return itin;
-}
-
-export function estimatedDemand(game: Game, opts: { level: 'stop' | 'zone'; origin?: string | null; limit?: number }): DemandFlow[] {
-  const dm = game.demand;
-  // build the gravity model now if the game has not run since loading (the simulation would
-  // build the same model from the same state at its next minute)
-  if (dm.dirty) dm.rebuild(game);
-  const served = connectedPairs(game);
-  const S = dm.stops.length;
-  const st = game.state;
-  const keyOf = (s: Id) => (opts.level === 'zone' ? st.stops[s]?.zone ?? 'unknown' : s);
-  const label = (id: string) => (opts.level === 'zone' ? game.geo.zone(id)?.name ?? id : st.stops[id]?.name ?? id);
-  const out = new Map<string, DemandFlow>();
-  for (const k of dm.pairs) {
-    const o = Math.floor(k / S), d = k % S;
-    let v = 0;
-    for (let p = 0; p < 5; p++) v += dm.base[k * 5 + p];
-    if (v <= 0) continue;
-    const ko = keyOf(dm.stops[o]), kd = keyOf(dm.stops[d]);
-    if (opts.origin && ko !== opts.origin) continue;
-    if (ko === kd) continue;
-    const fk = `${ko}>${kd}`;
-    let f = out.get(fk);
-    if (!f) out.set(fk, (f = { o: ko, d: kd, oLabel: label(ko), dLabel: label(kd), trips: 0, served: false }));
-    f.trips += v;
-    if (served.has(k)) f.served = true;
+export function placeTravel(game: Game, placeId: string): PlaceTravel | null {
+  const est = dayEstimate(game);
+  const zs = game.demand.activity.zones;
+  if (!est || !zs) return null;
+  let sums = placeSums.get(est);
+  if (!sums) {
+    sums = new Map();
+    for (const [pk, m] of est.trips) {
+      const i = Math.floor(pk / est.Z), j = pk % est.Z;
+      for (const z of i === j ? [i] : [i, j]) {
+        if (zs.list[z].kind !== 'place' && zs.list[z].kind !== 'beyond') continue;
+        let t = sums.get(z);
+        if (!t) sums.set(z, (t = { trips: 0, modes: [0, 0, 0, 0, 0], served: false }));
+        for (let x = 0; x < m.length; x++) {
+          const v = Math.max(0, m[x]);
+          t.modes[x] += v;
+          t.trips += v;
+        }
+        if (est.served.has(pk)) t.served = true;
+      }
+    }
+    placeSums.set(est, sums);
   }
-  const list = [...out.values()].sort((a, b) => b.trips - a.trips);
-  return opts.limit ? list.slice(0, opts.limit) : list;
+  const z = zs.list.findIndex((x) => x.id === `p:${placeId}`);
+  return z >= 0 ? sums.get(z) ?? { trips: 0, modes: [0, 0, 0, 0, 0], served: false } : null;
 }

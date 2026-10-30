@@ -206,6 +206,13 @@ export interface PaxGroup {
   fr: Id | null;
   /** load factor when the group boarded (for crowding exposure) */
   lb?: number;
+  /**
+   * City Activity Engine: traveller type (index into TRAVELLERS), tour kind (index into KINDS),
+   * and set on the way home of a round trip. Missing on groups from older saves (a mixed type).
+   */
+  k?: number;
+  pu?: number;
+  ret?: 1;
 }
 
 export interface PassengerState {
@@ -213,6 +220,11 @@ export interface PassengerState {
   onboard: Record<Id, PaxGroup[]>;
   /** fractional generation accumulators per OD pair */
   acc: Record<string, number>;
+  /**
+   * The away pool: people who travelled out on your network and will travel home later.
+   * Key `${from stop}>${to stop}>${tour kind}`; value [minute, people, minute, people, …], sorted.
+   */
+  away: Record<string, number[]>;
 }
 
 // ─────────────────────────────────────────── finance

@@ -12,6 +12,9 @@ import { LineBadge } from './primitives.tsx';
 import { focusPoint } from './camera.ts';
 import { STOP_RULES } from '../game/content.ts';
 import { describeScale, MODE_LABEL, PLACE_LABEL, placeCredits, TIER_LABEL, walkDistanceM, type PlaceCategory } from '../game/world/places.ts';
+import { placeTravel } from '../game/analytics/query.ts';
+import { approx, share } from './network/common.tsx';
+import type { Game } from '../game/engine.ts';
 
 type Icon = ComponentType<{ size?: number; weight?: 'fill' | 'bold' | 'regular' }>;
 export const PLACE_ICON: Record<PlaceCategory, Icon> = {
@@ -21,6 +24,52 @@ export const PLACE_ICON: Record<PlaceCategory, Icon> = {
 };
 
 const km = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m / 10) * 10} m`);
+
+const TRAVEL_MODES = [
+  { i: 4, label: 'Your network' },
+  { i: 0, label: 'Walk' },
+  { i: 1, label: 'Bike' },
+  { i: 2, label: 'Car' },
+  { i: 3, label: 'Taxi' },
+];
+
+/** Modelled trips a day to and from the place by mode, and your share (an estimate). */
+function HowPeopleTravel({ game, id, beyond }: { game: Game; id: string; beyond: boolean }) {
+  const t = placeTravel(game, id);
+  if (!t) return null;
+  const count = (v: number) => approx(v).toLocaleString('en-GB');
+  return (
+    <div className="section">
+      <div className="row" style={{ marginBottom: 6, minHeight: 0 }}>
+        <div className="label grow">How people travel here</div>
+        <span className="pn-tag nc-tag-est">Estimate</span>
+      </div>
+      {t.trips < 1 ? (
+        <div className="faint" style={{ fontSize: 12 }}>The model expects almost no trips between here and your areas today.</div>
+      ) : (
+        <>
+          <div className="t" style={{ fontSize: 15, fontWeight: 800 }}>About {count(t.trips)} trips a day</div>
+          <div className="faint" style={{ fontSize: 12, marginTop: 2, marginBottom: 6 }}>
+            {beyond ? 'From and to your areas' : 'To and from here, from and to your areas'}
+            {t.modes[4] >= 1 ? `; about ${count(t.modes[4])} by your network.` : '; none by your network.'}
+          </div>
+          <div className="mini-list">
+            {TRAVEL_MODES.map((m) => (
+              <div className="mini-row" key={m.i} style={{ minHeight: 26 }}>
+                <span className="t" style={{ flex: 1 }}>{m.label}</span>
+                <span className="faint num" style={{ fontSize: 12, minWidth: 56, textAlign: 'right' }}>{t.modes[m.i] >= 0.5 ? count(t.modes[m.i]) : '—'}</span>
+                <span className="num" style={{ fontSize: 12, minWidth: 38, textAlign: 'right' }}>{share(t.modes[m.i], t.trips)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>
+            Modelled for today, not journeys carried. Metro, tram and ferry lines are not modelled yet, so their trips count as walking, car or taxi.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function PlaceInspector({ id, close }: { id: string; close: React.ReactNode }) {
   const game = useGameUpdates(1);
@@ -91,6 +140,7 @@ export function PlaceInspector({ id, close }: { id: string; close: React.ReactNo
             </div>
           )}
         </div>
+        <HowPeopleTravel game={game} id={p.id} beyond={!p.reachable} />
         <div className="faint" style={{ fontSize: 11 }}>Data: {placeCredits(p).join(' · ')}</div>
       </div>
       {p.reachable && (

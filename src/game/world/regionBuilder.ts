@@ -415,6 +415,7 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
     x0: gx0, y0: gy0, cell, w: gw, h: gh,
     residents: new Float32Array(N), jobs: new Float32Array(N), education: new Float32Array(N), shopping: new Float32Array(N),
     leisure: new Float32Array(N), other: new Float32Array(N), roads: new Float32Array(N),
+    work: new Float32Array(N), floor: new Float32Array(N), health: new Float32Array(N), services: new Float32Array(N), lodging: new Float32Array(N),
   };
   const cellOf = (x: number, y: number) => {
     const cx = Math.floor((x - gx0) / cell), cy = Math.floor((y - gy0) / cell);
@@ -437,6 +438,8 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
     const mix = landMix(luClass[k]);
     grid.residents[k] += (b.fa * mix.res) / M2_PER_RESIDENT;
     grid.jobs[k] += (b.fa * (1 - mix.res)) / mix.m2PerJob;
+    grid.work![k] += (b.fa * (1 - mix.res)) / mix.m2PerJob;
+    grid.floor![k] += b.fa * (1 - mix.res);
   }
   for (const r of rawPoi) {
     const k = cellOf(r.x, r.y);
@@ -446,6 +449,15 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
     grid.leisure[k] += r.rule.leis ?? 0;
     grid.other[k] += r.rule.other ?? 0;
     grid.jobs[k] += r.rule.jobs ?? 0;
+    // The activity engine's budget (plan section 6.4): the buildings hold the jobs, and a POI
+    // adds its own jobs only where no building was mapped. `other` is split by kind; transport
+    // hubs are left out because the Place Registry's stations stand in for them.
+    if (!grid.floor![k]) grid.work![k] += r.rule.jobs ?? 0;
+    const kind = r.rule.kind;
+    if (kind === 'hospital' || kind === 'clinic') grid.health![k] += r.rule.other ?? 0;
+    else if (kind === 'civic' || kind === 'worship') grid.services![k] += r.rule.other ?? 0;
+    else if (kind === 'shopping' && r.rule.other) grid.health![k] += r.rule.other; // pharmacies
+    if (kind === 'hotel') grid.lodging![k] += 1;
   }
   for (let ed = 0; ed < graph.m; ed++) {
     const a = graph.ea[ed], b = graph.eb[ed];

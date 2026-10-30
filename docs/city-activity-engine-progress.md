@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-30.
+Last updated: 2026-10-30 (phase 2).
 
 ## Phase 0. Foundations ✅
 
@@ -58,7 +58,60 @@ Screenshots are in `docs/screenshots/city-activity/`.
 - Closed or historic stations still mapped as stations keep their tier (Haydarpaşa in İstanbul).
 - Some OpenStreetMap points are mistagged (a restaurant tagged as a school). The registry takes the tags as they are.
 
-## Phase 2. Journeys and choice ⬜
+## Phase 2. Journeys and choice 🟡
+
+Built and tested. Screenshots in `docs/screenshots/city-activity/` come from a company simulated for 31 days until Network Control unlocked (`scripts/capture-network.mjs sim`, then `scripts/capture-activity.mjs`). 🟡 until the owner has played it, because it changes which lines carry riders (see "Effect on play").
+
+| Item | Status | Evidence |
+|---|---|---|
+| Activity budget from buildings: the demand grid gains jobs from floor area, floor space, health, services and hotels (`regionBuilder.ts`). A POI's own jobs count only where no building is mapped, so shops and venues are no longer counted on top of the building they are in | ✅ | `activity.test.ts` "a block with 500 restaurants…" (the floor space caps visits; POIs change the mix; no POIs and empty cells give no NaN) |
+| Activity zones (`src/game/activity/zones.ts`): 600 m squares in your areas and one ring around them, one zone per area beyond that, one zone per significant place (airports, main stations, piers, metro and bus stations, hospitals, campuses, malls, stadiums, big markets), and the airports beyond the map | ✅ | 410 zones for İstanbul with every area owned; `activity.test.ts` "size and speed" |
+| Tours by kind (13 kinds: work, shifts, school, university, shopping, errands, health, leisure, nights out, visits, business, flights, arrivals), with start and stay curves by day type. Gravity per kind; work and education doubly constrained; each origin keeps its top destinations (95% of tours, at most 60, all of them when there are at most 8); airport arrivals mirror departures (`od.ts`) | ✅ | `activity.test.ts`: a 40 million passenger airport draws at least 30 times the air travellers of a 0.5 million one |
+| Ten traveller types with their own sensitivity to fares, waits, changes, walking and reliability, car and taxi use, cycling and patience (`params.ts`) | ✅ | used by the choice below; patience by type in `passengers.ts` |
+| Tour-level choice between walking, cycling, car (by car availability), taxi and your network, with the way home counted: a tour whose last bus has gone scores your network as a taxi ride plus 15 minutes. Optional tours rise a little when your network is good (at most +15%) | ✅ | `activity.test.ts` "a more frequent line wins riders from walking and cars, with a bounded rise in trips" |
+| Linked returns: travellers who arrive go into the away pool (saved), and come back from where they got off at a time drawn from their tour's length of stay. With no bus home they are stranded, counted with those who gave up | ✅ | `activity.test.ts` "origin–destination consistency" (the audit checks away = sent away − returned, and returns never exceed outbound arrivals); "determinism with the away pool" |
+| Directional demand | ✅ | `activity.test.ts`: a line from Haseki to Beyazıt boards at least 2× more at the home end from 06:00 to 10:00, and at least 1.4× more at the job end from 16:00 to 20:00 (measured 2.7× and 1.8×) |
+| Gateways: train stations, piers, metro stations (tier 3 and up) and bus stations send a share of their users into the city and attract travellers heading there | ✅ | `zones.ts` (`GATEWAY_SHARE`); approximate until phase 3 |
+| The new rates feed the existing passenger generator; groups carry their traveller type and tour kind | ✅ | full suite green (133 tests) |
+| Analytics by traveller type: boardings per stop and line, journeys, left behind, stranded by hour, origin–destination by type | ✅ | `network-control.test.ts` "analytics queries" (counts add up, with stranded travellers); `activity.test.ts`: the new fields add at most 30% to a day record |
+| Estimated demand from the model, by mode (walk, bike, car, taxi, your network), for trips starting or ending in your areas, by area or by place; an unserved view that says why (no stop within a walk, or no line links the stops) | ✅ | `network-control.test.ts` "estimated demand" (2 tests); `activity.test.ts` "unserved demand" (2 tests); screenshots `nc-estimated-areas.png`, `nc-estimated-places.png`, `nc-unserved-areas.png`, `nc-unserved-places.png` |
+| Place card: "How people travel here", modelled trips a day by mode and your share; for airports beyond the map, the trips from your areas and "none by your network" | ✅ | `activity.test.ts` (Cevahir, İstanbul Airport, Sabiha Gökçen); screenshots `place-card-travel.png` (Mısır Çarşısı), `place-card-airport-travel.png` |
+| Unserved demand creates no passengers and no fares | ✅ | `activity.test.ts`: a game that reads the estimate every 3 hours ends identical to one that never does |
+| Calibration within ±10% | ✅ | `pnpm calibrate`, table below |
+| Performance | ✅ | one hour of choice: 8.5 ms with 410 zones and 72 stops (`activity.test.ts` holds it under 30 ms at about 100 stops); the day estimate takes about 90 ms and is kept until the network, day, fare or reputation changes |
+
+**Calibration** (`pnpm calibrate`, baseline = the earlier model):
+
+| Figure | Now | Baseline | Change | Limit |
+|---|---|---|---|---|
+| Reference riders, weekday | 3,572 | 3,611 | −1.1% | ±10% |
+| Reference riders, weekend | 3,045 | 3,076 | −1.0% | ±15% |
+| Reference boardings a day | 3,397 | 3,432 | −1.0% | ±10% |
+| Reference result a day | 3,966 | 4,032 | −1.6% | ±20% |
+| Reference satisfaction | 0.74 | 0.77 | | above 0.6 |
+| Thin line result, day 2 | −2,128 | −2,190 | | below 0 |
+| Crowded line peak load | 1.00 | 0.97 | | above 0.8 |
+
+The reputation cap is still in place (removed in phase 7).
+
+**Changes from the plan, and why:**
+- **The crowded scenario's line changed** (allowed by section 11, "a documented change to its setup"). It was a 14-stop zig-zag chain of nearby stops from Taksim. Under the new model walking or driving beats a line that wanders, so its morning peak reached only 71%. It is now a straight 10-stop line from Taksim to Mecidiyeköy along the main road, with the same two Mini 8 buses, headway, reputation and fare (`crowdedLine` in `test/helpers.ts`). Automation scenario 3 and the Simulation Lab test use the same line. Two tests that wait for "a bus with passengers on board" now wait up to 3 game hours instead of 15–30 minutes: they test commands, not demand.
+- **The tour kind is split statelessly** (a deterministic sample from a hash of the stop pair and the minute) instead of separate accumulator keys per type. Same totals, no extra state in the save.
+- **Space units and boarding time by type** move to phase 3 with the place profiles.
+- **Stay-home is a bounded factor** on optional tours (at most +15% when your network is excellent), not a separate alternative.
+- **Calibration constants:** your network carries a constant of +1 minute per journey (an alternative-specific constant, the usual calibration term). Access walking weighs 1.2 for most types (1.05 for students and event crowds, 1.5–1.6 for shoppers, pupils, air travellers and patients). Cycling carries a 60-minute propensity constant, which puts cycling near 2% of trips. That suits İstanbul, but it is one setting for every city.
+- **Station gateways are approximate:** a share of each station's daily users, by mode. Phase 3 replaces them with the background transit network.
+- **The estimate's other modes** use the traffic of each tour kind's busiest hour; your network is scored hour by hour, as in the simulation.
+
+**Effect on play (measured):**
+- Lines that wander lose riders to walking and cars; straight lines on busy corridors gain. That is the intended change, but it changes which lines pay.
+- On the progression bot's network (two lines in Fatih and Beyoğlu) the new model carries about 25% fewer riders than the old one (about 6,900 against 9,100 on a weekday). The old model counted shop and venue jobs on top of building jobs (twice the jobs around Beyazıt) and gave every metro station a flat bonus. The bot still grows and stays profitable.
+- The thin three-stop line carries more riders than before (131 against 97 on day 2) and still loses money.
+
+**Known gaps:**
+- Metro, tram and ferry lines are not in the choice yet (phase 3). Until then their trips appear as walking, car or taxi in the estimate (taxi is about a quarter of trips). The panel and the place card say so.
+- The evening reversal is weaker than the morning peak (1.8× against 2.7× on the Haseki–Beyazıt line), because trips home spread over more hours.
+- The development switch `setDemandEngine('legacy')` stays until phase 7 for comparisons.
 
 ## Phase 3. Places come alive ⬜
 

@@ -96,3 +96,13 @@ export function buildLine(game: Game, opts: { from?: LngLat; to?: LngLat; stops?
   }
   return { stopIds, depot, route: route.value, buses };
 }
+
+/**
+ * The busy test line: Taksim → Mecidiyeköy along the main road, 2 × Mini 8 every 20 minutes. Under
+ * the City Activity Engine a straight line on a main corridor fills small buses in the morning
+ * peak (measured 72–100% between 06:30 and 09:00 with seed 21); a zig-zag chain of nearby stops
+ * does not, because walking or driving beats it.
+ */
+export function crowdedLine(game: Game) {
+  return buildLine(game, { to: [28.9935, 41.067], buses: 2, headway: 20, model: 'mini8' });
+}

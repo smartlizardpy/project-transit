@@ -52,6 +52,8 @@ export interface StopDay {
   /** fares sold here (journeys that started here), and boardings by line */
   rv: number;
   bl: Record<Id, number>;
+  /** boardings by traveller type (activity engine; missing on older days) */
+  k?: number[];
 }
 
 /** Per line pattern (direction) and stop sequence: loads and run times per segment. */
@@ -102,6 +104,8 @@ export interface RouteDay {
   x: number;
   /** segment detail by pattern key */
   p: Record<string, PatDay>;
+  /** boardings by traveller type and time band: [type × BANDS.length + band] (missing on older days) */
+  k?: number[];
 }
 
 /** Per vehicle, one calendar day. Minutes by activity. */
@@ -135,7 +139,7 @@ export interface VehicleDay {
 export interface NetDay {
   /** journeys completed, by hour of completion */
   j: number[];
-  /** journeys abandoned (gave up), by hour */
+  /** journeys not completed, by hour: gave up waiting, or stranded with no bus home (`sd`) */
   ab: number[];
   /** satisfaction sum and count, component sums */
   ss: number;
@@ -146,6 +150,12 @@ export interface NetDay {
   wt: number;
   /** completed journeys that used a transfer */
   xf: number;
+  /** completed journeys, stranded travellers (no bus home) and people left behind, by traveller type */
+  jk?: number[];
+  sk?: number[];
+  lk?: number[];
+  /** stranded travellers by hour (included in `ab`; they have no origin–destination record) */
+  sd?: number[];
 }
 
 export interface DayRecord {
@@ -162,6 +172,8 @@ export interface DayRecord {
    * per time band present: [band, completed, abandoned, journey minutes, wait minutes, ...].
    */
   od: Record<string, number[]>;
+  /** completed journeys by traveller type per `od` key: [type, people, type, people, …] */
+  odk?: Record<string, number[]>;
 }
 
 /** Compact totals for days older than the detail window. */
@@ -197,6 +209,9 @@ export interface AnalyticsState {
 }
 
 export const hours0 = () => new Array<number>(24).fill(0);
+/** Traveller types recorded (see activity/params.ts TRAVELLERS). */
+export const TYPE_COUNT = 10;
+export const types0 = () => new Array<number>(TYPE_COUNT).fill(0);
 
 export function emptyDay(day: number, partial = false): DayRecord {
   const d: DayRecord = {

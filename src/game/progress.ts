@@ -43,7 +43,8 @@ export function routeHour(state: GameState, route: Id): RouteHour {
 }
 
 /** Score a finished (or abandoned) journey and add it to the statistics. */
-export function recordTrip(game: Game, g: PaxGroup, completed: boolean) {
+/** `stranded`: no bus home at their return time (scored like giving up, counted separately). */
+export function recordTrip(game: Game, g: PaxGroup, completed: boolean, stranded = false) {
   const state = game.state;
   const t = state.clock.t;
   const sc = scoreJourney(state, g, completed, t);
@@ -61,7 +62,7 @@ export function recordTrip(game: Game, g: PaxGroup, completed: boolean) {
   hs.satN += g.n;
   for (let i = 0; i < 5; i++) hs.comp[i] += sc.comp[i] * g.n;
   hs.waitSum += (g.w / 60) * g.n;
-  recJourney(state, g, completed, sc);
+  recJourney(state, g, completed, sc, stranded);
   const route = g.fr ?? g.legs[0]?.r;
   if (route && state.routes[route]) {
     const rh = routeHour(state, route);

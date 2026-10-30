@@ -58,6 +58,17 @@ export interface DemandGrid {
   other: Float32Array;
   /** road length per cell, metres (used for traffic density and land detection) */
   roads: Float32Array;
+  // The activity engine's budget (docs/city-activity-engine-plan.md, section 6.4). Optional so
+  // that hand-made grids still work; the engine falls back to the arrays above.
+  /** jobs from building floor area only (a POI adds its own jobs only where no building was mapped) */
+  work?: Float32Array;
+  /** non-residential building floor area, m² */
+  floor?: Float32Array;
+  /** health visits (hospitals, clinics, doctors, pharmacies) and civic or religious services */
+  health?: Float32Array;
+  services?: Float32Array;
+  /** hotels and other lodging (count) */
+  lodging?: Float32Array;
 }
 
 export interface Zone {

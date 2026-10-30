@@ -6,7 +6,7 @@
 import type { GameState, Id, PaxGroup, Vehicle } from '../types.ts';
 import type { Pattern } from '../network.ts';
 import { DAY, HOUR } from '../content.ts';
-import { ASSIGNMENT_LOG, DETAIL_DAYS, SUMMARY_DAYS, bandOf, emptyDay, hours0, type DayRecord, type DaySummary, type PatDay, type RouteDay, type StopDay, type VehicleDay } from './types.ts';
+import { ASSIGNMENT_LOG, BANDS, DETAIL_DAYS, SUMMARY_DAYS, TYPE_COUNT, bandOf, emptyDay, hours0, types0, type DayRecord, type DaySummary, type PatDay, type RouteDay, type StopDay, type VehicleDay } from './types.ts';
 
 /**
  * Hour of the calendar day an event at time t is recorded in. An event at exactly midnight
@@ -59,10 +59,14 @@ function patDay(rd: RouteDay, p: Pattern): PatDay {
 
 // ───────────────────────────────────────────── passengers
 
-export function recBoard(state: GameState, stop: Id, route: Id, veh: Vehicle, n: number, waitedSec: number, transfer: boolean) {
+export function recBoard(state: GameState, stop: Id, route: Id, veh: Vehicle, n: number, waitedSec: number, transfer: boolean, type?: number) {
   const h = recHour(state.clock.t);
   const sd = stopDay(state, stop);
   sd.b[h] += n;
+  if (type !== undefined) {
+    (sd.k ??= types0())[type] += n;
+    (routeDay(state, route).k ??= new Array<number>(TYPE_COUNT * BANDS.length).fill(0))[type * BANDS.length + bandOf(h)] += n;
+  }
   const wm = Math.max(0, waitedSec) / 60;
   sd.ws += wm * n;
   sd.wn += n;
@@ -90,9 +94,15 @@ export function recAlight(state: GameState, stop: Id, n: number) {
   stopDay(state, stop).a[recHour(state.clock.t)] += n;
 }
 
-export function recLeftBehind(state: GameState, stop: Id, route: Id, n: number) {
+export function recLeftBehind(state: GameState, stop: Id, route: Id, n: number, byType?: number[]) {
   if (n <= 0) return;
   stopDay(state, stop).lb += n;
+  if (byType) {
+    const net = state.analytics.today.net;
+    byType.forEach((v, k) => {
+      if (v) (net.lk ??= types0())[k] += v;
+    });
+  }
   const rd = routeDay(state, route);
   rd.lb += n;
   rd.cr++;
@@ -109,7 +119,7 @@ export function itinerarySig(g: PaxGroup): string {
 }
 
 /** A journey ended: completed at its destination or abandoned. */
-export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sat: { overall: number; comp: number[] }) {
+export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sat: { overall: number; comp: number[] }, stranded = false) {
   const t = state.clock.t;
   const rec = state.analytics.today;
   const h = recHour(t);
@@ -119,7 +129,14 @@ export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sa
     net.jt += ((t - g.t0) / 60) * g.n;
     net.wt += (g.w / 60) * g.n;
     if (g.legs.length > 1) net.xf += g.n;
-  } else net.ab[h] += g.n;
+    if (g.k !== undefined) (net.jk ??= types0())[g.k] += g.n;
+  } else {
+    net.ab[h] += g.n;
+    if (stranded) {
+      (net.sd ??= hours0())[h] += g.n;
+      if (g.k !== undefined) (net.sk ??= types0())[g.k] += g.n;
+    }
+  }
   net.ss += sat.overall * g.n;
   net.sn += g.n;
   for (let i = 0; i < 5; i++) net.comp[i] += (sat.comp[i] ?? 0) * g.n;
@@ -129,7 +146,9 @@ export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sa
     rd.ss += sat.overall * g.n;
     rd.sn += g.n;
   }
-  // origin–destination, by the time band the journey started in
+  // origin–destination, by the time band the journey started in (stranded travellers never had
+  // a line or an itinerary: they are counted in `net` only)
+  if (stranded) return;
   const key = `${g.o}>${g.d}>${itinerarySig(g)}`;
   const band = bandOf(Math.floor((((g.t0 % DAY) + DAY) % DAY) / HOUR));
   const arr = (rec.od[key] ??= []);
@@ -141,6 +160,14 @@ export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sa
     arr[i + 3] += ((t - g.t0) / 60) * g.n;
   } else arr[i + 2] += g.n;
   arr[i + 4] += (g.w / 60) * g.n;
+  // completed journeys by traveller type: [type, people, type, people, …]
+  if (completed && g.k !== undefined) {
+    const tv = ((rec.odk ??= {})[key] ??= []);
+    let j = 0;
+    while (j < tv.length && tv[j] !== g.k) j += 2;
+    if (j >= tv.length) tv.push(g.k, 0);
+    tv[j + 1] += g.n;
+  }
   for (const id of [g.o, g.d]) if (!(id in state.analytics.names.s) && state.stops[id]) state.analytics.names.s[id] = state.stops[id].name;
 }
 

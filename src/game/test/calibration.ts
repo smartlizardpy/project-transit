@@ -2,7 +2,7 @@
 // Each City Activity Engine phase must keep these within the agreed limits of the baseline in
 // calibration-baseline.json: ±10% for riders, averaged over term-time weekdays with typical
 // weather (docs/city-activity-engine-plan.md, section 11). Run with `pnpm calibrate`.
-import { newGame, stopsAlong, buildLine } from './helpers.ts';
+import { newGame, stopsAlong, crowdedLine } from './helpers.ts';
 import { flatTimetable, sustainableHeadway } from '../timetable.ts';
 import { dayTotals } from '../finance.ts';
 import { DAY, ECON, HOUR, MODEL } from '../content.ts';
@@ -57,12 +57,12 @@ export const SCENARIOS: Record<string, () => Metrics> = {
     for (let day = 0; day < 3; day++) game.run(24 * HOUR);
     return { ridersDay2: game.state.stats.days.find((d) => d.day === 2)?.trips ?? 0, resultDay2: dayTotals(game.state, 2).result };
   },
-  /** Automation scenario 3: small buses on a 14-stop line, morning peak load above 80%. */
+  /** Automation scenario 3: small buses on a busy corridor, morning peak load above 80%. */
   crowded() {
     const game = newGame({ seed: 21, extraFunds: 1_000_000, allZones: true });
     game.state.company.reputation = 85;
     game.setFare(ECON.fareMin);
-    const line = buildLine(game, { buses: 2, stops: 14, headway: 20, model: 'mini8' });
+    const line = crowdedLine(game);
     // live line occupancy every 15 minutes, as the automation's line node reads it (automation/live.ts)
     const occupancy = () => {
       const running = game.state.routes[line.route].vehicles.map((v) => game.state.vehicles[v]).filter((v) => (v.status === 'in_service' || v.status === 'at_stop') && v.pos.kind === 'pattern');

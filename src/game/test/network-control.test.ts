@@ -149,11 +149,12 @@ describe('analytics match the simulation (scenario 2)', () => {
   const records = [...s.analytics.days, s.analytics.today];
 
   it('counts every boarding, journey and abandonment the simulation counted', () => {
-    let boardings = 0, journeys = 0, abandoned = 0, stopBoardings = 0, odJourneys = 0, odAbandoned = 0;
+    let boardings = 0, journeys = 0, abandoned = 0, stranded = 0, stopBoardings = 0, odJourneys = 0, odAbandoned = 0;
     for (const r of records) {
       boardings += dayActivity(r).boardings;
       journeys += sum(r.net.j);
       abandoned += sum(r.net.ab);
+      stranded += sum(r.net.sd ?? []);
       for (const st of Object.values(r.stops)) stopBoardings += sum(st.b);
       for (const v of Object.values(r.od)) for (let i = 0; i < v.length; i += 5) {
         odJourneys += v[i + 1];
@@ -179,7 +180,8 @@ describe('analytics match the simulation (scenario 2)', () => {
     expect(busFares).toBeCloseTo(fares, 0);
     expect(abandoned).toBe(s.stats.total.abandoned);
     expect(odJourneys).toBe(journeys);
-    expect(odAbandoned).toBe(abandoned);
+    // stranded travellers (no bus home) never had a line or an itinerary, so they have no OD record
+    expect(odAbandoned + stranded).toBe(abandoned);
   });
 
   it('records loads, run times, delays and vehicle time that make sense', () => {
@@ -314,9 +316,9 @@ describe('analytics queries (shared by Network Control and automation)', () => {
     const one = odMatrix(game, { level: 'stop', days: last2, lines: [b.route], origin: f.o });
     expect(one.flows.every((x) => x.o === f.o)).toBe(true);
     // estimated demand is labelled separately and comes from the model
-    const est = estimatedDemand(game, { level: 'stop', limit: 10 });
-    expect(est.length).toBeGreaterThan(0);
-    expect(est[0].trips).toBeGreaterThan(0);
+    const est = estimatedDemand(game, { level: 'zone', limit: 10 });
+    expect(est.flows.length).toBeGreaterThan(0);
+    expect(est.flows[0].trips).toBeGreaterThan(0);
   });
 
   it('says when nothing was recorded for a selection', () => {
@@ -332,11 +334,15 @@ describe('estimated demand', () => {
     const line = buildLine(game, { buses: 2, stops: 7 });
     game.run(20 * HOUR + 30 * 60); // 05:00 → 01:30, after the last departures
     expect(game.demand.itin.size).toBe(0); // the live model only knows lines running this hour
-    const est = estimatedDemand(game, { level: 'stop' });
-    const onLine = new Set(line.stopIds);
-    const both = est.filter((f) => onLine.has(f.o) && onLine.has(f.d));
-    expect(both.length).toBeGreaterThan(0);
-    expect(both.every((f) => f.served)).toBe(true);
+    // the estimate covers the whole day, so the line counts although no bus runs now
+    const est = estimatedDemand(game, { level: 'zone' });
+    const areas = new Set(line.stopIds.map((s) => game.state.stops[s].zone));
+    const linked = est.flows.filter((f) => areas.has(f.o) && areas.has(f.d) && f.served);
+    expect(linked.length).toBeGreaterThan(0);
+    expect(linked.reduce((a, f) => a + f.modes[4], 0)).toBeGreaterThan(0);
+    expect(est.total.network).toBeGreaterThan(0);
+    // by mode: everyone's trips, most of them not on your network
+    expect(est.total.trips).toBeGreaterThan(est.total.network * 5);
   });
 
   it('is available straight after loading, before the game has run', () => {
@@ -344,7 +350,7 @@ describe('estimated demand', () => {
     buildLine(game, { buses: 2, stops: 7 });
     game.run(2 * HOUR);
     const copy = new Game(JSON.parse(game.serialize()), region());
-    expect(estimatedDemand(copy, { level: 'stop' }).length).toBeGreaterThan(0);
+    expect(estimatedDemand(copy, { level: 'zone' }).flows.length).toBeGreaterThan(0);
     // reading it does not change what happens next
     const other = new Game(JSON.parse(game.serialize()), region());
     copy.run(HOUR);

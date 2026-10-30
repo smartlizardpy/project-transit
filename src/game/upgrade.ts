@@ -18,7 +18,8 @@ import { hashString } from './hash.ts';
  *
  * Version 3 adds `world`: the game calendar starts with the week the save is first loaded in
  * (week 1 of autumn), and the city seed comes from the save's id, so it is the same on every load.
- * Its place snapshot starts empty; the game fills it from the map when it loads.
+ * Its place snapshot starts empty; the game fills it from the map when it loads. The away pool
+ * (people out on a round trip) starts empty; passengers already travelling finish as a mixed type.
  */
 export function upgradeState(s: GameState): GameState {
   const day = Math.floor(s.clock.t / DAY);
@@ -27,6 +28,7 @@ export function upgradeState(s: GameState): GameState {
   if (!s.automation) s.automation = emptyAutomation();
   s.world ??= { seed: hashString(s.meta?.id ?? 'save'), calendar: calendarFrom(s.clock.startWeekday, day), places: { digest: '', significant: [] } };
   s.world.places ??= { digest: '', significant: [] };
+  s.pax.away ??= {};
   s.control.metrics ??= [];
   s.control.reports ??= [];
   s.control.counter ??= 0;

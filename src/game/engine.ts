@@ -9,7 +9,7 @@ import { SimulatedTraffic } from './world/traffic.ts';
 import { route as routeLeg, type LngLat } from './world/graph.ts';
 import { buildPatterns, checkDepot, checkStop, type Pattern } from './network.ts';
 import type { Path } from './paths.ts';
-import { DemandModel, abandonAndReplan, generatePassengers, offloadAll, paxTotals, type PatternService, type StopEvent } from './passengers.ts';
+import { DemandModel, abandonAndReplan, awayTotal, generatePassengers, offloadAll, paxTotals, type PatternService, type StopEvent } from './passengers.ts';
 import { bandAt, buildRunProfile, defaultTimetable, generateTrips, normaliseBands, requirement, scheduleAt, type Requirement, type RunProfile } from './timetable.ts';
 import { abortService, detachFromPattern, dispatch, extraOption, minuteVehicles, PREP, sendToDepot, startDeadhead, startExtra, tickVehicle, transferDepot, vehicleNode, vehicleXY, type ExtraOption } from './vehicles.ts';
 import { waitingAt } from './passengers.ts';
@@ -101,7 +101,7 @@ export function newGameState(o: NewGameOptions): GameState {
     vehicles: {},
     trips: {},
     tripDay: {},
-    pax: { waiting: {}, onboard: {}, acc: {} },
+    pax: { waiting: {}, onboard: {}, acc: {}, away: {} },
     finance: emptyFinance(ECON.startingFunds),
     stats: { hours: [], routeHours: {}, days: [], total: { trips: 0, boardings: 0, abandoned: 0 } },
     territory: { owned: startingZones(o.region.zones, o.homeZone), home: o.homeZone, start: startingZones(o.region.zones, o.homeZone) },
@@ -145,7 +145,8 @@ export class Game {
   private prevPose = new Map<Id, Pose & { key: string }>();
   private listeners = new Map<string, Set<Listener>>();
   /** passenger accounting since this session started */
-  readonly counters = { generated: 0, boardings: 0, completed: 0, lost: 0 };
+  /** passenger accounting since this session started (the audit checks it); away/returned: people sent away on a round trip and released to come home */
+  readonly counters = { generated: 0, boardings: 0, completed: 0, lost: 0, away: 0, returned: 0 };
   /** recent stop events for subtle UI feedback */
   readonly recentStops: { t: number; stop: Id; veh: Id; board: number; alight: number }[] = [];
   /** index into SPEEDS */
@@ -175,6 +176,7 @@ export class Game {
     for (const n of state.notifications) if (n.ref?.kind === 'route' && n.title.includes(' missed the ')) this.missNotice.set(n.ref.id, n.t);
     const pax = paxTotals(state);
     this.counters.generated = pax.waiting + pax.onboard;
+    this.counters.away = awayTotal(state);
     refreshWants(this);
     this.refreshQuality();
   }
@@ -1393,6 +1395,10 @@ export class Game {
     const pax = paxTotals(this.state);
     const balance = this.counters.generated - pax.waiting - pax.onboard - this.counters.completed - this.counters.lost;
     if (balance !== 0) out.push(`Passenger count drift: ${balance}.`);
+    // everyone released to come home was sent away first, and everyone else is still away
+    const away = awayTotal(this.state);
+    if (this.counters.away - this.counters.returned !== away) out.push(`Away pool drift: ${this.counters.away - this.counters.returned - away}.`);
+    if (this.counters.returned > this.counters.away) out.push('More returns than outbound arrivals.');
     return out;
   }
 

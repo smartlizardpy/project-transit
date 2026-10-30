@@ -158,6 +158,11 @@ export function fmt(game: Game, unit: Unit, v: number | null | undefined, decima
     default: return decimals !== undefined ? v.toFixed(decimals) : Math.abs(v) >= 100 ? Math.round(v).toLocaleString('en-GB') : v % 1 === 0 ? String(v) : v.toFixed(1);
   }
 }
+/** An estimate's precision: two or three significant figures. */
+export const approx = (v: number) => (v >= 10_000 ? Math.round(v / 1000) * 1000 : v >= 1000 ? Math.round(v / 100) * 100 : v >= 100 ? Math.round(v / 10) * 10 : Math.round(v));
+/** A share in whole percent, with "<1%" for a sliver rather than rounding it up or away. */
+export const share = (v: number, of: number) => (!(of > 0) || !(v > 0) ? '—' : (v / of) * 100 < 0.5 ? '<1%' : `${Math.round((v / of) * 100)}%`);
+
 export const fmtM = (game: Game, id: string, v: number | null | undefined) => fmt(game, MEASURE[id]?.unit ?? 'count', v);
 
 export const SOURCE_TEXT: Record<string, string> = {
