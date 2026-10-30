@@ -14,7 +14,8 @@ import type { CityPlace } from '../world/places.ts';
 import type { LngLat } from '../world/graph.ts';
 import type { Season } from '../calendar.ts';
 import { tileAt, zoneId } from '../world/zoneTiles.ts';
-import { KINDS, KIND, KIND_COUNT, HOME_RATE, JOB_RATE, GUEST_RATE, HOTEL, OCCUPANCY, GATEWAY_SHARE, GATEWAY_MIX, type Attraction } from './params.ts';
+import { KINDS, KIND, KIND_COUNT, HOME_RATE, JOB_RATE, GUEST_RATE, HOTEL, OCCUPANCY, GATEWAY_SHARE, GATEWAY_MIX, OUTDOOR_SEASON, type Attraction } from './params.ts';
+import { PROFILE, profileOf } from './profiles.ts';
 
 export type ZoneKind = 'square' | 'area' | 'place' | 'beyond';
 
@@ -54,6 +55,8 @@ export interface ActivityZones {
   prod: Float64Array;
   homeShare: Float64Array;
   attr: Float64Array;
+  /** per zone: the activity profile its tours keep to (profiles.ts; the city's own for squares and areas) */
+  profile: Uint8Array;
 }
 
 /** Categories that get their own zone, with the largest tier that qualifies. */
@@ -197,6 +200,8 @@ export function buildActivityZones(inp: ZoneInputs): ActivityZones {
   // industrial areas mark shift work without a zone of their own
   for (const p of region.cityPlaces ?? []) if (p.category === 'industrial') for (const k of ringCells(p)) shiftOf[k] = Math.max(shiftOf[k], SHIFT_SHARE.industrial!);
   const placeZone = new Map<number, CityPlace>();
+  /** residents inside a place's outline (student housing on a campus) */
+  const housed = new Map<number, number>();
   for (const p of places) {
     const [x, y] = toXY(p.lngLat[0], p.lngLat[1]);
     const t = tileAt(p.lngLat);
@@ -210,6 +215,7 @@ export function buildActivityZones(inp: ZoneInputs): ActivityZones {
     if (beyond) continue;
     for (const k of ringCells(p)) {
       if (claimedBy[k] >= 0) continue;
+      if (p.category === 'university') housed.set(zi, (housed.get(zi) ?? 0) + g.residents[k]);
       claimedBy[k] = zi;
       actOf[k] = zi;
       if (SHIFT_SHARE[p.category]) shiftOf[k] = SHIFT_SHARE[p.category]!;
@@ -279,12 +285,15 @@ export function buildActivityZones(inp: ZoneInputs): ActivityZones {
     } else if (GATEWAY_SHARE[p.category]) {
       // people arriving here and going on into the city, and people heading here to travel on
       const tours = v * GATEWAY_SHARE[p.category]!;
-      for (const [kind, share] of Object.entries(GATEWAY_MIX)) prod[zi * K + KIND[kind]] += tours * share!;
+      for (const [kind, share] of Object.entries(GATEWAY_MIX[gatewayKind(p)])) prod[zi * K + KIND[kind]] += tours * share!;
       attr[zi * K + KIND.work] += tours * 0.45;
       attr[zi * K + KIND.errand] += tours * 0.25;
       attr[zi * K + KIND.leisure] += tours * 0.2;
     } else {
-      for (const ki of ATTR_INDEX[main]) attr[zi * K + ki] += v;
+      // a residential campus: students who live on it walk to class, so fewer come from elsewhere
+      const students = main === 'university' ? v / 0.75 : 0;
+      const live = students > 0 ? Math.min(1, (housed.get(zi) ?? 0) / students) : 0;
+      for (const ki of ATTR_INDEX[main]) attr[zi * K + ki] += v * (1 - 0.6 * live);
       if (!z.jobs) {
         const staff = placeStaff(p);
         z.jobs = staff;
@@ -303,7 +312,7 @@ export function buildActivityZones(inp: ZoneInputs): ActivityZones {
     if (z < 0) continue;
     const tiers = VISIT_BY_TIER[p.category];
     if (tiers) {
-      const v = tiers[p.scale.tier - 1] ?? 0;
+      const v = (tiers[p.scale.tier - 1] ?? 0) * (OUTDOOR_SEASON[p.category]?.[season] ?? 1);
       attr[z * K + KIND.visit] += v;
       attr[z * K + KIND.leisure] += v * 0.5;
     }
@@ -334,7 +343,19 @@ export function buildActivityZones(inp: ZoneInputs): ActivityZones {
   }
   const homeShare = new Float64Array(Z * K);
   for (let i = 0; i < Z * K; i++) homeShare[i] = prod[i] > 0 ? homeProd[i] / prod[i] : 0;
-  return { key: zonesKey(inp), list, homeOf, actOf, homeW, actW, prod, homeShare, attr };
+  const profile = new Uint8Array(Z).fill(PROFILE.city);
+  for (const [zi, p] of placeZone) profile[zi] = profileOf(p);
+  return { key: zonesKey(inp), list, homeOf, actOf, homeW, actW, prod, homeShare, attr, profile };
+}
+
+/** Which gateway mix a station's arriving travellers follow. */
+function gatewayKind(p: CityPlace): keyof typeof GATEWAY_MIX {
+  switch (p.category) {
+    case 'rail_station': return p.scale.tier <= 1 ? 'main' : 'regional';
+    case 'ferry_pier': return 'ferry';
+    case 'bus_station': return 'coach';
+    default: return 'metro';
+  }
 }
 
 /** The purpose a place zone mainly attracts. */
@@ -362,7 +383,7 @@ export function placeVisitors(p: CityPlace): number {
     }
     case 'mall': return s.value * 0.12;
     case 'market': return s.value * 0.2;
-    case 'stadium': return s.value * 0.015;
+    case 'stadium': return s.value * 0.004; // ordinary days: tours and visitors (match days come with events)
     default: return s.unit === 'users_day' ? s.value : 0;
   }
 }

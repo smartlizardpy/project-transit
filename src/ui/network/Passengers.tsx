@@ -256,12 +256,12 @@ function EstimatedTable({ game, est, view, level, selected, onPick, onMap }: { g
           {view === 'all'
             ? `Trips a day by everyone, starting or ending in your areas, and how they travel, from the city model. “Your network” is what the model expects you to carry today. These are not journeys your buses carried; map arcs are dashed.`
             : `Trips your network cannot carry at any hour today: one end has no stop within a walk, or no line links the stops. This is potential only: it brings no passengers and no fares until you serve it.`}{' '}
-          Metro, tram and ferry lines are not modelled yet, so trips that would use them count here as walking, car or taxi.
+          “Metro, tram, ferry” is the city’s existing rail and ferry network as mapped, with assumed speeds and waits.
         </div>
         {rows.length === 0 ? <div className="pn-empty">{view === 'all' ? `No estimated trips between these ${what}.` : `Every modelled trip between these ${what} has a link on your network.`}</div> : (
           <div className="nc-scroll">
             <table className="pn-table nc-table">
-              <thead><tr><th>From → to</th><th>Trips / day</th><th>{view === 'all' ? 'Your network' : 'Why'}</th><th>Walk</th><th>Bike</th><th>Car</th><th>Taxi</th></tr></thead>
+              <thead><tr><th>From → to</th><th>Trips / day</th><th>{view === 'all' ? 'Your network' : 'Why'}</th><th>Metro, tram, ferry</th><th>Walk</th><th>Bike</th><th>Car</th><th>Taxi</th></tr></thead>
               <tbody>
                 {rows.slice(0, 40).map((x) => {
                   const id = `${x.o}>${x.d}`;
@@ -275,7 +275,7 @@ function EstimatedTable({ game, est, view, level, selected, onPick, onMap }: { g
                           ? <span className="pn-tag warn">{x.noStop >= x.noLink ? 'No stop near' : 'No line links'}</span>
                           : x.served ? <>{x.modes[4] < 0.5 ? '<1' : n(x.modes[4])} <span className="faint">{pct(x.modes[4], x.trips)}</span></> : <span className="pn-tag">No link</span>}
                       </td>
-                      {[0, 1, 2, 3].map((m) => <td key={m}>{pct(x.modes[m], x.trips)}</td>)}
+                      {[5, 0, 1, 2, 3].map((m) => <td key={m}>{pct(x.modes[m], x.trips)}</td>)}
                     </tr>
                   );
                 })}

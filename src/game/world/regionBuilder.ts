@@ -7,6 +7,7 @@ import { classifyRings, clipLine, clipRing, latToMercY, lngToMercX, mercXToLng, 
 import { zoneId } from './zoneTiles.ts';
 import { buildGraph, projector, RoadClass, EDGE_BRIDGE, EDGE_ONEWAY, EDGE_TUNNEL, distanceM, type LngLat, type Segment, buildIndex, nearestNode, STOP_CLASSES, nodeHasClass } from './graph.ts';
 import type { DemandGrid, OsmStop, Place, Poi, PoiKind, RegionData, RegionSpec, StreetName, Zone } from './region.ts';
+import { buildTransit } from './transitBuilder.ts';
 import { buildPlaces, PLACE_AEROWAY, PLACE_LANDCOVER, PLACE_LANDUSE, PLACE_POI, ringArea, type RawAerodrome, type RawLine, type RawPoi, type RawPoly } from './placeBuilder.ts';
 import { hashString } from '../hash.ts';
 
@@ -505,6 +506,7 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
     buildings,
     labels: places,
   });
+  const transit = buildTransit({ lines: regLines, places: cityPlaces, toXY: P.toXY });
 
   // ---------------- coverage
   let roadM = 0, oneway = 0, bridges = 0, tunnels = 0;
@@ -530,6 +532,7 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
     pois: pois.sort((a, b) => b.weight - a.weight),
     places,
     cityPlaces,
+    transit,
     demand: grid,
     zones,
     osmStops,

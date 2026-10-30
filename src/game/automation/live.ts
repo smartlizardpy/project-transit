@@ -45,7 +45,7 @@ export class LiveData {
     if (!r) return null;
     const buses = r.vehicles.map((v) => s.vehicles[v]).filter(Boolean);
     const running = buses.filter((v) => (v.status === 'in_service' || v.status === 'at_stop') && v.pos.kind === 'pattern' && v.pos.route === id);
-    const occ = running.length ? sum(running.map((v) => v.load / MODEL[v.model].capacity)) / running.length : 0;
+    const occ = running.length ? sum(running.map((v) => (v.sp ?? v.load) / MODEL[v.model].capacity)) / running.length : 0;
     const delay = running.length ? sum(running.map((v) => Math.max(0, v.delay))) / running.length / 60 : 0;
     const w = routeWindow(s, id, 3);
     const req = game.requirement(id);
@@ -101,7 +101,7 @@ export class LiveData {
     return {
       kind: 'vehicle', id: v.id, fleetNo: v.fleetNo, model: m.name, capacity: m.capacity,
       line: v.route, lineNumber: r?.number ?? null, status: v.status, statusLabel: STATUS_LABEL[v.status],
-      load: v.load, occupancy: r1((v.load / m.capacity) * 100), condition: Math.round(v.condition * 100),
+      load: v.load, occupancy: r1(((v.sp ?? v.load) / m.capacity) * 100), condition: Math.round(v.condition * 100),
       delay: r1(Math.max(0, v.delay) / 60), depot: v.depot, depotName: s.depots[v.depot]?.name ?? null,
       spare: v.route === null, free, carrying: v.load > 0,
     };

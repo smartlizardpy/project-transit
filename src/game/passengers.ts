@@ -673,8 +673,20 @@ function replan(game: Game, g: PaxGroup, stop: Id) {
 export interface StopEvent {
   alight: number;
   board: number;
+  /** extra boarding seconds for luggage and bags (traveller types) */
+  extra?: number;
   /** passengers who wanted this bus but did not fit */
   leftBehind: number;
+}
+
+/** Space a group takes on board, per person (a commuter is 1; air travellers with luggage 1.6). */
+export function spaceOf(g: PaxGroup): number {
+  return g.k === undefined ? 1 : (TRAVELLERS[g.k]?.space ?? 1);
+}
+
+/** Space taken on a bus, in commuter places. */
+export function occupied(v: Vehicle): number {
+  return v.sp ?? v.load;
 }
 
 /** Would anyone get off or on at this stop? (Buses skip stops nobody needs.) */
@@ -682,7 +694,7 @@ export function stopNeeded(game: Game, v: Vehicle, p: Pattern, idx: number): boo
   const stop = p.stops[idx];
   if (idx === 0 || idx === p.stops.length - 1) return true;
   for (const g of game.state.pax.onboard[v.id] ?? []) if (g.legs[g.leg].a === stop) return true;
-  if (v.load >= MODEL[v.model].capacity) return false;
+  if (occupied(v) >= MODEL[v.model].capacity - 0.5) return false;
   for (const g of game.state.pax.waiting[stop] ?? []) if (wantsThisBus(g, p, idx)) return true;
   return false;
 }
@@ -705,7 +717,7 @@ export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number): Stop
   const last = idx === p.stops.length - 1;
   const ev: StopEvent = { alight: 0, board: 0, leftBehind: 0 };
   const onboard = (state.pax.onboard[v.id] ??= []);
-  const lfNow = v.load / cap;
+  const lfNow = occupied(v) / cap;
   // 1. alight
   for (let i = onboard.length - 1; i >= 0; i--) {
     const g = onboard[i];
@@ -728,20 +740,24 @@ export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number): Stop
   }
   if (ev.alight) recAlight(state, stop, ev.alight);
   v.load = onboard.reduce((s, g) => s + g.n, 0);
+  v.sp = onboard.reduce((s, g) => s + g.n * spaceOf(g), 0);
   // 2. board (not at the end of a trip)
   if (!last) {
     const waiting = state.pax.waiting[stop] ?? [];
     const cands = waiting.filter((g) => wantsThisBus(g, p, idx)).sort((a, b) => a.tl - b.tl);
-    let room = cap - v.load;
+    // room in commuter places: a traveller with luggage takes more than one
+    let room = cap - v.sp;
     const headway = game.headwayAt(p.route, p.index, t) ?? 10;
     const lbk: number[] = [];
     for (const g of cands) {
-      if (room <= 0) {
+      const space = spaceOf(g);
+      const fits = Math.floor(room / space + 1e-9);
+      if (fits <= 0) {
         ev.leftBehind += g.n;
         if (g.k !== undefined) lbk[g.k] = (lbk[g.k] ?? 0) + g.n;
         continue;
       }
-      const take = Math.min(g.n, room);
+      const take = Math.min(g.n, fits);
       const part = take === g.n ? g : split(g, take);
       if (part === g) waiting.splice(waiting.indexOf(g), 1);
       const chosen = wantsThisBus(part, p, idx)!;
@@ -754,7 +770,7 @@ export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number): Stop
       if (headway > 12) waited = Math.min(waited, 240 + 12 * headway + Math.max(0, v.delay));
       part.w += Math.max(0, waited);
       part.dl += Math.abs(v.delay);
-      recBoard(state, stop, p.route, v, take, waited, part.leg > 0, part.k);
+      recBoard(state, stop, p.route, v, take, waited, part.leg > 0, part.k, p);
       if (!part.fr) {
         part.fr = p.route;
         const amt = state.company.fare * part.n;
@@ -762,14 +778,16 @@ export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number): Stop
         recFare(state, stop, p.route, v, amt);
       }
       part.tl = t;
-      part.lb = (v.load + take) / cap;
+      part.lb = (v.sp + take * space) / cap;
       // merge with an identical group already on board
       const same = onboard.find((x) => x.d === part.d && x.leg === part.leg && legKey(x) === legKey(part) && x.fr === part.fr && sameKind(x, part));
       if (same) mergeInto(same, part);
       else onboard.push(part);
-      room -= take;
+      room -= take * space;
       v.load += take;
+      v.sp += take * space;
       ev.board += take;
+      if (part.k !== undefined) ev.extra = (ev.extra ?? 0) + take * (TRAVELLERS[part.k]?.board ?? 0);
     }
     if (!waiting.length) delete state.pax.waiting[stop];
     if (ev.leftBehind) recLeftBehind(state, stop, p.route, ev.leftBehind, lbk);
@@ -789,6 +807,7 @@ export function offloadAll(game: Game, v: Vehicle, stop: Id | null) {
   }
   delete game.state.pax.onboard[v.id];
   v.load = 0;
+  v.sp = 0;
 }
 
 export function waitingAt(state: GameState, stop: Id): number {

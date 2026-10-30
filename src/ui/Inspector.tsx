@@ -13,12 +13,13 @@ import { MODEL, ECON, STOP_RULES } from '../game/content.ts';
 import { STATUS_LABEL } from '../game/vehicles.ts';
 import { routeWindow, routeMoney, licenceInfo } from '../game/progress.ts';
 import { describeTimetable } from '../game/timetable.ts';
-import { waitingAt } from '../game/passengers.ts';
+import { occupied, waitingAt } from '../game/passengers.ts';
 import type { LngLat } from '../game/world/graph.ts';
 import { PLACE_LABEL, placeSignificance, walkDistanceM } from '../game/world/places.ts';
 import { PlaceInspector } from './PlaceInspector.tsx';
 import { RouteCheck, DiagnosticButton } from './RouteCheck.tsx';
 import { lineDiagnostics } from '../game/diagnostics.ts';
+import { LineCharacter } from './LineCharacter.tsx';
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const km = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
@@ -180,7 +181,7 @@ function VehicleInspector({ id }: { id: string }) {
   const line = v.route ? game.state.routes[v.route] : null;
   const st = statusPill(v);
   if (v.status === 'to_depot' && game.state.depots[v.depot]) st.text = `Driving to ${game.state.depots[v.depot].name}`;
-  const load = v.load / m.capacity;
+  const load = occupied(v) / m.capacity;
   const isFollowing = following === v.id;
   const depot = game.state.depots[v.depot];
   const ageDays = Math.floor((game.t - v.bought) / 86400);
@@ -217,7 +218,7 @@ function VehicleInspector({ id }: { id: string }) {
           </div>
           <LoadBar value={load} />
           <div className="row faint" style={{ fontSize: 12, marginTop: 6, minHeight: 0 }}>
-            <span>{m.seats} seats · {m.capacity - m.seats} standing</span>
+            <span>{occupied(v) > v.load + 0.5 ? 'Luggage and bags take extra space' : `${m.seats} seats · ${m.capacity - m.seats} standing`}</span>
             <span>{pct(load)} full</span>
           </div>
         </div>
@@ -353,6 +354,7 @@ function LineInspector({ id }: { id: string }) {
           <div className="row"><span className="k">Result</span><span className={`v num ${money.profit >= 0 ? 'mint' : 'coral'}`}>{game.money(money.profit, { sign: true })}</span></div>
           <div className="faint" style={{ fontSize: 11.5, marginTop: 2 }}>Includes yesterday. Drivers, energy, maintenance and insurance of this line's buses; depots and stops are in Finances.</div>
         </div>
+        <LineCharacter game={game} id={id} />
         <div className="section">
           <div className="row" style={{ minHeight: 0, marginBottom: 6 }}>
             <span className="label">Timetable · {weekend ? 'weekend' : 'weekday'}</span>

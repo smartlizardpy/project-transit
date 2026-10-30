@@ -11,7 +11,7 @@ import { accrueCost, post } from './finance.ts';
 import { notify, recordBoardings, recordDeparture, recordLoad, recordMissed } from './progress.ts';
 import { recDepart, recMaintenance, recRun, recVehicleMinute } from './analytics/record.ts';
 import { departWanted, simEvent } from './automation/events.ts';
-import { offloadAll, serveStop, stopNeeded } from './passengers.ts';
+import { occupied, offloadAll, serveStop, stopNeeded } from './passengers.ts';
 import { edgeBetween, routeWithFallback } from './world/graph.ts';
 import { hhmm } from './time.ts';
 
@@ -433,13 +433,13 @@ function move(game: Game, v: Vehicle, p: Path, stopAt: number, dt: number): bool
   return r.arrived;
 }
 
-/** Dwell time for a stop event, seconds. */
-export function dwellTime(v: Vehicle, board: number, alight: number): number {
+/** Dwell time for a stop event, seconds (`extra`: more seconds to board with luggage or bags). */
+export function dwellTime(v: Vehicle, board: number, alight: number, extra = 0): number {
   const m = MODEL[v.model];
   const boardDoors = m.doors >= 3 ? 2 : 1;
   const alightDoors = Math.max(1, m.doors - 1);
-  const crowd = v.load / m.capacity > 0.8 ? 1.3 : 1;
-  return Math.round(10 + Math.max((board * 2.4) / boardDoors, (alight * 1.5) / alightDoors) * crowd);
+  const crowd = occupied(v) / m.capacity > 0.8 ? 1.3 : 1;
+  return Math.round(10 + Math.max((board * 2.4 + extra) / boardDoors, (alight * 1.5) / alightDoors) * crowd);
 }
 
 function decideDistance(v: Vehicle) {
@@ -565,14 +565,14 @@ function arriveStop(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
   delete v.seg;
   const ev = serveStop(game, v, p, v.stopIdx);
   if (ev.board) recordBoardings(game.state, p.route, ev.board);
-  const dwell = v.stopIdx === p.stops.length - 1 ? 8 + ev.alight * 0.8 : dwellTime(v, ev.board, ev.alight);
+  const dwell = v.stopIdx === p.stops.length - 1 ? 8 + ev.alight * 0.8 : dwellTime(v, ev.board, ev.alight, ev.extra);
   setStatus(v, 'at_stop', now);
   v.until = now + dwell;
   if (v.stopIdx === 0) v.until = Math.max(v.until, trip.dep);
   game.emitStop(p.stops[v.stopIdx], v.id, ev);
   if (game.autoWants.has('arrive')) {
     const stop = p.stops[v.stopIdx];
-    simEvent(game, 'arrive', { vehicle: v.id, fleetNo: v.fleetNo, line: p.route, lineNumber: game.state.routes[p.route]?.number ?? '', stop, stopName: game.state.stops[stop]?.name ?? '', load: v.load, occupancy: Math.round((v.load / MODEL[v.model].capacity) * 100), delay: Math.round(Math.max(0, v.delay) / 6) / 10, boarded: ev.board, alighted: ev.alight, leftBehind: ev.leftBehind, trip: trip.id });
+    simEvent(game, 'arrive', { vehicle: v.id, fleetNo: v.fleetNo, line: p.route, lineNumber: game.state.routes[p.route]?.number ?? '', stop, stopName: game.state.stops[stop]?.name ?? '', load: v.load, occupancy: Math.round((occupied(v) / MODEL[v.model].capacity) * 100), delay: Math.round(Math.max(0, v.delay) / 6) / 10, boarded: ev.board, alighted: ev.alight, leftBehind: ev.leftBehind, trip: trip.id });
   }
 }
 
@@ -595,11 +595,11 @@ function departStop(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
     v.delay = now - schedDep;
     if (v.stopIdx === 0) trip.startDelay = v.delay;
   }
-  recordLoad(game.state, p.route, v.load / MODEL[v.model].capacity);
+  recordLoad(game.state, p.route, occupied(v) / MODEL[v.model].capacity);
   recDepart(game.state, p, v.stopIdx, v, MODEL[v.model].capacity, sch ? v.delay : 0);
   v.seg = { trip: trip.id, i: v.stopIdx, t: now };
   if (game.autoWants.has('depart')) {
-    const occupancy = Math.round((v.load / MODEL[v.model].capacity) * 100);
+    const occupancy = Math.round((occupied(v) / MODEL[v.model].capacity) * 100);
     const delay = sch ? Math.round(Math.max(0, v.delay) / 6) / 10 : 0;
     if (departWanted(game, delay, occupancy)) {
       const stop = p.stops[v.stopIdx];

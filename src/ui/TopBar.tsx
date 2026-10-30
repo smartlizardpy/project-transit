@@ -5,7 +5,7 @@ import { useGameUpdates } from './hooks.ts';
 import { Tip, LoadBar } from './primitives.tsx';
 import { CompanyMark } from './logos.tsx';
 import { hhmm, WEEKDAYS, hourOfDay } from '../game/time.ts';
-import { seasonWeekLabel, yearSeasonLabel } from '../game/calendar.ts';
+import { dayTypeLabel, seasonWeekLabel, yearSeasonLabel } from '../game/calendar.ts';
 import { window as statWindow, SAT_COMPONENTS } from '../game/progress.ts';
 import { dayTotals } from '../game/finance.ts';
 import { session, useSession } from '../app/session.ts';
@@ -174,6 +174,7 @@ export function TimeControls() {
   const day = Math.floor(game.t / 86400) + 1;
   const cal = game.calendarAt(game.t);
   const wd = WEEKDAYS[cal.weekday];
+  const today = dayTypeLabel(game.dayTypeAt(game.t));
   return (
     <div className="card time">
       <div className="speed-seg five">
@@ -194,7 +195,7 @@ export function TimeControls() {
         <div className="date has-tip">
           {wd} · Day {day} · {seasonWeekLabel(cal)}
           {paused && <span className="amber"> · Paused</span>}
-          <Tip label={`${yearSeasonLabel(cal)}, week ${cal.seasonWeek} of ${cal.seasonWeeks}`} hint={`A game year has ${cal.yearWeeks} weeks: autumn, winter, spring and summer. Schools, universities and tourism follow the seasons.`} side="below" />
+          <Tip label={`${yearSeasonLabel(cal)}, week ${cal.seasonWeek} of ${cal.seasonWeeks}`} hint={`${today ? `Today: ${today.toLowerCase()}. ` : ''}A game year has ${cal.yearWeeks} weeks: autumn, winter, spring and summer. Schools, universities, shops and tourism follow a typical pattern for the country.`} side="below" />
         </div>
       </div>
       <DayBar game={game} />

@@ -14,6 +14,9 @@ import { weekdayOf } from '../time.ts';
 import { compile, type EValue } from '../expr.ts';
 import type { DayEstimate } from '../activity/model.ts';
 import type { LngLat } from '../world/graph.ts';
+import type { TransitMode } from '../world/places.ts';
+import { KINDS, KIND_COUNT } from '../activity/params.ts';
+import { MIN_FERRY_M, TRANSIT_SERVICE } from '../activity/transit.ts';
 import { BANDS, type DayRecord, type DaySummary } from './types.ts';
 
 export type GroupBy = 'network' | 'line' | 'stop' | 'vehicle' | 'zone' | 'day' | 'hour' | 'weekday';
@@ -656,7 +659,7 @@ export interface DemandFlow {
   dAt: LngLat | null;
   /** modelled trips per day by all modes, in this direction */
   trips: number;
-  /** the same by mode, in MODES order: walk, bike, car, taxi, your network */
+  /** the same by mode, in MODES order: walk, bike, car, taxi, your network, existing transit */
   modes: number[];
   /** your network links at least part of it at some hour today */
   served: boolean;
@@ -738,7 +741,7 @@ export function estimatedDemand(game: Game, opts: { level: DemandLevel; view?: '
     if (!served) total.unserved += sum;
     const fk = `${ko}>${kd}`;
     let f = out.get(fk);
-    if (!f) out.set(fk, (f = { o: ko, d: kd, oLabel: label(i), dLabel: label(j), oAt: where(i), dAt: where(j), trips: 0, modes: [0, 0, 0, 0, 0], served: false, noStop: 0, noLink: 0 }));
+    if (!f) out.set(fk, (f = { o: ko, d: kd, oLabel: label(i), dLabel: label(j), oAt: where(i), dAt: where(j), trips: 0, modes: [0, 0, 0, 0, 0, 0], served: false, noStop: 0, noLink: 0 }));
     f.trips += sum;
     for (let x = 0; x < m.length; x++) f.modes[x] += Math.max(0, m[x]);
     if (served) f.served = true;
@@ -752,7 +755,7 @@ export function estimatedDemand(game: Game, opts: { level: DemandLevel; view?: '
 export interface PlaceTravel {
   /** modelled trips a day to and from the place, from and to your areas */
   trips: number;
-  /** by mode, in MODES order: walk, bike, car, taxi, your network */
+  /** by mode, in MODES order: walk, bike, car, taxi, your network, existing transit */
   modes: number[];
   /** your network links it at some hour today */
   served: boolean;
@@ -776,7 +779,7 @@ export function placeTravel(game: Game, placeId: string): PlaceTravel | null {
       for (const z of i === j ? [i] : [i, j]) {
         if (zs.list[z].kind !== 'place' && zs.list[z].kind !== 'beyond') continue;
         let t = sums.get(z);
-        if (!t) sums.set(z, (t = { trips: 0, modes: [0, 0, 0, 0, 0], served: false }));
+        if (!t) sums.set(z, (t = { trips: 0, modes: [0, 0, 0, 0, 0, 0], served: false }));
         for (let x = 0; x < m.length; x++) {
           const v = Math.max(0, m[x]);
           t.modes[x] += v;
@@ -788,5 +791,83 @@ export function placeTravel(game: Game, placeId: string): PlaceTravel | null {
     placeSums.set(est, sums);
   }
   const z = zs.list.findIndex((x) => x.id === `p:${placeId}`);
-  return z >= 0 ? sums.get(z) ?? { trips: 0, modes: [0, 0, 0, 0, 0], served: false } : null;
+  return z >= 0 ? sums.get(z) ?? { trips: 0, modes: [0, 0, 0, 0, 0, 0], served: false } : null;
+}
+
+// ───────────────────────────────────────────── place timing (plan 13: "When it's busy")
+
+export interface PlaceDay {
+  /** modelled trips to and from the place by the hour they set off, today, all modes */
+  hours: number[];
+  total: number;
+}
+
+const placeDays = new WeakMap<Game, { key: string; out: Map<string, PlaceDay | null> }>();
+
+/** When a place with a zone of its own is busy today (the model's tours, its profile and the calendar). */
+export function placeDay(game: Game, placeId: string): PlaceDay | null {
+  const am = game.demand.activity;
+  const zs = am.ensureZones(game);
+  const m = am.tours;
+  if (!m) return null;
+  const d = Math.floor(game.t / DAY);
+  const key = `${zs.key}|${d}`;
+  let c = placeDays.get(game);
+  if (!c || c.key !== key) placeDays.set(game, (c = { key, out: new Map() }));
+  if (c.out.has(placeId)) return c.out.get(placeId)!;
+  const z = zs.list.findIndex((x) => x.place === placeId);
+  let res: PlaceDay | null = null;
+  if (z >= 0) {
+    const timing = am.timing(game, d * DAY + 12 * 3600);
+    const K = KIND_COUNT;
+    const hours = new Array<number>(24).fill(0);
+    for (let e = 0; e < m.tours.length; e++) {
+      if (m.o[e] !== z && m.d[e] !== z) continue;
+      const k = m.k[e];
+      const pk = zs.profile[KINDS[k].toHome ? m.o[e] : m.d[e]] * K + k;
+      const daily = m.tours[e] * timing.factor[pk];
+      for (let h = 0; h < 24; h++) hours[h] += daily * timing.share[pk * 24 + h];
+    }
+    const total = hours.reduce((a, b) => a + b, 0);
+    res = total > 0 ? { hours, total } : null;
+  }
+  c.out.set(placeId, res);
+  return res;
+}
+
+export interface StationLink {
+  name: string;
+  place: string;
+  mode: TransitMode;
+  /** metres along the track, and assumed minutes on board */
+  m: number;
+  min: number;
+}
+
+/** A station's links on the city's existing transit network, and the modes switched off there (with why). */
+export function stationLinks(game: Game, placeId: string): { links: StationLink[]; off: { mode: TransitMode; reason: string }[] } | null {
+  const net = game.region.transit;
+  const p = game.geo.places.byId.get(placeId);
+  if (!net || !p?.modes) return null;
+  const s = net.stations.findIndex((x) => x.place === placeId);
+  const links: StationLink[] = [];
+  if (s >= 0)
+    for (const l of net.links) {
+      if (l.a !== s && l.b !== s) continue;
+      if (!net.modes[l.mode]?.ok) continue;
+      if (l.mode === 'ferry' && l.m < MIN_FERRY_M) continue; // piers side by side
+      const o = net.stations[l.a === s ? l.b : l.a];
+      const kmh = TRANSIT_SERVICE[l.mode]?.kmh ?? 20;
+      links.push({ name: o.name, place: o.place, mode: l.mode, m: l.m, min: (l.m / 1000 / kmh) * 60 });
+    }
+  links.sort((a, b) => a.mode.localeCompare(b.mode) || a.m - b.m || a.name.localeCompare(b.name));
+  // two stations with the same name (a pier mapped twice): keep the nearer
+  const seen = new Set<string>();
+  for (let i = 0; i < links.length; i++) {
+    const k = `${links[i].mode}|${links[i].name}`;
+    if (seen.has(k)) links.splice(i--, 1);
+    else seen.add(k);
+  }
+  const off = p.modes.filter((m) => m !== 'bus' && net.modes[m] && !net.modes[m]!.ok).map((m) => ({ mode: m, reason: net.modes[m]!.reason ?? 'Its tracks are not complete on the map.' }));
+  return { links, off };
 }

@@ -46,8 +46,13 @@ function vehDay(state: GameState, v: Vehicle): VehicleDay {
   return d;
 }
 
+/** Key of a line pattern in `RouteDay.p` and `RouteDay.bp`. */
+export function patKey(p: Pattern): string {
+  return `${p.index}|${p.stops.join(',')}`;
+}
+
 function patDay(rd: RouteDay, p: Pattern): PatDay {
-  const key = `${p.index}|${p.stops.join(',')}`;
+  const key = patKey(p);
   let pd = rd.p[key];
   if (!pd) {
     const n = Math.max(0, p.stops.length - 1);
@@ -59,7 +64,7 @@ function patDay(rd: RouteDay, p: Pattern): PatDay {
 
 // ───────────────────────────────────────────── passengers
 
-export function recBoard(state: GameState, stop: Id, route: Id, veh: Vehicle, n: number, waitedSec: number, transfer: boolean, type?: number) {
+export function recBoard(state: GameState, stop: Id, route: Id, veh: Vehicle, n: number, waitedSec: number, transfer: boolean, type?: number, pat?: Pattern) {
   const h = recHour(state.clock.t);
   const sd = stopDay(state, stop);
   sd.b[h] += n;
@@ -74,6 +79,10 @@ export function recBoard(state: GameState, stop: Id, route: Id, veh: Vehicle, n:
   sd.bl[route] = (sd.bl[route] ?? 0) + n;
   const rd = routeDay(state, route);
   rd.b[h] += n;
+  if (pat) {
+    const bp = (rd.bp ??= {});
+    (bp[patKey(pat)] ??= hours0())[h] += n;
+  }
   rd.ws += wm * n;
   rd.wn += n;
   vehDay(state, veh).b += n;
@@ -181,7 +190,7 @@ export function recDepart(state: GameState, p: Pattern, idx: number, v: Vehicle,
   // every stop departure counts, the first one too: a late start is a delay passengers feel
   const late = Math.max(0, delaySec);
   rd.dp[h]++;
-  rd.lf[h] += capacity > 0 ? v.load / capacity : 0;
+  rd.lf[h] += capacity > 0 ? (v.sp ?? v.load) / capacity : 0;
   rd.dl[h] += late;
   vd.dl += late;
   vd.dn++;
@@ -191,7 +200,7 @@ export function recDepart(state: GameState, p: Pattern, idx: number, v: Vehicle,
   rd.ck[h] += capacity * len;
   vd.pkm += v.load * len;
   const pd = patDay(rd, p);
-  pd.ls[idx] += capacity > 0 ? v.load / capacity : 0;
+  pd.ls[idx] += capacity > 0 ? (v.sp ?? v.load) / capacity : 0;
   pd.ln[idx]++;
 }
 

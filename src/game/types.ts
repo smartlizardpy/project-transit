@@ -134,6 +134,8 @@ export interface Vehicle {
   until: number;
   /** passengers on board (mirrors the passenger groups) */
   load: number;
+  /** space taken on board, in commuter places: luggage and bags take more (missing: equal to load) */
+  sp?: number;
   /** seconds behind schedule at the last stop (negative = early) */
   delay: number;
   /** player asked for this bus to leave service */

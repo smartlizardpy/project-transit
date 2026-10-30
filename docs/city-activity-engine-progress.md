@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-30 (phase 2).
+Last updated: 2026-10-30 (phase 3).
 
 ## Phase 0. Foundations ✅
 
@@ -95,7 +95,7 @@ Built and tested. Screenshots in `docs/screenshots/city-activity/` come from a c
 The reputation cap is still in place (removed in phase 7).
 
 **Changes from the plan, and why:**
-- **The crowded scenario's line changed** (allowed by section 11, "a documented change to its setup"). It was a 14-stop zig-zag chain of nearby stops from Taksim. Under the new model walking or driving beats a line that wanders, so its morning peak reached only 71%. It is now a straight 10-stop line from Taksim to Mecidiyeköy along the main road, with the same two Mini 8 buses, headway, reputation and fare (`crowdedLine` in `test/helpers.ts`). Automation scenario 3 and the Simulation Lab test use the same line. Two tests that wait for "a bus with passengers on board" now wait up to 3 game hours instead of 15–30 minutes: they test commands, not demand.
+- **The crowded scenario's line changed** (allowed by section 11, "a documented change to its setup"). It was a 14-stop zig-zag chain of nearby stops from Taksim. Under the new model walking or driving beats a line that wanders, so its morning peak reached only 71%. It is now a straight 10-stop line from Taksim to Mecidiyeköy along the main road, with the same two Mini 8 buses, headway, reputation and fare (`crowdedLine` in `test/helpers.ts`). Automation scenario 3 and the Simulation Lab test use the same line. **Approved by the owner on 2026-10-30.** Two tests that wait for "a bus with passengers on board" now wait up to 3 game hours instead of 15–30 minutes: they test commands, not demand.
 - **The tour kind is split statelessly** (a deterministic sample from a hash of the stop pair and the minute) instead of separate accumulator keys per type. Same totals, no extra state in the save.
 - **Space units and boarding time by type** move to phase 3 with the place profiles.
 - **Stay-home is a bounded factor** on optional tours (at most +15% when your network is excellent), not a separate alternative.
@@ -113,7 +113,63 @@ The reputation cap is still in place (removed in phase 7).
 - The evening reversal is weaker than the morning peak (1.8× against 2.7× on the Haseki–Beyazıt line), because trips home spread over more hours.
 - The development switch `setDemandEngine('legacy')` stays until phase 7 for comparisons.
 
-## Phase 3. Places come alive ⬜
+## Phase 3. Places come alive 🟡
+
+Built and tested. 🟡 until the owner has played it: a line now carries different people on different days, and the city's metro, tram and ferries compete with your buses.
+
+| Item | Status | Evidence |
+|---|---|---|
+| Calendar rules as data per country (`calendar.ts`): the default 12-week layout (school terms with a holiday week in week 5, a short break early in week 7 and the summer off; university teaching with exams in weeks 6 and 9 and a summer break; a festive week), public holidays at fixed positions (TR 3, ES 3, JP 4, GB, DE and others 2 a year), Sunday and holiday trading. All labelled "typical pattern"; no real dates | ✅ | `places-alive.test.ts` "the calendar" (3 tests, including a 24-week year) |
+| Tour volumes by weekday and calendar rule instead of one weekend factor: nights out on Fridays and Saturdays, errands and business on working days, public holidays like a Sunday, school days only for pupils, teaching weeks for students (exams 0.6 and more spread, breaks 0.15), shops by the Sunday rule with a festive peak | ✅ | `places-alive.test.ts` "place profiles" |
+| Activity profiles as data (`activity/profiles.ts`): a tour's timing and volume come from the place at its activity end. Hospitals (shifts at 07, 15, 23 every day; outpatients 08–16 on weekdays; visitors 14–20 every day), airports by size (traveller waves from about 04:30; staff shifts at 05, 13, 21), universities, malls (every day, evenings), bazaars (shut on Sundays), street markets (a market day chosen from the place id and labelled "assumed"), stadiums (quiet on ordinary days), stations. Industrial and city shifts change at 06, 14, 22, mostly on weekdays | ✅ | `places-alive.test.ts`: shift hours by place, airport waves (a hub has at least 5, a small airport at most 3), market days, the Sunday rule, festive shopping |
+| Schools: arrival 07:30–08:15, home time 15:00–16:00, school days only | ✅ | `places-alive.test.ts` simulates a school day and a holiday on the reference line: 88% of pupil trips fall in 07:00–08:30 and 15:00–16:30 (test: at least 60%); the holiday has under 5% of the school day's pupils |
+| Residential and commuter campuses: students who live on a campus (residents inside its outline) walk to class, so fewer come from elsewhere | ✅ | `places-alive.test.ts`: a campus with housing draws under 70% of the students of the same campus without |
+| Seasons for outdoor places: beaches (summer ×2.2, winter ×0.2), parks and sights | ✅ | `params.ts` `OUTDOOR_SEASON`; zones are rebuilt each season |
+| Station gateways by kind: main stations send travellers with luggage through the day (more visitors), regional rail, metro and ferries mostly commuters, coach stations mostly visitors | ✅ | `params.ts` `GATEWAY_MIX` |
+| Space on board and boarding time by traveller type: an air traveller with luggage takes 1.6 places and 2 extra seconds to board, visitors 1.2 and 1 s, shoppers and patients 1.1 and 0.5 s. Bus fullness, crowding, load factors and automation's occupancy count space, not heads | ✅ | `places-alive.test.ts`: a City 12 takes 90 commuters but 56 air travellers, and their stop takes longer; the vehicle card says when luggage takes the space |
+| The city's existing transit from the map's tracks (`world/transitBuilder.ts`): stations snapped to rail, metro, tram, funicular and ferry lines, linked to their neighbours along the track; yards and sidings left out; a mode with a broken graph is switched off with a reason | ✅ | `transit.test.ts` (18 tests): M2 Taksim–Şişhane–Haliç, F1 Kabataş–Taksim, T1 Karaköy–Eminönü–Sirkeci–Sultanahmet, Marmaray Yenikapı–Üsküdar, ferry piers, caps, determinism, a mode switched off. İstanbul: rail 9 stations and 9 links, metro 22 and 21, tram 38 and 42, funicular 2 and 1, ferry 23 and 40; cable cars off (no track on the map). Built in about 2 ms |
+| Existing transit as a choice (`activity/transit.ts`): walk to a station (up to 800 m), wait by mode, ride at the assumed speed, changes (also on foot between stations within 320 m), walk at the end. Assumed service: metro 32 km/h every 4 min, tram 18 and 6, rail 45 and 8, ferry 20 and 12, funicular 15 and 5; 06:00 to midnight, waits ×1.5 off-peak. A tour whose way home falls after midnight counts as stranded, as for your buses | ✅ | `places-alive.test.ts`: transit carries over 5% of the city's trips (about 10% on the reference company), and without it those trips go back to taxis and cars |
+| Line inspector, "how the line is used": who rides (traveller types), through the day by direction with its peaks, where they go and where they come from, fares by time of day, load by direction, punctuality. Shown before Network Control unlocks. Boardings by hour and direction are recorded from now on (`RouteDay.bp`) | ✅ | `line-character.test.ts` (3 tests: nothing before a full day; direction sums equal the line's boardings; older days without directions still show); screenshots `line-character.png`, `line-character-scrolled.png` |
+| Place card, "When it's busy": modelled trips to and from the place by hour today, with the current hour marked, the place's typical pattern and what today means for it (school day, exam week, market day, Sunday closing). Stations list their links on the city's network with the assumed service, and any mode switched off with why | ✅ | screenshots `place-card-busy-*.png` |
+| Estimated demand and the place card show "Metro, tram, ferry" as a mode | ✅ | screenshot `nc-estimated-transit.png` |
+| Calibration within ±10% | ✅ | table below |
+
+Screenshots in `docs/screenshots/city-activity/` come from a company simulated for 31 days with this phase's code (`scripts/capture-network.mjs sim`, then `scripts/capture-places.mjs`). Day 31 falls in winter week 2, the school holiday week, which the cards show.
+
+**Calibration** (`pnpm calibrate`, baseline = the earlier model):
+
+| Figure | Now | Baseline | Change | Limit |
+|---|---|---|---|---|
+| Reference riders, weekday | 3,459 | 3,611 | −4.2% | ±10% |
+| Reference riders, weekend | 2,858 | 3,076 | −7.1% | ±15% |
+| Reference boardings a day | 3,259 | 3,432 | −5.1% | ±10% |
+| Reference result a day | 3,717 | 4,032 | −7.8% | ±20% |
+| Reference satisfaction | 0.74 | 0.77 | | above 0.6 |
+| Thin line result, day 2 | −2,112 | −2,190 | | below 0 |
+| Crowded line peak load | 0.97 | 0.97 | | above 0.8 |
+
+Before retuning, the city's transit and the new weekday patterns took the reference line to −7.3% on weekdays and −11.0% at weekends. Your network's constant moved from +1 to +0.5 minutes per journey.
+
+**Changes from the plan, and why:**
+- **Station lines are not grouped into named lines.** The map tiles carry no line names or route relations for rail, so a station's "lines" are its links to the next stations along each mode's track (shown on the place card). The choice does not need line names; changes are counted between modes and on foot between stations.
+- **Changes on one mode are not counted** (two metro lines crossing count as one ride), for the same reason. On foot between stations within 320 m is a change.
+- **The way home by transit** uses the same journey as the way out; it is a stranded trip when the return falls after midnight.
+- **Length of stay stays per tour kind**, not per place (a hospital's 12-hour shifts use the shift kind's mix of 8- and 12-hour stays).
+- **Holidays and terms are weeks of a 12-week template** that scales to other year lengths. A public holiday falls in the first real week of its template week.
+- **A ferry "crossing" under 300 m** between piers side by side (one pier mapped twice) counts as a walk, and the place card leaves it out.
+
+**Effect on play (measured):**
+- On the reference company, the city's metro, tram and ferries carry about 10% of all modelled trips; taxis fall from about 24% to 13% of the estimate.
+- The reference line carries about 4% fewer riders on weekdays and 7% fewer at weekends than the earlier model. Friday and Saturday nights are busier and Sundays quieter.
+- In the school holiday week, school trips almost stop (pupils were 3% of a city-centre line's riders). University lines lose about 85% of students in the summer break.
+- Buses to the airport fill up sooner: a City 12 takes 56 air travellers with luggage instead of 90 commuters.
+
+**Known gaps:**
+- The city's own buses and minibuses (İETT, dolmuş) are not modelled. Long trips far from a station fall to cars, taxis and, for students, bikes (İstanbul Üniversitesi shows 23% by bike).
+- The map's Sirkeci rail station sits on the old surface line, so Marmaray does not link Sirkeci and Yenikapı. One rail link (Ayrılık Çeşmesi to Cerrahpaşa, 11.5 km) is probably a track-joining artefact. Cable cars have no track on the map and are switched off; only one funicular (F1) is linked.
+- Weather, events and service plans come in phases 4 and 5. Stadiums are quiet until match days exist.
+- Your passengers cannot change between your buses and the city's transit yet (phase 7).
+
 
 ## Phase 4. Weather ⬜
 

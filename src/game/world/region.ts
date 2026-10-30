@@ -2,7 +2,7 @@
 // Built at runtime from OpenMapTiles vector tiles (see regionBuilder.ts).
 
 import type { LngLat, RoadGraph, SpatialIndex } from './graph.ts';
-import type { CityPlace } from './places.ts';
+import type { CityPlace, TransitMode } from './places.ts';
 
 export interface RegionSpec {
   /** stable id, e.g. "istanbul-galata" */
@@ -121,6 +121,16 @@ export interface RegionCoverage {
   missingTiles: number;
 }
 
+/** The city's existing rail, metro, tram, funicular and ferry network, as links between stations (transitBuilder.ts). */
+export interface TransitNet {
+  /** stations: Place Registry places with a rail, metro, tram, funicular, cable or ferry mode (not bus stations), local metres */
+  stations: { place: string; name: string; x: number; y: number; modes: TransitMode[] }[];
+  /** direct links between consecutive stations on one mode's track or ferry route, each listed once (a < b); metres along the track */
+  links: { a: number; b: number; m: number; mode: TransitMode }[];
+  /** per mode: whether its graph is usable, with counts and, when switched off, a plain-English reason (shown on the place card) */
+  modes: Partial<Record<TransitMode, { ok: boolean; stations: number; links: number; reason?: string }>>;
+}
+
 export interface RegionData {
   spec: RegionSpec;
   graph: RoadGraph;
@@ -130,6 +140,8 @@ export interface RegionData {
   places: Place[];
   /** the Place Registry: airports, stations and destinations (placeBuilder.ts) */
   cityPlaces: CityPlace[];
+  /** the existing transit network between stations (missing in older data: treat as no background network) */
+  transit?: TransitNet;
   demand: DemandGrid;
   zones: Zone[];
   osmStops: OsmStop[];

@@ -104,6 +104,8 @@ export interface RouteDay {
   x: number;
   /** segment detail by pattern key */
   p: Record<string, PatDay>;
+  /** boardings by hour per pattern key (same keys as `p`; missing on older days) */
+  bp?: Record<string, number[]>;
   /** boardings by traveller type and time band: [type × BANDS.length + band] (missing on older days) */
   k?: number[];
 }

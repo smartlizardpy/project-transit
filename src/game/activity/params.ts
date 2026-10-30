@@ -74,28 +74,41 @@ export interface TourKind {
   optional?: boolean;
   /** the destination side is people's homes (arrivals from an airport) */
   toHome?: boolean;
-  /** departure times by day type, and time spent at the activity (hours) */
-  start: { weekday: Curve; weekend: Curve };
+  /** departure times on working days, at weekends and on public holidays, and in exam weeks; time spent at the activity (hours) */
+  start: { weekday: Curve; weekend: Curve; exams?: Curve };
   stay: Curve;
-  /** weekend volume relative to weekdays */
-  weekend: number;
+  /** volume by weekday (Monday first) relative to an ordinary working day */
+  days: number[];
+  /** the calendar rule that gates it (plan 9.1); places can override all of this (profiles.ts) */
+  gate?: Gate;
 }
+
+/**
+ * Calendar rules: 'working' (public holidays are like a Sunday), 'school' (term days only),
+ * 'teaching' (university teaching weeks; exams lower and more spread; breaks near zero),
+ * 'shops' (Sunday and holiday trading rules, festive shopping).
+ */
+export type Gate = 'working' | 'school' | 'teaching' | 'shops';
 
 const T = TYPE;
 export const KINDS: TourKind[] = [
-  { id: 'work', label: 'Work', type: T.commuter, attr: 'work', decay: 4200, doubly: true, start: { weekday: [[1, 7.9, 1], [0.12, 13, 3]], weekend: [[1, 9.5, 1.8]] }, stay: [[1, 8.9, 0.9]], weekend: 0.32 },
-  { id: 'shift', label: 'Shift work', type: T.shift, attr: 'shift', decay: 4500, doubly: true, start: { weekday: [[0.4, 6, 0.5], [0.35, 14, 0.5], [0.25, 21.8, 0.5]], weekend: [[0.4, 6, 0.5], [0.35, 14, 0.5], [0.25, 21.8, 0.5]] }, stay: [[0.7, 8.3, 0.3], [0.3, 12, 0.3]], weekend: 0.8 },
-  { id: 'school', label: 'School', type: T.pupil, attr: 'school', decay: 1300, doubly: true, start: { weekday: [[1, 7.7, 0.45]], weekend: [[1, 10, 2]] }, stay: [[1, 6.8, 0.6]], weekend: 0.03 },
-  { id: 'university', label: 'University', type: T.student, attr: 'university', decay: 5000, doubly: true, start: { weekday: [[1, 9.3, 1.5], [0.3, 13.5, 1.5]], weekend: [[1, 11, 2]] }, stay: [[1, 5.5, 2]], weekend: 0.1 },
-  { id: 'shopping', label: 'Shopping', type: T.shopper, attr: 'shopping', decay: 1800, optional: true, start: { weekday: [[1, 11.5, 2.2], [0.7, 17.5, 1.8]], weekend: [[1, 12.5, 2.6]] }, stay: [[1, 1.5, 0.7]], weekend: 1.35 },
-  { id: 'errand', label: 'Errands', type: T.shopper, attr: 'errand', decay: 2000, optional: true, start: { weekday: [[1, 10.5, 2.4], [0.4, 15, 2]], weekend: [[1, 12, 3]] }, stay: [[1, 1, 0.5]], weekend: 0.6 },
-  { id: 'health', label: 'Health', type: T.patient, attr: 'health', decay: 3500, start: { weekday: [[1, 10, 2], [0.4, 15, 2]], weekend: [[1, 12, 3]] }, stay: [[1, 1.7, 0.6]], weekend: 0.5 },
-  { id: 'leisure', label: 'Leisure', type: T.leisure, attr: 'leisure', decay: 2600, optional: true, start: { weekday: [[0.4, 12, 2.5], [1, 19.3, 1.8]], weekend: [[1, 13, 3], [0.8, 19.5, 2]] }, stay: [[1, 2.6, 1.2]], weekend: 1.4 },
-  { id: 'night', label: 'Nightlife', type: T.leisure, attr: 'night', decay: 3500, optional: true, start: { weekday: [[1, 21.6, 1.2]], weekend: [[1, 22, 1.3]] }, stay: [[1, 4, 1]], weekend: 2 },
-  { id: 'visit', label: 'Sightseeing', type: T.visitor, attr: 'visit', decay: 3500, optional: true, start: { weekday: [[1, 10.5, 2], [0.4, 15, 2]], weekend: [[1, 11, 2.2]] }, stay: [[1, 3.5, 1.8]], weekend: 1.2 },
-  { id: 'business', label: 'Business and lunch', type: T.commuter, attr: 'business', decay: 2200, start: { weekday: [[1, 12.5, 1.4], [0.5, 15.5, 1.5]], weekend: [[1, 13, 2]] }, stay: [[1, 1, 0.4]], weekend: 0.2 },
-  { id: 'fly', label: 'To the airport', type: T.air, attr: 'airport', decay: 60000, oneWay: true, start: { weekday: [[0.8, 6, 1.2], [1, 11.5, 2.5], [1, 17.5, 2.5]], weekend: [[1, 8, 2], [1, 14, 3], [0.8, 19, 2.5]] }, stay: [[1, 0, 1]], weekend: 1 },
-  { id: 'landed', label: 'From the airport', type: T.air, attr: 'airport', decay: 60000, oneWay: true, toHome: true, start: { weekday: [[0.6, 8.5, 1.5], [1, 14, 2.5], [1, 20.5, 2.5]], weekend: [[1, 10, 2.5], [1, 15, 3], [0.8, 21, 2]] }, stay: [[1, 0, 1]], weekend: 1 },
+  // shift changes at 06, 14 and 22 (industrial and city jobs; hospitals and airports differ, profiles.ts)
+  { id: 'work', label: 'Work', type: T.commuter, attr: 'work', decay: 4200, doubly: true, gate: 'working', start: { weekday: [[1, 7.9, 1], [0.12, 13, 3]], weekend: [[1, 9.5, 1.8]] }, stay: [[1, 8.9, 0.9]], days: [1, 1, 1, 1, 1, 0.4, 0.24] },
+  { id: 'shift', label: 'Shift work', type: T.shift, attr: 'shift', decay: 4500, doubly: true, gate: 'working', start: { weekday: [[0.4, 5.4, 0.4], [0.35, 13.4, 0.4], [0.25, 21.4, 0.4]], weekend: [[0.4, 5.4, 0.4], [0.35, 13.4, 0.4], [0.25, 21.4, 0.4]] }, stay: [[0.7, 8.3, 0.3], [0.3, 12, 0.3]], days: [1, 1, 1, 1, 1, 0.6, 0.45] },
+  // arrival 07:30–08:15, home time 15:00–16:00
+  { id: 'school', label: 'School', type: T.pupil, attr: 'school', decay: 1300, doubly: true, gate: 'school', start: { weekday: [[1, 7.45, 0.28]], weekend: [[1, 10, 2]] }, stay: [[1, 7.65, 0.3]], days: [1, 1, 1, 1, 1, 0, 0] },
+  // teaching blocks 09–17 with spread arrivals; exam weeks lower and more spread
+  { id: 'university', label: 'University', type: T.student, attr: 'university', decay: 5000, doubly: true, gate: 'teaching', start: { weekday: [[1, 8.8, 0.9], [0.45, 11.6, 1.3], [0.2, 14.3, 1.2]], weekend: [[1, 11, 2]], exams: [[1, 9.5, 1.8], [0.9, 13, 2.2]] }, stay: [[1, 5.5, 2]], days: [1, 1, 1, 1, 0.9, 0.12, 0.08] },
+  { id: 'shopping', label: 'Shopping', type: T.shopper, attr: 'shopping', decay: 1800, optional: true, gate: 'shops', start: { weekday: [[1, 11.5, 2.2], [0.7, 17.5, 1.8]], weekend: [[1, 12.5, 2.6]] }, stay: [[1, 1.5, 0.7]], days: [0.95, 0.95, 0.95, 1, 1.1, 1.45, 1.25] },
+  { id: 'errand', label: 'Errands', type: T.shopper, attr: 'errand', decay: 2000, optional: true, gate: 'working', start: { weekday: [[1, 10.5, 2.4], [0.4, 15, 2]], weekend: [[1, 12, 3]] }, stay: [[1, 1, 0.5]], days: [1, 1, 1, 1, 1, 0.85, 0.35] },
+  { id: 'health', label: 'Health', type: T.patient, attr: 'health', decay: 3500, gate: 'working', start: { weekday: [[1, 10, 2], [0.4, 15, 2]], weekend: [[1, 12, 3]] }, stay: [[1, 1.7, 0.6]], days: [1, 1, 1, 1, 1, 0.6, 0.4] },
+  { id: 'leisure', label: 'Leisure', type: T.leisure, attr: 'leisure', decay: 2600, optional: true, start: { weekday: [[0.4, 12, 2.5], [1, 19.3, 1.8]], weekend: [[1, 13, 3], [0.8, 19.5, 2]] }, stay: [[1, 2.6, 1.2]], days: [0.9, 0.9, 0.95, 1.05, 1.2, 1.5, 1.3] },
+  // Friday and Saturday nights out
+  { id: 'night', label: 'Nightlife', type: T.leisure, attr: 'night', decay: 3500, optional: true, start: { weekday: [[1, 21.6, 1.2]], weekend: [[1, 22, 1.3]] }, stay: [[1, 4, 1]], days: [0.75, 0.75, 0.85, 1.1, 2.3, 2.5, 0.9] },
+  { id: 'visit', label: 'Sightseeing', type: T.visitor, attr: 'visit', decay: 3500, optional: true, start: { weekday: [[1, 10.5, 2], [0.4, 15, 2]], weekend: [[1, 11, 2.2]] }, stay: [[1, 3.5, 1.8]], days: [1, 1, 1, 1, 1, 1.2, 1.2] },
+  { id: 'business', label: 'Business and lunch', type: T.commuter, attr: 'business', decay: 2200, gate: 'working', start: { weekday: [[1, 12.5, 1.4], [0.5, 15.5, 1.5]], weekend: [[1, 13, 2]] }, stay: [[1, 1, 0.4]], days: [1, 1, 1, 1, 1, 0.25, 0.15] },
+  { id: 'fly', label: 'To the airport', type: T.air, attr: 'airport', decay: 60000, oneWay: true, start: { weekday: [[0.8, 6, 1.2], [1, 11.5, 2.5], [1, 17.5, 2.5]], weekend: [[1, 8, 2], [1, 14, 3], [0.8, 19, 2.5]] }, stay: [[1, 0, 1]], days: [1, 0.95, 0.95, 1, 1.1, 0.95, 1.05] },
+  { id: 'landed', label: 'From the airport', type: T.air, attr: 'airport', decay: 60000, oneWay: true, toHome: true, start: { weekday: [[0.6, 8.5, 1.5], [1, 14, 2.5], [1, 20.5, 2.5]], weekend: [[1, 10, 2.5], [1, 15, 3], [0.8, 21, 2]] }, stay: [[1, 0, 1]], days: [1, 0.95, 0.95, 1, 1.1, 0.95, 1.05] },
 ];
 export const KIND = Object.fromEntries(KINDS.map((k, i) => [k.id, i])) as Record<string, number>;
 export const KIND_COUNT = KINDS.length;
@@ -123,8 +136,23 @@ export const OCCUPANCY: Record<Season, number> = { autumn: 0.72, winter: 0.55, s
  * the station's daily users. Their tours start and end at the station.
  */
 export const GATEWAY_SHARE: Partial<Record<string, number>> = { rail_station: 0.05, ferry_pier: 0.06, metro_station: 0.025, bus_station: 0.08 };
-/** What those arriving travellers do. */
-export const GATEWAY_MIX: Partial<Record<string, number>> = { work: 0.45, business: 0.1, shopping: 0.15, leisure: 0.15, visit: 0.15 };
+/**
+ * What those arriving travellers do (plan 6.7): commuters at the peaks on regional rail, metro
+ * and ferries; travellers with luggage through the day at main and intercity stations.
+ */
+export const GATEWAY_MIX: Record<'main' | 'regional' | 'metro' | 'ferry' | 'coach', Partial<Record<string, number>>> = {
+  main: { work: 0.3, business: 0.15, shopping: 0.1, leisure: 0.15, visit: 0.3 },
+  regional: { work: 0.6, business: 0.1, shopping: 0.1, leisure: 0.1, visit: 0.1 },
+  metro: { work: 0.5, business: 0.1, shopping: 0.15, leisure: 0.15, visit: 0.1 },
+  ferry: { work: 0.45, business: 0.1, shopping: 0.1, leisure: 0.15, visit: 0.2 },
+  coach: { work: 0.25, business: 0.15, shopping: 0.1, leisure: 0.15, visit: 0.35 },
+};
+/** Visitors to sights, parks and beaches by season, relative to spring (heat raises beaches). */
+export const OUTDOOR_SEASON: Partial<Record<string, Record<Season, number>>> = {
+  beach: { autumn: 0.6, winter: 0.2, spring: 1, summer: 2.2 },
+  park: { autumn: 0.9, winter: 0.6, spring: 1, summer: 1.2 },
+  attraction: { autumn: 1, winter: 0.8, spring: 1, summer: 1.25 },
+};
 
 /** Optional tours not made when nothing good is on offer (stay home); at most +15% (1 / (1 − 0.13)). */
 export const STAY_HOME = 0.13;
@@ -153,7 +181,9 @@ export const CHOICE = {
   /** generalised minutes of being stranded without a way home (a taxi found late) */
   stranded: 15,
   /** your network: a constant for awareness and trust, tuned with the calibration scenarios */
-  networkConst: 1,
+  networkConst: 0.5,
+  /** existing transit (metro, tram, rail, ferry): a constant for its fare and comfort, minutes (assumed) */
+  transitConst: 6,
 };
 
 /** Bus run times are scheduled with this crowding multiplier on in-vehicle time (1.0 seated, ≈1.6 at crush). */

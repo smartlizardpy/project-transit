@@ -12,7 +12,10 @@ import { LineBadge } from './primitives.tsx';
 import { focusPoint } from './camera.ts';
 import { STOP_RULES } from '../game/content.ts';
 import { describeScale, MODE_LABEL, PLACE_LABEL, placeCredits, TIER_LABEL, walkDistanceM, type PlaceCategory } from '../game/world/places.ts';
-import { placeTravel } from '../game/analytics/query.ts';
+import { placeDay, placeTravel, stationLinks } from '../game/analytics/query.ts';
+import { marketDayOf, placeNote, PROFILE, profileOf } from '../game/activity/profiles.ts';
+import { TRANSIT_SERVICE } from '../game/activity/transit.ts';
+import type { CityPlace } from '../game/world/places.ts';
 import { approx, share } from './network/common.tsx';
 import type { Game } from '../game/engine.ts';
 
@@ -27,6 +30,7 @@ const km = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.r
 
 const TRAVEL_MODES = [
   { i: 4, label: 'Your network' },
+  { i: 5, label: 'Metro, tram, ferry' },
   { i: 0, label: 'Walk' },
   { i: 1, label: 'Bike' },
   { i: 2, label: 'Car' },
@@ -63,9 +67,94 @@ function HowPeopleTravel({ game, id, beyond }: { game: Game; id: string; beyond:
             ))}
           </div>
           <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>
-            Modelled for today, not journeys carried. Metro, tram and ferry lines are not modelled yet, so their trips count as walking, car or taxi.
+            Modelled for today, not journeys carried. Metro, tram and ferry use the city’s mapped network with assumed speeds and waits.
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+
+/** What today's calendar means for this place, or '' on an ordinary day. */
+function todayAt(game: Game, p: CityPlace): string {
+  const d = game.dayTypeAt();
+  switch (p.category) {
+    case 'school':
+      return d.school ? 'Today is a school day.' : d.weekend ? 'No school at the weekend.' : d.holiday ? 'Public holiday: no school today.' : 'School holidays: no school today.';
+    case 'university':
+      if (d.uni === 'break') return 'Summer break: nearly empty.';
+      if (d.weekend || d.holiday) return d.holiday ? 'Public holiday: few students today.' : 'Weekend: few students.';
+      return d.uni === 'exams' ? 'Exam week: quieter and more spread out.' : 'Teaching week.';
+    case 'market':
+      if (profileOf(p) !== PROFILE.bazaar) return d.weekday === marketDayOf(p) ? 'Market day today.' : '';
+      return d.weekday === 6 ? 'Sunday: quiet today.' : d.holiday ? 'Public holiday today.' : '';
+    case 'mall':
+      return d.shops < 0.2 ? 'Shops are shut today (Sunday trading rules).' : d.holiday ? 'Public holiday today.' : '';
+    default:
+      return d.holiday ? 'Public holiday today.' : '';
+  }
+}
+
+/** When the place is busy: today's trips to and from it by hour (places with a zone), and its typical pattern. */
+function WhenBusy({ game, p }: { game: Game; p: CityPlace }) {
+  const note = placeNote(p);
+  const today = todayAt(game, p);
+  const day = p.reachable || p.category === 'airport' ? placeDay(game, p.id) : null;
+  if (!note && !day) return null;
+  const max = day ? Math.max(...day.hours) : 0;
+  const now = Math.floor((game.t % 86400) / 3600);
+  return (
+    <div className="section">
+      <div className="row" style={{ marginBottom: 6, minHeight: 0 }}>
+        <div className="label grow">When it’s busy</div>
+        <span className="pn-tag">Typical pattern</span>
+      </div>
+      {today && <div className="t" style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{today}</div>}
+      {day && max > 0 && (
+        <>
+          <div className="pc-busy" role="img" aria-label="Modelled trips to and from here by hour today">
+            {day.hours.map((v, h) => <i key={h} className={h === now ? 'now' : ''} style={{ height: `${Math.max(4, (v / max) * 100)}%` }} />)}
+          </div>
+          <div className="pc-busy-axis faint"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+        </>
+      )}
+      {note && <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>{note}</div>}
+    </div>
+  );
+}
+
+/** A station's links on the city's existing rail and ferry network (assumed service). */
+function CityTransit({ game, p }: { game: Game; p: CityPlace }) {
+  const t = stationLinks(game, p.id);
+  if (!t || (!t.links.length && !t.off.length)) return null;
+  const ui = useUI.getState();
+  const modes = [...new Set(t.links.map((l) => l.mode))];
+  return (
+    <div className="section">
+      <div className="row" style={{ marginBottom: 6, minHeight: 0 }}>
+        <div className="label grow">City transit</div>
+        <span className="pn-tag">Assumed service</span>
+      </div>
+      {t.links.length > 0 && (
+        <div className="mini-list">
+          {t.links.slice(0, 8).map((l) => (
+            <div className="mini-row" key={`${l.mode}|${l.place}`} style={{ minHeight: 26 }}>
+              <button className="t grow" onClick={() => ui.select({ kind: 'place', id: l.place })}>
+                {MODE_LABEL[l.mode]} to {l.name}
+              </button>
+              <span className="faint num" style={{ fontSize: 12 }}>{km(l.m)} · {Math.max(1, Math.round(l.min))} min</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {t.off.map((o) => (
+        <div className="issue info" key={o.mode} style={{ marginTop: 6 }}><Info size={14} weight="bold" />{MODE_LABEL[o.mode]} is not in the model here. {o.reason}</div>
+      ))}
+      {modes.length > 0 && (
+        <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>
+          {modes.map((m) => `${MODE_LABEL[m]} every ${TRANSIT_SERVICE[m]?.wait ?? '?'} min at the peak, ${TRANSIT_SERVICE[m]?.kmh ?? '?'} km/h`).join('; ')} (assumed), 06:00 to midnight. It competes with your buses; your passengers cannot change to it yet.
+        </div>
       )}
     </div>
   );
@@ -140,6 +229,8 @@ export function PlaceInspector({ id, close }: { id: string; close: React.ReactNo
             </div>
           )}
         </div>
+        <WhenBusy game={game} p={p} />
+        <CityTransit game={game} p={p} />
         <HowPeopleTravel game={game} id={p.id} beyond={!p.reachable} />
         <div className="faint" style={{ fontSize: 11 }}>Data: {placeCredits(p).join(' · ')}</div>
       </div>

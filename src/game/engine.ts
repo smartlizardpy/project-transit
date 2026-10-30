@@ -17,7 +17,7 @@ import { compactLedger, emptyFinance, flushHour, post, reconcile } from './finan
 import { checkObjectives, closeDay, licenceInfo, notify, startingZones, routeWindow, unlockedModels } from './progress.ts';
 import { currencyFor, formatMoney, type Currency } from './currency.ts';
 import { DAY, DT, ECON, HOUR, LINE_COLOURS, MODEL, SERVICE, SPEEDS, STARTING_REPUTATION } from './content.ts';
-import { calendarDay, newCalendar, type CalendarDay } from './calendar.ts';
+import { calendarDay, calendarPattern, dayType, newCalendar, type CalendarDay, type DayType } from './calendar.ts';
 import { mix } from './hash.ts';
 import { SAVE_VERSION, TripState, type GameState, type Id, type Route, type RouteKind, type Stop, type Timetable, type Trip, type Vehicle } from './types.ts';
 import { hhmm, serviceDayOf, serviceDayWeekend, weekdayOf } from './time.ts';
@@ -352,6 +352,11 @@ export class Game {
     return calendarDay(this.state.world.calendar, this.state.clock.startWeekday, Math.floor(t / DAY));
   }
 
+  /** The kind of day at time `t`: weekend, public holiday, school day, teaching or exam week (typical pattern for the country). */
+  dayTypeAt(t = this.state.clock.t): DayType {
+    return dayType(this.calendarAt(t), calendarPattern(this.region.spec.country));
+  }
+
   vehicleList(): Vehicle[] {
     return (this.vlist ??= Object.values(this.state.vehicles));
   }
@@ -598,6 +603,7 @@ export class Game {
       v.trip = null;
       v.next = null;
       v.load = 0;
+      v.sp = 0;
     }
     s.pax.onboard = {};
     s.trips = {};

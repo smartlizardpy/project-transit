@@ -616,7 +616,7 @@ export function sampleEvent(game: Game, node: Workflow['nodes'][number]): Rec {
   const stop = p ? p.stops[Math.min(v!.stopIdx, p.stops.length - 1)] : line ? s.routes[line]?.stops[0] : Object.keys(s.stops)[0];
   const r = v?.route ? s.routes[v.route] : line ? s.routes[line] : null;
   const base: Rec = { kind: 'event', source: 'test', sample: true };
-  if (v) Object.assign(base, { vehicle: v.id, fleetNo: v.fleetNo, load: v.load, occupancy: Math.round((v.load / MODEL[v.model].capacity) * 100), delay: Math.round(Math.max(0, v.delay) / 6) / 10, trip: v.trip ?? -1 });
+  if (v) Object.assign(base, { vehicle: v.id, fleetNo: v.fleetNo, load: v.load, occupancy: Math.round(((v.sp ?? v.load) / MODEL[v.model].capacity) * 100), delay: Math.round(Math.max(0, v.delay) / 6) / 10, trip: v.trip ?? -1 });
   if (r) Object.assign(base, { line: r.id, lineNumber: r.number });
   if (stop) Object.assign(base, { stop, stopName: s.stops[stop]?.name ?? '' });
   if (node.type === 'trigger.waiting' && stop) base.waiting = waitingAt(s, stop);

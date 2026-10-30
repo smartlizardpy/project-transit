@@ -66,6 +66,7 @@ export function moveToRegion(state: GameState, from: Region, to: Region): number
     v.trip = null;
     v.next = null;
     v.load = 0;
+    v.sp = 0;
     delete state.pax.onboard[v.id];
   }
   state.region = { ...to.spec, fingerprint: to.fingerprint };
