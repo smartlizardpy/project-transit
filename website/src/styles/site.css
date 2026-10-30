@@ -837,26 +837,6 @@ a:hover {
   fill: var(--on-card);
 }
 
-.sk-pop {
-  transform-box: view-box;
-  transition:
-    opacity 260ms var(--ease),
-    scale 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.sk-pop[data-on='false'] {
-  opacity: 0;
-  scale: 0.4;
-}
-
-.sk-fade {
-  transition: opacity 400ms var(--ease);
-}
-
-.sk-wait {
-  transition: opacity 220ms var(--ease);
-}
-
 .steps {
   display: grid;
   gap: 6px;
@@ -870,9 +850,6 @@ a:hover {
   column-gap: 16px;
   padding: 14px 16px 14px 12px;
   border-radius: 14px;
-  transition:
-    background-color 300ms var(--ease),
-    opacity 300ms var(--ease);
 }
 
 .step > :not(.step-n) {
@@ -896,20 +873,6 @@ a:hover {
   color: var(--ink);
   font-weight: 800;
   font-size: 0.95rem;
-  transition: background-color 300ms var(--ease);
-}
-
-.step[data-state='next'] {
-  opacity: 0.55;
-}
-
-.step[data-state='now'] {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.step[data-state='now'] .step-n {
-  background: #f0c169;
-  border-color: #f0c169;
 }
 
 /* ───────────────────────── living city: the arrival board */
@@ -1169,10 +1132,6 @@ a:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sk-pop,
-  .sk-fade,
-  .sk-wait,
-  .step,
   .sq-veil,
   .sq-label,
   .sq-chip,

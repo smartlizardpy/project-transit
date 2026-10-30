@@ -1,7 +1,6 @@
-// "Every route is your decision": a small map in the game's colours where a line is built
-// step by step (stops, route, buses, timetable) and then runs. Drawn, not captured, and it
-// plays once when it scrolls into view. With reduced motion it shows the finished line.
-import { useEffect, useRef, useState } from 'react';
+// "Every route is your decision": a small map in the game's colours with a finished line on
+// it: numbered stops, the route along the streets, the depot, two buses and the timetable.
+// Drawn, not captured, and static.
 
 const W = 720;
 const H = 460;
@@ -34,7 +33,7 @@ function at(s: number): [number, number] {
   return PTS[PTS.length - 1];
 }
 
-/** Heading in degrees, 0 = up the page, following the line forwards. Smoothed round corners. */
+/** Heading in degrees, 0 = up the page, following the line forwards. */
 function heading(s: number) {
   const a = at(s - 9);
   const b = at(s + 9);
@@ -49,57 +48,16 @@ const PINS = STOP_S.map((s, i) => {
   return [x + Math.sin(r) * 28, y - Math.cos(r) * 28] as [number, number];
 });
 
-// a bus's day: out along the line, turn at the end, back again
-type Leg = { start: number; dur: number; from: number; to: number; stop?: number; turn?: boolean };
-const SPEED = 125; // map units per second
-const legs: Leg[] = [];
-{
-  let t = 0;
-  const order = [0, 1, 2, 3, 2, 1, 0];
-  for (let i = 0; i < order.length - 1; i++) {
-    const a = STOP_S[order[i]];
-    const b = STOP_S[order[i + 1]];
-    const dur = Math.abs(b - a) / SPEED + 0.5;
-    legs.push({ start: t, dur, from: a, to: b });
-    t += dur;
-    const end = order[i + 1];
-    const turn = end === 3 || end === 0;
-    const dwell = turn ? 1.6 : 0.9;
-    legs.push({ start: t, dur: dwell, from: b, to: b, stop: end, turn });
-    t += dwell;
-  }
-}
-const CYCLE = legs[legs.length - 1].start + legs[legs.length - 1].dur;
-const ease = (f: number) => (f < 0.5 ? 2 * f * f : 1 - (-2 * f + 2) ** 2 / 2);
-
-function busAt(time: number) {
-  const t = ((time % CYCLE) + CYCLE) % CYCLE;
-  const leg = legs.find((l) => t < l.start + l.dur) ?? legs[legs.length - 1];
-  const f = Math.min(1, (t - leg.start) / leg.dur);
-  let s = leg.from;
-  let angle: number;
-  if (leg.to !== leg.from) {
-    s = leg.from + (leg.to - leg.from) * ease(f);
-    angle = heading(s) + (leg.to < leg.from ? 180 : 0);
-  } else {
-    // dwelling; at either end the bus turns round while it waits
-    const prev = legs[legs.indexOf(leg) - 1] ?? legs[legs.length - 2];
-    const back = prev.to < prev.from;
-    angle = heading(s) + (back ? 180 : 0);
-    if (leg.turn) angle += 180 * ease(Math.min(1, f * 1.4));
-  }
+/** A bus on the line at distance `s`, keeping to the right of the road. */
+function busAt(s: number, back: boolean) {
+  const angle = heading(s) + (back ? 180 : 0);
   const [x, y] = at(s);
   const r = (angle * Math.PI) / 180;
-  // keep to the right of the road
-  return { x: x + Math.cos(r) * 6, y: y + Math.sin(r) * 6, angle, stop: leg.stop };
+  return { x: x + Math.cos(r) * 6, y: y + Math.sin(r) * 6, angle };
 }
-
-// the build-up, in milliseconds
-const T_STOPS = [200, 520, 840, 1160];
-const T_LINE = [1500, 3100];
-const T_BUSES = 3200;
-const T_TIMETABLE = 4100;
-const T_RUN = 5100;
+const BUSES = [busAt(190, false), busAt(700, true)];
+// people waiting at each stop
+const WAITING = [2, 1, 3, 0];
 
 export const ROUTE_STEPS = [
   {
@@ -181,73 +139,10 @@ function BusShape() {
 }
 
 export function RouteSketch() {
-  const root = useRef<HTMLDivElement>(null);
-  const line = useRef<SVGPathElement>(null);
-  const buses = useRef<(SVGGElement | null)[]>([]);
-  const waits = useRef<(SVGGElement | null)[]>([]);
-  // 'done' is the finished picture: what the prerendered page and reduced motion show
-  const [stage, setStage] = useState<number | 'done'>('done');
-  const [stops, setStops] = useState(4);
-
-  useEffect(() => {
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const el = root.current;
-    if (!el) return;
-    setStage(-1);
-    setStops(0);
-    let raf = 0;
-    let elapsed = 0;
-    let last = 0;
-    let lastStage = -1;
-    let lastStops = 0;
-    const served = [0, 0, 0, 0];
-
-    const frame = (now: number) => {
-      elapsed += last ? Math.min(64, now - last) : 0;
-      last = now;
-      const ms = elapsed;
-      const shown = T_STOPS.filter((t) => ms >= t).length;
-      const st = ms >= T_RUN ? 5 : ms >= T_TIMETABLE ? 4 : ms >= T_BUSES ? 3 : ms >= T_LINE[0] ? 2 : ms >= T_STOPS[0] ? 1 : 0;
-      if (shown !== lastStops) setStops((lastStops = shown));
-      if (st !== lastStage) setStage((lastStage = st));
-      const drawn = Math.max(0, Math.min(1, (ms - T_LINE[0]) / (T_LINE[1] - T_LINE[0])));
-      line.current?.setAttribute('stroke-dashoffset', String(1 - ease(drawn)));
-      const run = Math.max(0, ms - T_RUN) / 1000;
-      [0, CYCLE / 2].forEach((offset, i) => {
-        const b = busAt(run + offset);
-        buses.current[i]?.setAttribute('transform', `translate(${b.x.toFixed(1)} ${b.y.toFixed(1)}) rotate(${b.angle.toFixed(1)})`);
-        if (ms >= T_RUN && b.stop !== undefined) served[b.stop] = run;
-      });
-      waits.current.forEach((g, i) => {
-        const n = ms < T_RUN ? 0 : Math.min(4, Math.floor((run - served[i]) / 1.3));
-        g?.querySelectorAll('circle').forEach((c, k) => c.setAttribute('opacity', k < n ? '1' : '0'));
-      });
-      raf = requestAnimationFrame(frame);
-    };
-
-    const io = new IntersectionObserver(
-      ([e]) => {
-        cancelAnimationFrame(raf);
-        last = 0;
-        if (e.isIntersecting) raf = requestAnimationFrame(frame);
-      },
-      { threshold: 0.35 },
-    );
-    io.observe(el);
-    return () => {
-      io.disconnect();
-      cancelAnimationFrame(raf);
-    };
-  }, []);
-
-  const done = stage === 'done';
-  const reached = (n: number) => done || (stage as number) >= n;
-  const still = [busAt(0.4), busAt(CYCLE / 2 + 2.2)];
-
   return (
-    <div className="route-sketch" ref={root} data-stage={stage}>
+    <div className="route-sketch">
       <div className="sketch-card">
-        <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Drawing: four numbered stops on a small city map, a teal bus line joining them along the streets, and two buses running on it.">
+        <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Drawing: four numbered stops on a small city map, a teal bus line joining them along the streets from the depot, two buses on it, and a timetable of every 10 minutes.">
           <defs>
             <clipPath id="sketch-clip">
               <rect width={W} height={H} rx={22} />
@@ -282,49 +177,25 @@ export function RouteSketch() {
             <path d={WATER} fill="none" stroke="#bcd8e1" strokeWidth={3} />
 
             {/* the line */}
-            <path d={ROUTE} fill="none" stroke="#fff" strokeWidth={14} strokeLinejoin="round" strokeLinecap="round" opacity={reached(2) ? 1 : 0} className="sk-fade" />
-            <path
-              ref={line}
-              d={ROUTE}
-              fill="none"
-              stroke="#2f9e9a"
-              strokeWidth={7}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              pathLength={1}
-              strokeDasharray="1 1"
-              strokeDashoffset={done ? 0 : 1}
-            />
+            <path d={ROUTE} fill="none" stroke="#fff" strokeWidth={14} strokeLinejoin="round" strokeLinecap="round" />
+            <path d={ROUTE} fill="none" stroke="#2f9e9a" strokeWidth={7} strokeLinejoin="round" strokeLinecap="round" />
 
             {/* depot and line badge */}
-            <g className="sk-pop" data-on={reached(3)} style={{ transformOrigin: '40px 410px' }}>
-              <rect x={24} y={394} width={32} height={32} rx={9} fill="#e0573e" filter="url(#sketch-shadow)" />
-              <path d="M31 418 V406 L40 400 L49 406 V418 Z M35 418 V411 H45 V418" fill="none" stroke="#fff" strokeWidth={2.2} strokeLinejoin="round" />
-            </g>
-            <g className="sk-pop" data-on={reached(2)} style={{ transformOrigin: '40px 368px' }}>
-              <rect x={28} y={356} width={24} height={24} rx={6} fill="#2f9e9a" />
-              <text x={40} y={373} textAnchor="middle" className="sk-badge-text">
-                1
-              </text>
-            </g>
+            <rect x={24} y={394} width={32} height={32} rx={9} fill="#e0573e" filter="url(#sketch-shadow)" />
+            <path d="M31 418 V406 L40 400 L49 406 V418 Z M35 418 V411 H45 V418" fill="none" stroke="#fff" strokeWidth={2.2} strokeLinejoin="round" />
+            <rect x={28} y={356} width={24} height={24} rx={6} fill="#2f9e9a" />
+            <text x={40} y={373} textAnchor="middle" className="sk-badge-text">
+              1
+            </text>
 
-            {/* waiting passengers */}
-            {PINS.map(([x, y], i) => (
-              <g
-                key={i}
-                ref={(g) => {
-                  waits.current[i] = g;
-                }}
-              >
-                {[0, 1, 2, 3].map((k) => (
-                  <circle key={k} cx={x + 22 + k * 9} cy={y} r={3.8} fill="#3f4a44" opacity={done && k < (i % 3) + 1 ? 1 : 0} className="sk-wait" />
-                ))}
-              </g>
-            ))}
+            {/* people waiting */}
+            {PINS.map(([x, y], i) =>
+              Array.from({ length: WAITING[i] }, (_, k) => <circle key={`${i}-${k}`} cx={x + 22 + k * 9} cy={y} r={3.8} fill="#3f4a44" />),
+            )}
 
             {/* stops, numbered in the order you place them */}
             {PINS.map(([x, y], i) => (
-              <g key={i} className="sk-pop" data-on={done || i < stops} style={{ transformOrigin: `${x}px ${y}px` }}>
+              <g key={i}>
                 <line x1={x} y1={y} x2={STOPS[i][0]} y2={STOPS[i][1]} stroke="#18201b" strokeWidth={2} opacity={0.35} />
                 <circle cx={x} cy={y} r={14} fill="#fff" stroke="#2f9e9a" strokeWidth={3.5} filter="url(#sketch-shadow)" />
                 <text x={x} y={y + 5} textAnchor="middle" className="sk-stop-text">
@@ -334,37 +205,27 @@ export function RouteSketch() {
             ))}
 
             {/* buses */}
-            {[0, 1].map((i) => (
-              <g
-                key={i}
-                ref={(g) => {
-                  buses.current[i] = g;
-                }}
-                transform={`translate(${still[i].x.toFixed(1)} ${still[i].y.toFixed(1)}) rotate(${still[i].angle.toFixed(1)})`}
-              >
-                <g className="sk-pop" data-on={reached(3)} filter="url(#sketch-shadow)">
-                  <BusShape />
-                </g>
+            {BUSES.map((b, i) => (
+              <g key={i} transform={`translate(${b.x.toFixed(1)} ${b.y.toFixed(1)}) rotate(${b.angle.toFixed(1)})`} filter="url(#sketch-shadow)">
+                <BusShape />
               </g>
             ))}
 
             {/* the timetable */}
-            <g className="sk-pop" data-on={reached(4)} style={{ transformOrigin: '440px 352px' }}>
-              <rect x={352} y={334} width={178} height={38} rx={11} fill="#161c19" filter="url(#sketch-shadow)" />
-              <rect x={362} y={342} width={22} height={22} rx={5} fill="#2f9e9a" />
-              <text x={373} y={358} textAnchor="middle" className="sk-badge-text">
-                1
-              </text>
-              <text x={394} y={358} className="sk-pill-text">
-                Every 10 min
-              </text>
-            </g>
+            <rect x={352} y={334} width={178} height={38} rx={11} fill="#161c19" filter="url(#sketch-shadow)" />
+            <rect x={362} y={342} width={22} height={22} rx={5} fill="#2f9e9a" />
+            <text x={373} y={358} textAnchor="middle" className="sk-badge-text">
+              1
+            </text>
+            <text x={394} y={358} className="sk-pill-text">
+              Every 10 min
+            </text>
           </g>
         </svg>
       </div>
       <ol className="steps">
         {ROUTE_STEPS.map((s, i) => (
-          <li className="step" key={s.title} data-state={done ? undefined : stage === i + 1 ? 'now' : (stage as number) > i + 1 ? 'past' : 'next'}>
+          <li className="step" key={s.title}>
             <span className="step-n" aria-hidden="true">
               {i + 1}
             </span>
