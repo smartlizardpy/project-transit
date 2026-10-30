@@ -139,7 +139,7 @@ button.link:hover { color: #b3dcf6; text-decoration: underline; }
 .rs-issues { display: flex; flex-direction: column; max-height: 160px; overflow-y: auto; }
 .tray .swatch input { width: 40px; background: transparent; border: 0; text-align: center; color: #fff; font: 800 17px var(--font); }
 .tray .swatch input:focus-visible { outline: none; }
-.tray-name { background: transparent; border: 0; border-bottom: 1px dashed var(--hairline-strong); color: var(--text); font: 800 14px var(--font); padding: 1px 0; width: 210px; }
+.tray-name { background: transparent; border: 0; border-bottom: 1px dashed var(--hairline-strong); color: var(--text); font: 800 14px var(--font); padding: 1px 0; width: 100%; min-width: 0; }
 .tray-name::placeholder { color: var(--text-3); font-weight: 700; }
 
 /* pause/HUD helpers */

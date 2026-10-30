@@ -24,12 +24,12 @@ export function RouteTray() {
   const buses10 = valid ? Math.max(1, Math.ceil(cycle / 10)) : 0;
   const hint =
     n === 0
-      ? 'Click a stop, or a street in your licensed area to build one there'
+      ? 'Click a stop spot (the round markers on the streets) or one of your stops to start the line.'
       : n === 1
-        ? 'Click the next stop. The line follows real streets and one-way rules'
+        ? 'Click the next stop. The line follows real streets and one-way rules.'
         : draft.kind === 'loop'
-          ? 'Add stops in order. The loop returns to stop 1. Shift-click the line to force a street'
-          : 'Add stops in order. Buses return the same way unless you set a custom return. Shift-click the line to force a street';
+          ? 'Keep adding stops in order; the loop returns to stop 1. Shift-click the line to force it along a street.'
+          : 'Keep adding stops in order. Buses come back the same way unless you set a custom return. Shift-click the line to force it along a street.';
   const editing = draft.editing ? game.state.routes[draft.editing] : null;
   const changed = !editing || JSON.stringify([editing.stops, editing.returnStops, editing.kind, editing.via, editing.number, editing.name, editing.colour]) !== JSON.stringify([draft.stops, draft.kind === 'linear' ? draft.returnStops : null, draft.kind, draft.via, draft.number, draft.name, draft.colour]);
   const affordable = !!editing || game.state.finance.balance >= ECON.routeFee;
@@ -105,19 +105,18 @@ export function RouteTray() {
         <label className="swatch" style={{ ['--c' as string]: draft.colour }} title="Line number">
           <input value={draft.number} maxLength={4} onChange={(e) => setDraft({ ...draft, number: e.target.value.replace(/\s/g, '') })} aria-label="Line number" />
         </label>
+        <div className="tray-coach" role="status">
+          {n === 0 ? <CursorClick size={14} weight="bold" /> : <Info size={14} weight="bold" />} <span>{hint}</span>
+        </div>
         <div className="tray-main">
-          <div className="tray-title" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <input className="tray-name" placeholder={`Line ${draft.number} name (optional)`} value={draft.name} maxLength={60} onChange={(e) => setDraft({ ...draft, name: e.target.value })} aria-label="Line name" />
-          </div>
-          <div className="tray-hint">
-            {n === 0 ? <CursorClick size={14} weight="bold" /> : <Info size={14} weight="bold" />} <span>{hint}</span>
-          </div>
+          <input className="tray-name" placeholder={`Line ${draft.number} name (optional)`} value={draft.name} maxLength={60} onChange={(e) => setDraft({ ...draft, name: e.target.value })} aria-label="Line name" />
+          <span className="tray-sub">{editing ? `Editing line ${editing.number}` : draft.kind === 'loop' ? 'New loop line' : 'New two-way line'}</span>
         </div>
         <div className="tray-stats">
           <div className="tstat"><b>{n}</b><span>Stops</span></div>
-          <div className="tstat"><b>{valid ? preview!.lengths.map(km).join(' / ') : '–'}</b><span>{draft.kind === 'loop' ? 'Loop' : 'Out / back'}</span></div>
-          <div className="tstat"><b>{valid ? `${Math.round(cycle)} min` : '–'}</b><span>Round trip now</span></div>
-          <div className="tstat opt"><b>{valid ? buses10 : '–'}</b><span>Buses for every 10 min</span></div>
+          <div className="tstat"><b>{valid ? preview!.lengths.map(km).join(' / ') : '–'}</b><span>{draft.kind === 'loop' ? 'Loop length' : 'Outbound / return'}</span></div>
+          <div className="tstat" title="Driving time with traffic at the current hour, plus a short layover at each end"><b>{valid ? `${Math.round(cycle)} min` : '–'}</b><span>Round trip</span></div>
+          <div className="tstat opt"><b>{valid ? buses10 : '–'}</b><span>Buses for a 10-min service</span></div>
         </div>
         <div className="tray-actions">
           <button className="icon-btn has-tip" onClick={() => useUI.getState().undoDraft()} disabled={!draft.history.length} aria-label="Undo">

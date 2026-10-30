@@ -37,6 +37,7 @@ export class MarkerLayer {
   private depots = new Map<string, { m: Marker; el: HTMLDivElement }>();
   private draftMarkers: Marker[] = [];
   private pois: Marker[] = [];
+  private poiKey = '';
   private ghost: Marker;
   private ghostEl: HTMLDivElement;
   private game: Game | null = null;
@@ -68,7 +69,14 @@ export class MarkerLayer {
     this.offs.forEach((f) => f());
     this.offs = [];
     this.game = g;
-    if (g) this.offs.push(g.on('changed', () => this.rebuild()));
+    if (g)
+      this.offs.push(
+        g.on('changed', () => {
+          this.rebuild();
+          // landmarks follow the visible territory (a new licence reveals more)
+          if (g.state.territory.owned.join() !== this.poiKey) this.rebuildPois();
+        }),
+      );
     this.rebuild();
     this.rebuildPois();
   }
@@ -78,8 +86,17 @@ export class MarkerLayer {
     this.pois = [];
     const region = this.game?.region ?? (useSession.getState().phase === 'setup' ? session.region : null);
     if (!region) return;
+    const g = this.game;
+    this.poiKey = g ? g.state.territory.owned.join() : '';
+    // only in the area the company can see: its own areas and those it can license next
+    const owned = new Set(g?.state.territory.owned ?? []);
+    const visible = (p: Poi) => {
+      if (!g) return true;
+      const z = g.geo.zoneAt(p.lngLat);
+      return owned.has(z.id) || z.neighbours.some((n) => owned.has(n));
+    };
     const picked: Poi[] = [];
-    const sorted = region.pois.filter((p) => KIND_GLYPH[p.kind] && p.name).sort((a, b) => b.weight - a.weight);
+    const sorted = region.pois.filter((p) => KIND_GLYPH[p.kind] && p.name && visible(p)).sort((a, b) => b.weight - a.weight);
     const near = (a: LngLat, b: LngLat) => Math.abs(a[0] - b[0]) < 0.0035 && Math.abs(a[1] - b[1]) < 0.0025;
     for (const p of sorted) {
       if (picked.length >= 28) break;

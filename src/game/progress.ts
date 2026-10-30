@@ -284,6 +284,46 @@ function explainSatisfaction(w: Window): string {
 
 // ───────────────────────────────────────────── territory
 
+/** a new company starts with its home area plus the areas around it: about this much land (km²) */
+export const START_AREA_KM2 = 15;
+
+/** an area's land in km² (water does not count) */
+export const landOf = (z: Zone) => z.landKm2 ?? z.areaKm2;
+
+/**
+ * The areas a company starts with: the chosen home area, then the bordering areas nearest
+ * to it, until about START_AREA_KM2 is covered.
+ */
+export function startingZones(zones: readonly Zone[], homeId: string): string[] {
+  const byId = new Map(zones.map((z) => [z.id, z]));
+  const home = byId.get(homeId);
+  if (!home) return [homeId];
+  const out = [home.id];
+  let area = landOf(home);
+  while (area < START_AREA_KM2 - 1) {
+    let best: Zone | null = null, bd = Infinity;
+    for (const id of out)
+      for (const n of byId.get(id)!.neighbours) {
+        const z = byId.get(n);
+        if (!z || out.includes(n)) continue;
+        const d = distanceM(z.centroid, home.centroid);
+        if (d < bd) {
+          bd = d;
+          best = z;
+        }
+      }
+    if (!best || area + landOf(best) > START_AREA_KM2 + 4) break;
+    out.push(best.id);
+    area += landOf(best);
+  }
+  return out;
+}
+
+/** licences bought since founding (the starting areas are free) */
+export function licencesBought(state: GameState): number {
+  return Math.max(0, state.territory.owned.length - (state.territory.start?.length ?? 1));
+}
+
 export interface LicenceInfo {
   zone: Zone;
   owned: boolean;
@@ -299,10 +339,10 @@ export function licenceInfo(game: Game, zoneId: string): LicenceInfo | null {
   if (!zone) return null;
   const state = game.state;
   const owned = state.territory.owned.includes(zoneId);
-  const n = state.territory.owned.length;
+  const bought = licencesBought(state);
   const adjacent = state.territory.owned.some((id) => zone.neighbours.includes(id));
-  const cost = Math.round(((18_000 + 0.25 * (zone.residents + zone.jobs)) * (1 + 0.12 * (n - 1))) / 1000) * 1000;
-  const repRequired = Math.min(88, 34 + 6 * (n - 1));
+  const cost = Math.round(((18_000 + 0.25 * (zone.residents + zone.jobs)) * (1 + 0.12 * bought)) / 1000) * 1000;
+  const repRequired = Math.min(88, 34 + 6 * bought);
   const blockers: string[] = [];
   if (!owned) {
     if (!adjacent) blockers.push('Must border an area you already operate in.');
@@ -396,9 +436,9 @@ export const OBJECTIVES: ObjectiveDef[] = [
   {
     id: 'expand-1',
     title: 'Room to grow',
-    description: 'License a second operating area.',
+    description: 'License a new operating area next to yours.',
     reward: { rep: 2 },
-    check: (g) => (g.state.territory.owned.length - 1) / 1,
+    check: (g) => licencesBought(g.state),
   },
   {
     id: 'zones-3',

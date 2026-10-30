@@ -30,10 +30,11 @@ export const PRESETS: CityPreset[] = [
     country: 'TR',
     centre: [28.9766, 41.0262],
     note: 'Dense historic core, one-way streets, the Golden Horn bridges',
-    cols: 4,
-    rows: 3,
+    cols: 6,
+    rows: 5,
     view: { zoom: 15.6, bearing: -28, pitch: 54 },
-    tiles: [9509, 9510, 9511, 9512].flatMap((x) => [6140, 6141, 6142].map((y) => [x, y] as [number, number])),
+    // Zeytinburnu to Ortaköy and the Bosphorus Bridge, Kağıthane to the Marmara shore
+    tiles: [9508, 9509, 9510, 9511, 9512, 9513].flatMap((x) => [6138, 6139, 6140, 6141, 6142].map((y) => [x, y] as [number, number])),
     offline: true,
   },
   {
@@ -43,8 +44,8 @@ export const PRESETS: CityPreset[] = [
     country: 'GB',
     centre: [-1.5752, 54.7745],
     note: 'Small university city on a river peninsula',
-    cols: 4,
-    rows: 4,
+    cols: 6,
+    rows: 6,
     view: { zoom: 15.2, bearing: 12, pitch: 52 },
   },
   {
@@ -54,8 +55,8 @@ export const PRESETS: CityPreset[] = [
     country: 'ES',
     centre: [2.165, 41.391],
     note: 'Regular grid of chamfered blocks',
-    cols: 3,
-    rows: 3,
+    cols: 5,
+    rows: 5,
     view: { zoom: 15.4, bearing: -45, pitch: 52 },
   },
   {
@@ -65,8 +66,8 @@ export const PRESETS: CityPreset[] = [
     country: 'DE',
     centre: [9.985, 53.549],
     note: 'Port city with canals and ring roads',
-    cols: 4,
-    rows: 4,
+    cols: 6,
+    rows: 6,
     view: { zoom: 15.2, bearing: -18, pitch: 52 },
   },
   {
@@ -76,16 +77,16 @@ export const PRESETS: CityPreset[] = [
     country: 'JP',
     centre: [139.7005, 35.6595],
     note: 'Very dense, rail-centred, narrow streets',
-    cols: 3,
-    rows: 3,
+    cols: 5,
+    rows: 5,
     view: { zoom: 15.4, bearing: -10, pitch: 52 },
   },
 ];
 
-/** Region size in tiles so a game area spans roughly 5–6 km at any latitude. */
+/** Region size in tiles so a game area spans roughly 9–10 km at any latitude. */
 export function tilesForLatitude(lat: number): number {
   const tileKm = 2.446 * Math.cos((lat * Math.PI) / 180);
-  return Math.max(3, Math.min(5, Math.round(5.6 / tileKm)));
+  return Math.max(4, Math.min(7, Math.round(9.5 / tileKm)));
 }
 
 export function presetSpec(p: CityPreset): RegionSpec {

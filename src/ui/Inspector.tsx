@@ -528,7 +528,7 @@ function ZoneInspector({ id }: { id: string }) {
         <div className={`stop-icon ${info.owned ? '' : 'locked'}`}>{info.owned ? <LockOpen size={20} weight="fill" /> : <Lock size={20} weight="fill" />}</div>
         <div className="grow">
           <div className="p-title">{z.name}</div>
-          <div className="p-sub">{z.named ? 'Neighbourhood' : 'Unnamed area'} · {z.areaKm2.toFixed(1)} km²</div>
+          <div className="p-sub">{z.named ? 'Neighbourhood' : 'Unnamed area'} · {(z.landKm2 ?? z.areaKm2).toFixed(1)} km² of land</div>
         </div>
         <Close />
       </div>

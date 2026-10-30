@@ -35,7 +35,7 @@ const STEPS: Step[] = [
   {
     id: 'line',
     title: 'Draw a line',
-    body: () => 'Pick the line tool and click streets in order to place stops near homes, jobs, stations and schools. Turn on demand (P) to see where people are.',
+    body: () => 'Pick the line tool and click stop spots (the round markers on the streets) in order, near homes, jobs, stations and schools. Turn on demand (P) to see where people are.',
     done: (g) => Object.keys(g.state.routes).length > 0,
     action: { label: 'Line tool', run: () => startDrafting(null) },
   },

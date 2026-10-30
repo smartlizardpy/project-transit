@@ -292,11 +292,11 @@ button.lrow:hover { background: var(--card-hover); }
 }
 @keyframes tray-in { from { opacity: 0; transform: translate(-50%, 16px); } to { opacity: 1; transform: translate(-50%, 0); } }
 .tray .swatch { width: 44px; height: 44px; border-radius: 11px; background: var(--c); display: grid; place-items: center; font-size: 17px; font-weight: 800; color: #fff; flex: none; box-shadow: inset 0 -3px 0 rgba(0,0,0,0.12); }
-.tray .tray-main { flex: 1 1 260px; min-width: 220px; }
-.tray .tray-title { font-size: 14px; font-weight: 800; white-space: nowrap; }
-.tray .tray-hint { font-size: 12px; font-weight: 600; color: var(--text-2); margin-top: 4px; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tray .tray-hint span { overflow: hidden; text-overflow: ellipsis; }
-.tray .tray-hint svg { flex: none; }
+.tray .tray-main { flex: 1 1 180px; min-width: 150px; display: flex; flex-direction: column; gap: 4px; }
+.tray .tray-sub { font-size: 11px; font-weight: 600; color: var(--text-3); }
+/* what to do next: a full-width strip above the tray, never cut off */
+.tray .tray-coach { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); max-width: 100%; width: max-content; display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; background: var(--card); box-shadow: var(--shadow-pop), inset 0 0 0 1px var(--hairline); font-size: 12.5px; font-weight: 600; color: var(--text-2); line-height: 1.35; }
+.tray .tray-coach svg { flex: none; color: var(--accent); }
 .tray .tray-stats { display: flex; gap: 2px; }
 .tray .tstat { padding: 4px 12px; border-left: 1px solid var(--hairline); white-space: nowrap; }
 .tray .tstat b { display: block; font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
@@ -327,6 +327,8 @@ button.lrow:hover { background: var(--card-hover); }
 /* toast */
 .toast { position: absolute; left: 50%; bottom: calc(var(--edge) + 90px); transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; font-weight: 700; animation: toast-in 240ms var(--ease-out); white-space: nowrap; }
 .toast.out { animation: toast-out 200ms ease-in forwards; }
+/* above the line editor's help strip while drawing a line */
+.app:has(.tray) .toast { bottom: calc(var(--edge) + 136px); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
 @keyframes toast-out { to { opacity: 0; transform: translate(-50%, 6px); } }
 

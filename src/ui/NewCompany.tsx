@@ -8,6 +8,7 @@ import { PRESETS, presetSpec, customSpec } from '../app/presets.ts';
 import { mapRuntime } from '../map/runtime.ts';
 import { COMPANY_COLOURS, ECON, STARTING_REPUTATION } from '../game/content.ts';
 import { currencyFor, formatMoney } from '../game/currency.ts';
+import { landOf, startingZones, START_AREA_KM2 } from '../game/progress.ts';
 import { flyToRegion } from './camera.ts';
 import { CompanyMark, LOGOS } from './logos.tsx';
 
@@ -159,15 +160,35 @@ function Loading() {
   );
 }
 
-/** Frame an area on the map beside the setup panel. */
+/** The starting area a home area gives: it plus the areas around it. */
+function startOf(id: string) {
+  const zones = session.region?.zones ?? [];
+  const list = startingZones(zones, id).map((zid) => zones.find((z) => z.id === zid)!).filter(Boolean);
+  const sum = (f: (z: (typeof list)[number]) => number) => list.reduce((a, z) => a + f(z), 0);
+  return { zones: list, km2: sum(landOf), residents: sum((z) => z.residents), jobs: sum((z) => z.jobs) };
+}
+
+/** Frame a home area's whole starting area on the map beside the setup panel. */
 function showZone(id: string) {
   const map = mapRuntime.map;
-  const z = session.region?.zones.find((x) => x.id === id);
-  if (!map || !z) return;
+  const start = startOf(id);
+  if (!map || !start.zones.length) return;
   const b = new LngLatBounds();
-  for (const p of z.ring) b.extend(p as [number, number]);
+  for (const z of start.zones) for (const p of z.ring) b.extend(p as [number, number]);
   const right = document.querySelector('.mn-panel')?.getBoundingClientRect().right ?? 0;
-  map.fitBounds(b, { padding: { left: right + 40, right: 60, top: 80, bottom: 80 }, maxZoom: 16, pitch: 50, bearing: map.getBearing(), duration: 1100 });
+  map.fitBounds(b, { padding: { left: right + 40, right: 60, top: 80, bottom: 80 }, maxZoom: 15.5, pitch: 45, bearing: map.getBearing(), duration: 1100 });
+}
+
+/** "Mahmutpaşa + 4 areas around it · 14.8 km²" */
+function StartSummary({ id }: { id: string }) {
+  const s = startOf(id);
+  const n = (v: number) => Math.round(v / 1000) * 1000;
+  const others = s.zones.length - 1;
+  return (
+    <span className="mn-zone-start">
+      Starting area: {others > 0 ? `${s.zones[0].name} + ${others} area${others > 1 ? 's' : ''} around it` : s.zones[0].name} · {s.km2.toFixed(1)} km² · ≈{n(s.residents).toLocaleString()} residents · ≈{n(s.jobs).toLocaleString()} jobs
+    </span>
+  );
 }
 
 function Setup() {
@@ -207,7 +228,7 @@ function AreaStep({ city }: { city: string }) {
           <div><h2>Choose your home area</h2><p>Step 2 of 3 · {city}</p></div>
         </div>
         <div className="mn-scroll">
-          <p className="mn-note">Your first licence: you can build stops and depots here, and expand to neighbouring areas later. Pick one from the list or click it on the map. Figures are estimates.</p>
+          <p className="mn-note">You start with your home area and the areas around it, about {START_AREA_KM2} km², and can license more as you grow. Pick one from the list or click it on the map. Figures are estimates.</p>
           <div className="mn-zones">
             {zones.map((z) => (
               <button
@@ -221,6 +242,7 @@ function AreaStep({ city }: { city: string }) {
                 <span className="mn-zone-top"><b>{z.name}</b><span className={'pill mn-tag' + (z.named ? '' : ' gen')}>{z.named ? 'Neighbourhood' : 'Generated area'}</span></span>
                 <span className="mn-zone-sub">≈{n(z.residents).toLocaleString()} residents · ≈{n(z.jobs).toLocaleString()} jobs</span>
                 {z.highlights.length > 0 && <span className="mn-zone-hl">{z.highlights.slice(0, 3).join(' · ')}</span>}
+                {homeZone === z.id && <StartSummary id={z.id} />}
               </button>
             ))}
           </div>
@@ -278,7 +300,7 @@ function CompanyStep({ city, name, setName, colour, setColour, logo, setLogo }: 
           {zone && (
             <div className="mn-home">
               <MapPin size={18} weight="fill" />
-              <div><b>{zone.name}</b><span>Home area · ≈{n(zone.residents).toLocaleString()} residents · ≈{n(zone.jobs).toLocaleString()} jobs</span></div>
+              <div><b>{zone.name}</b><span>Home area · {startOf(zone.id).zones.length} areas, {startOf(zone.id).km2.toFixed(1)} km² · ≈{n(startOf(zone.id).residents).toLocaleString()} residents</span></div>
               <button type="button" className="btn sm" onClick={back}>Change</button>
             </div>
           )}

@@ -19,16 +19,16 @@ pnpm test         # game-core tests (vitest)
 
 `pnpm app` starts its own Vite server on port 5173, so stop any running `pnpm dev` first.
 
-İstanbul works offline: its map tiles ship with the app. Other places download OpenStreetMap vector tiles from OpenFreeMap (free, no key) and cache them locally.
+İstanbul works offline: its map tiles ship with the app (`node scripts/bundle-tiles.mjs` adds more). Other places download OpenStreetMap vector tiles from OpenFreeMap (free, no key) and cache them locally.
 
 ## How to play
 
 1. **New company.**
    - Choose a starting city (İstanbul, Durham, Barcelona, Hamburg, Tokyo), search for any town, or start at the current map view.
-   - Pick your home area, which is your first operating licence, then a name, colour and logo.
+   - Pick your home area, then a name, colour and logo. You start with the home area and the areas around it, about 15 km² of land.
 2. **Build a depot** (depot tool, ⇧D). Buses park and are serviced there.
 3. **Buy buses** (Fleet → Buy, G). There are six models, from a cheap minibus to an articulated bus. Larger and electric models unlock with reputation.
-4. **Draw a line** (line tool, R). Click streets in order to place stops; existing stops work too. The line follows real streets and one-way rules. Shift-click the line to force it along a street. Choose two-way or loop, and optionally a custom return route. Warnings point out long one-way detours.
+4. **Draw a line** (line tool, R). Click stop spots in order to place stops; existing stops work too. Stops can only go on stop spots: real bus stops from OpenStreetMap, plus generated spots about every 300 m along main roads where OSM has none. The line follows real streets and one-way rules. Shift-click the line to force it along a street. Choose two-way or loop, and optionally a custom return route. Warnings point out long one-way detours.
 5. **Assign buses and set the timetable.** Open the line and assign spare buses. The timetable editor shows how many buses each frequency needs.
 6. **Run time.** Space pauses; keys 1–4 set the speed (the fastest is about 2 minutes per day).
    - Click a bus to see its passengers and next stops, and press F to follow it.
@@ -37,7 +37,7 @@ pnpm test         # game-core tests (vitest)
    - **Finances (M):** daily results, per-line profit, the ledger, loans and the fare.
    - **Company (C):** objectives and territory.
    - **Satisfaction:** the popover in the top bar explains what passengers dislike most.
-8. **Expand.** Licence a neighbouring area (overlay O, or click an area) once you have the reputation and money. Overdraw for too long and the company becomes insolvent, then bankrupt.
+8. **Expand.** Only your own areas are shown in full. Areas you can license next sit under a light veil with their price; everything else is blank paper. Click a veiled area (or use overlay O) to license it once you have the reputation and money. Overdraw for too long and the company becomes insolvent, then bankrupt.
 
 The optional first-steps guide walks through steps 2–6, and you can hide it. The game autosaves; ⌘S / Ctrl+S saves now; Esc opens the game menu (save, load, settings, quit).
 
@@ -110,7 +110,7 @@ There is no online account, no multiplayer and no paid service.
 |---|---|
 | `pnpm test` | Game-core tests against real İstanbul data: road connectivity and one-way routing, route validity, timetables, capacity, ETAs, traffic, ledger reconciliation, territory, save/load determinism and migration, balance, a 40-day progression run by a scripted player, a 70-bus performance budget, and regressions. |
 | `pnpm play` | End-to-end play-through in Chromium with real clicks: new company → depot → buy → draw a line → assign → run → save → quit → continue (needs `pnpm dev`). Pass an output folder and a size: `node scripts/play.mjs out 1920 1080`. |
-| `pnpm shots` | Screenshots of 16 screens of the real game at 1920×1080, 2560×1440 and 1366×768 into `docs/screenshots/` (needs `pnpm dev`). `PRESET=1` starts in another city. |
+| `pnpm shots` | Screenshots of 17 screens of the real game at 1920×1080, 2560×1440 and 1366×768 into `docs/screenshots/` (needs `pnpm dev`). `PRESET=1` starts in another city. |
 | `node scripts/dev/webkit-play.mjs out` | Plays, saves, reloads and continues in WebKit, the engine behind Tauri's macOS window (needs `pnpm build && pnpm preview --port 4173`). |
 | `scripts/dev/native-saves.sh out` | Save round trip in the real desktop app across three launches: save, close the window, reopen and load, quit (⌘Q path), reopen and load, delete the test saves. Build first with `pnpm tauri build --bundles app`. Works with the screen locked. |
 | `node scripts/dev/scene.mjs out 1 8` | Builds a running network in a preset city (index 1 = Durham) at a given hour and captures close-up, line, traffic and demand views. |

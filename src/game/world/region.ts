@@ -68,6 +68,8 @@ export interface Zone {
   seed: LngLat;
   neighbours: string[];
   areaKm2: number;
+  /** built-up land: the part with streets or buildings (not water); missing in older data */
+  landKm2?: number;
   residents: number;
   jobs: number;
   /** named after an OSM place (true) or an unnamed generated area (false) */

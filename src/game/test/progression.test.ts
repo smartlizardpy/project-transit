@@ -1,10 +1,10 @@
-// Progression bot: plays a fresh company (home zone only, no extra funds) like a sensible human for up to
+// Progression bot: plays a fresh company (its starting areas only, no extra funds) like a sensible human for up to
 // 40 game days: one good first line, then licence the best adjacent zone and run a second line into it.
 import { describe, expect, it } from 'vitest';
 import { newGame, stopsAlong } from './helpers.ts';
 import type { Game } from '../engine.ts';
 import { flatTimetable, sustainableHeadway } from '../timetable.ts';
-import { licenceInfo, routeWindow, window } from '../progress.ts';
+import { licenceInfo, licencesBought, routeWindow, startingZones, window } from '../progress.ts';
 import { reconcile } from '../finance.ts';
 import { MODEL } from '../content.ts';
 import { TripState } from '../types.ts';
@@ -51,7 +51,7 @@ describe('progression bot', () => {
 
   it('plays 40 days', () => {
     const s = game.state;
-    expect(s.territory.owned).toEqual([home]);
+    expect(s.territory.owned).toEqual(startingZones(game.region.zones, home));
     const centre = homeZone.centroid as LngLat;
     // depot near the centre of the home zone
     let depot = game.buildDepot(destination(centre, 45, 150));
@@ -200,6 +200,6 @@ describe('progression bot', () => {
     const rw = routeWindow(game.state, expansion!.route, 24 * (MAX_DAYS - expandedDay));
     console.log(`expansion on day ${expandedDay}, boardings since: ${rw.boardings}`);
     expect(rw.boardings).toBeGreaterThan(0);
-    expect(game.state.territory.owned.length).toBeGreaterThan(1);
+    expect(licencesBought(game.state)).toBeGreaterThan(0);
   });
 });

@@ -330,7 +330,8 @@ export interface GameState {
   pax: PassengerState;
   finance: FinanceState;
   stats: StatsState;
-  territory: { owned: string[]; home: string };
+  /** start: the areas the company was founded with (older saves: just the home area) */
+  territory: { owned: string[]; home: string; start?: string[] };
   objectives: Record<string, ObjectiveState>;
   notifications: Notification[];
   counters: { stop: number; route: number; vehicle: number; depot: number; ledger: number; trip: number; notification: number };

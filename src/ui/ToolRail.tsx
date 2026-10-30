@@ -14,7 +14,7 @@ const DEFAULT_PITCH = 54;
 
 const TOOLS: { id: Tool; icon: (on: boolean) => React.ReactNode; label: string; k: string; hint: string }[] = [
   { id: 'select', icon: (on) => <Cursor size={19} weight={on ? 'fill' : 'bold'} />, label: 'Select', k: 'V', hint: 'Inspect buses, lines, stops, depots and areas' },
-  { id: 'stop', icon: (on) => <MapPinPlus size={20} weight={on ? 'fill' : 'bold'} />, label: 'Build stops', k: 'B', hint: 'Click a street in your licensed area. Grey dots mark real stop locations.' },
+  { id: 'stop', icon: (on) => <MapPinPlus size={20} weight={on ? 'fill' : 'bold'} />, label: 'Build stops', k: 'B', hint: 'Click a stop spot (round marker) in your licensed area. Named spots are real stop locations.' },
   { id: 'route', icon: (on) => <Path size={20} weight={on ? 'fill' : 'bold'} />, label: 'New line', k: 'R', hint: 'Click stops in order (or streets to build new ones). Shift-click the line to route it through a street.' },
   { id: 'depot', icon: (on) => <Garage size={20} weight={on ? 'fill' : 'bold'} />, label: 'Build depot', k: '⇧D', hint: 'Buses park and are maintained at depots' },
 ];

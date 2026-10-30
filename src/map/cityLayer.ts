@@ -6,6 +6,8 @@ import type { CustomLayerInterface, CustomRenderMethodInput, Map as MlMap } from
 import { latToMercY, lngToMercX, mercPerMeter, tileCenterLat, TILE_ZOOM, mercXToLng, mercYToLat } from '../geo/tiles.ts';
 import type { TileRequest, TileResult } from './cityWorker.ts';
 import { tileUrls } from './tileSource.ts';
+import type { TerritoryMask } from './overlays.ts';
+import { PAPER } from './palette.ts';
 
 const SOLID_VERT = /* glsl */ `
   uniform mat4 uMatrix;
@@ -27,25 +29,71 @@ const SOLID_FRAG = /* glsl */ `
     gl_FragColor = vec4(c, 1.0);
   }
 `;
-const SHADOW_VERT = /* glsl */ `
+// City tiles: like SOLID_*, plus the territory mask. Outside the area the player can see the
+// city is not drawn; over areas that can be licensed next it fades into the paper.
+const CITY_VERT = /* glsl */ `
   uniform mat4 uMatrix;
-  attribute vec2 uv2;
-  varying vec2 vUv;
+  uniform float uHeight;
+  uniform vec4 uMaskXf;
+  varying vec3 vColor;
+  varying vec2 vMask;
   void main() {
-    vUv = uv2;
-    gl_Position = uMatrix * modelMatrix * vec4(position, 1.0);
+    vColor = color;
+    vec4 p = modelMatrix * vec4(position, 1.0);
+    vMask = p.xy * uMaskXf.xy + uMaskXf.zw;
+    p.z *= uHeight;
+    gl_Position = uMatrix * p;
   }
 `;
-const SHADOW_FRAG = /* glsl */ `
+const MASK_GLSL = /* glsl */ `
+  uniform sampler2D uMask;
+  uniform float uMaskOn;
+  varying vec2 vMask;
+  float maskLevel() {
+    if (uMaskOn < 0.5) return 0.0;
+    if (vMask.x < 0.0 || vMask.y < 0.0 || vMask.x > 1.0 || vMask.y > 1.0) return 1.0;
+    return texture2D(uMask, vMask).r;
+  }
+`;
+const CITY_FRAG = /* glsl */ `
+  uniform float uTint;
+  uniform vec3 uTintColor;
+  uniform vec3 uPaper;
+  varying vec3 vColor;
+  ${MASK_GLSL}
+  void main() {
+    float m = maskLevel();
+    if (m > 0.75) discard;
+    vec3 c = mix(vColor, uTintColor, uTint);
+    c = mix(c, uPaper, smoothstep(0.0, 0.75, m) * 0.8);
+    gl_FragColor = vec4(c, 1.0);
+  }
+`;
+const CITY_SHADOW_VERT = /* glsl */ `
+  uniform mat4 uMatrix;
+  uniform vec4 uMaskXf;
+  attribute vec2 uv2;
+  varying vec2 vUv;
+  varying vec2 vMask;
+  void main() {
+    vUv = uv2;
+    vec4 p = modelMatrix * vec4(position, 1.0);
+    vMask = p.xy * uMaskXf.xy + uMaskXf.zw;
+    gl_Position = uMatrix * p;
+  }
+`;
+const CITY_SHADOW_FRAG = /* glsl */ `
   uniform float uOpacity;
   varying vec2 vUv;
+  ${MASK_GLSL}
   void main() {
+    float m = maskLevel();
+    if (m > 0.75) discard;
     float d = length(vUv - 0.5) * 2.0;
-    float a = (1.0 - smoothstep(0.35, 1.0, d)) * uOpacity;
+    float a = (1.0 - smoothstep(0.35, 1.0, d)) * uOpacity * (1.0 - smoothstep(0.0, 0.75, m));
     gl_FragColor = vec4(vec3(0.33, 0.36, 0.30) * a, a);
   }
 `;
-
 interface TileEntry {
   key: string;
   z: number;
@@ -104,17 +152,18 @@ export class CityLayer implements CustomLayerInterface {
 
   constructor(origin: [number, number]) {
     this.originLngLat = origin;
+    const mask = () => ({ uMask: { value: null }, uMaskOn: { value: 0 }, uMaskXf: { value: new THREE.Vector4() } });
     this.solidMat = new THREE.ShaderMaterial({
-      vertexShader: SOLID_VERT,
-      fragmentShader: SOLID_FRAG,
-      uniforms: { uMatrix: { value: new THREE.Matrix4() }, uHeight: { value: 1 }, uTint: { value: 0 }, uTintColor: { value: new THREE.Color('#ffffff') } },
+      vertexShader: CITY_VERT,
+      fragmentShader: CITY_FRAG,
+      uniforms: { uMatrix: { value: new THREE.Matrix4() }, uHeight: { value: 1 }, uTint: { value: 0 }, uTintColor: { value: new THREE.Color('#ffffff') }, uPaper: { value: new THREE.Color(PAPER) }, ...mask() },
       vertexColors: true,
       side: THREE.DoubleSide,
     });
     this.shadowMat = new THREE.ShaderMaterial({
-      vertexShader: SHADOW_VERT,
-      fragmentShader: SHADOW_FRAG,
-      uniforms: { uMatrix: { value: new THREE.Matrix4() }, uOpacity: { value: 0.22 } },
+      vertexShader: CITY_SHADOW_VERT,
+      fragmentShader: CITY_SHADOW_FRAG,
+      uniforms: { uMatrix: { value: new THREE.Matrix4() }, uOpacity: { value: 0.22 }, ...mask() },
       transparent: true,
       depthWrite: false,
       blending: THREE.CustomBlending,
@@ -123,6 +172,24 @@ export class CityLayer implements CustomLayerInterface {
     });
     this.setDynamicOrigin(origin);
     this.scene.add(this.dynamicRoot);
+  }
+
+  private maskTex: THREE.CanvasTexture | null = null;
+  private maskRect: [number, number, number, number] = [0, 0, 1, 1];
+  /** Hide the city outside the visible territory and fade areas offered for licence (null: show all). */
+  setMask(m: TerritoryMask | null) {
+    this.maskTex?.dispose();
+    this.maskTex = null;
+    if (m) {
+      const t = new THREE.CanvasTexture(m.canvas);
+      t.flipY = false;
+      t.minFilter = THREE.LinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.generateMipmaps = false;
+      this.maskTex = t;
+      this.maskRect = m.rect;
+    }
+    this.map?.triggerRepaint();
   }
 
   /** Material for dynamic meshes (vehicles). Shares the projection with the dynamic frame. */
@@ -355,9 +422,16 @@ export class CityLayer implements CustomLayerInterface {
       const age = Math.min(1, (now - tile.born) / 650);
       if (age < 1) animating = true;
       const grow = 1 - Math.pow(1 - age, 3);
+      // tile-local metres -> mask texture coordinates
+      const o = tile.origin.elements, [rx0, ry0, rx1, ry1] = this.maskRect;
       for (const child of tile.group.children) {
         const mat = (child as THREE.Mesh).material as THREE.ShaderMaterial;
         mat.uniforms.uMatrix.value.copy(m);
+        if (mat.uniforms.uMaskOn) {
+          mat.uniforms.uMask.value = this.maskTex;
+          mat.uniforms.uMaskOn.value = this.maskTex ? 1 : 0;
+          (mat.uniforms.uMaskXf.value as THREE.Vector4).set(o[0] / (rx1 - rx0), o[5] / (ry1 - ry0), (o[12] - rx0) / (rx1 - rx0), (o[13] - ry0) / (ry1 - ry0));
+        }
         if (mat.uniforms.uHeight) mat.uniforms.uHeight.value = this.heightScale * grow * flat;
         if (mat.uniforms.uTint) { mat.uniforms.uTint.value = 0.62 * this.networkT; (mat.uniforms.uTintColor.value as THREE.Color).set('#e9e6dd'); }
         if (mat.uniforms.uOpacity) mat.uniforms.uOpacity.value = 0.22 * this.heightScale * grow * flat;

@@ -121,9 +121,9 @@ These come from `src/game/test/balance.test.ts`: real Istanbul streets, the defa
 
 | Network | Riders/day | Operating result/day |
 |---|---|---|
-| 8 stops, Taksim → Karaköy, 4 buses, about 14 min headway | ~4,300 (weekday ~4,700) | **about +6,000** |
-| 3 stops, same 4 buses | ~170 | **about −2,100** |
-| Progression bot: 2 average lines, 6 buses, 2 areas (see `progression.test.ts`) | ~3,200 weekdays, ~2,300 weekends | **about +2,000** |
+| 8 stops, Taksim → Karaköy, 4 buses, about 14 min headway | ~3,000 | **about +3,800** |
+| 3 stops, same 4 buses | ~175 | **about −2,400** |
+| Progression bot: 2 lines, 7 buses, starting areas plus one licence (see `progression.test.ts`) | ~7,300 weekdays, ~5,500 weekends | **about +7,000** |
 
 A strong line repays a 75,000 bus in about two weeks of game time, before grants. An average network grows slowly, and loans (at about 10% a year) are the intended way to speed up. A badly planned line burns money quickly, and that is the main pressure on the player.
 
@@ -137,5 +137,6 @@ The balance tests guard these properties:
 ## Known tuning questions
 
 - Early growth leans on grants and loans. The progression test shows a scripted player expanding on day 0 (with a loan) and then growing steadily rather than stalling. If playtesting shows expansion still feels slow, the first levers are demand (`RATE` in `passengers.ts`) and vehicle prices, not the fare.
-- History: on 2026-10-30 trip rates were raised 25% (to about 2.7 trips per person per day, all modes) and driver wages cut from 27 to 24 an hour. Before that, average lines barely covered their costs and the scripted player stalled after its first expansion.
+- History: later on 2026-10-30 the maps grew about 2.5× and new companies start with ~15 km² of land. Destinations now compete across a larger city, so a line near the old map edge carries fewer riders than before (the Taksim → Karaköy reference fell from ~4,300 to ~3,000 a day). Demand was not retuned; the bigger start gives better corridors, and the progression bot does better than before.
+- Earlier on 2026-10-30 trip rates were raised 25% (to about 2.7 trips per person per day, all modes) and driver wages cut from 27 to 24 an hour. Before that, average lines barely covered their costs and the scripted player stalled after its first expansion.
 - Weekend demand is lower (shopping and leisure up, work down). Lines tuned for weekday peaks run emptier on weekends, which is intended.

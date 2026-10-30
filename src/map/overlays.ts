@@ -7,10 +7,13 @@ import { useUI } from '../state/store.ts';
 import { session, useSession } from '../app/session.ts';
 import type { Game } from '../game/engine.ts';
 import type { Pattern } from '../game/network.ts';
-import { projector, type LngLat } from '../game/world/graph.ts';
+import { nearestNode, projector, type LngLat } from '../game/world/graph.ts';
+import { latToMercY, lngToMercX } from '../geo/tiles.ts';
+import { PAPER } from './palette.ts';
+import { stopSpots } from '../game/spots.ts';
 import type { Region } from '../game/world/region.ts';
 import { STOP_RULES } from '../game/content.ts';
-import { licenceInfo } from '../game/progress.ts';
+import { licenceInfo, startingZones } from '../game/progress.ts';
 import { drivesOnLeft } from '../game/world/locale.ts';
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] };
@@ -42,6 +45,58 @@ function chevronImage() {
   ctx.lineTo(4.6, 8.8);
   ctx.stroke();
   return ctx.getImageData(0, 0, c.width, c.height);
+}
+
+/** blank paper with a faint dot grid: everything outside the area you can operate in */
+function paperImage() {
+  const r = 2, s = 14;
+  const c = document.createElement('canvas');
+  c.width = c.height = s * r;
+  const ctx = c.getContext('2d')!;
+  ctx.scale(r, r);
+  ctx.fillStyle = PAPER;
+  ctx.fillRect(0, 0, s, s);
+  ctx.fillStyle = '#d9d3c5';
+  ctx.beginPath();
+  ctx.arc(s / 2, s / 2, 1.1, 0, Math.PI * 2);
+  ctx.fill();
+  return ctx.getImageData(0, 0, c.width, c.height);
+}
+
+/** What the player can see: 0 operable, 1 offered (can be licensed next), 2 hidden. */
+export interface TerritoryMask {
+  /** mercator rectangle the canvas covers: x0, y0 (north-west), x1, y1 (south-east) */
+  rect: [number, number, number, number];
+  /** red channel: 0 operable, 128 offered, 255 hidden */
+  canvas: HTMLCanvasElement;
+}
+
+function drawMask(region: Region, level: Map<string, number>): TerritoryMask {
+  const b = region.bounds;
+  const rect: [number, number, number, number] = [lngToMercX(b.w), latToMercY(b.n), lngToMercX(b.e), latToMercY(b.s)];
+  const aspect = (rect[3] - rect[1]) / (rect[2] - rect[0]);
+  const W = 1024, H = Math.max(64, Math.round(W * aspect));
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, W, H);
+  const px = (ll: LngLat): [number, number] => [((lngToMercX(ll[0]) - rect[0]) / (rect[2] - rect[0])) * W, ((latToMercY(ll[1]) - rect[1]) / (rect[3] - rect[1])) * H];
+  for (const lv of [1, 0]) {
+    const col = lv === 0 ? '#000' : '#808080';
+    ctx.fillStyle = ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5;
+    for (const z of region.zones) {
+      if (level.get(z.id) !== lv) continue;
+      ctx.beginPath();
+      z.ring.forEach((ll, i) => (i ? ctx.lineTo(...px(ll)) : ctx.moveTo(...px(ll))));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+  return { rect, canvas: c };
 }
 
 function hatchImage(colour: string, alpha: number) {
@@ -79,6 +134,8 @@ export interface Overlays {
   setStopHover(id: number | null): void;
   refreshAll(): void;
   setZoneHover(id: string | null): void;
+  /** Receive the visible territory now and whenever it changes (null: show everything). */
+  watchMask(fn: (m: TerritoryMask | null) => void): void;
 }
 
 export function installOverlays(map: MlMap): Overlays {
@@ -86,10 +143,19 @@ export function installOverlays(map: MlMap): Overlays {
   let sideSign = 1; // +1 drive on the right, −1 on the left
   const lineOffset = () => zw((w) => ['*', sideSign, ['+', w * 0.62, ['*', ['get', 'lane'], w * 1.08]]] as ExpressionSpecification);
 
-  // ── game area: dim everything outside the mapped region
+  // ── territory: only the area you operate in is shown. Areas you can license next sit under
+  // a light veil; everything else, beyond them and outside the mapped region, is blank paper.
+  // (moved above the ground overlays once those exist, see below)
+  map.addImage('paper', paperImage(), { pixelRatio: 2 });
   map.addSource('region-mask', { type: 'geojson', data: EMPTY });
-  map.addLayer({ id: 'region-mask', type: 'fill', source: 'region-mask', paint: { 'fill-color': '#26302b', 'fill-opacity': 0.34 } }, before);
-  map.addLayer({ id: 'region-edge', type: 'line', source: 'region-mask', paint: { 'line-color': '#ffffff', 'line-width': 2, 'line-opacity': 0.7, 'line-dasharray': [3, 2] } }, before);
+  map.addSource('veil-offer', { type: 'geojson', data: EMPTY });
+  map.addSource('territory-edge', { type: 'geojson', data: EMPTY });
+  map.addLayer({ id: 'region-mask', type: 'fill', source: 'region-mask', paint: { 'fill-pattern': 'paper', 'fill-antialias': false } }, before);
+  map.addLayer({ id: 'veil-offer', type: 'fill', source: 'veil-offer', paint: { 'fill-color': PAPER, 'fill-opacity': 0.62, 'fill-antialias': false } }, before);
+  map.addLayer({
+    id: 'territory-edge', type: 'line', source: 'territory-edge', layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': ['match', ['get', 'kind'], 'own', '#2f9e6e', '#b9b2a2'], 'line-width': ['match', ['get', 'kind'], 'own', 2.6, 1.6], 'line-opacity': 0.9 },
+  }, before);
 
   // ── operating areas
   map.addImage('hatch-locked', hatchImage('#3a4740', 0.32), { pixelRatio: 2 });
@@ -127,6 +193,15 @@ export function installOverlays(map: MlMap): Overlays {
     },
   }, 'oneway-arrows');
 
+  // areas you can license next: name and price, always shown while playing
+  map.addLayer({
+    id: 'offer-label', type: 'symbol', source: 'zone-labels', filter: ['==', ['get', 'state'], 'available'], layout: {
+      visibility: 'none', 'text-field': ['get', 'label'], 'text-font': ['Figtree-SemiBold'], 'text-size': ['interpolate', ['linear'], ['zoom'], 12, 11, 16, 13.5],
+      'text-max-width': 10, 'text-allow-overlap': false, 'text-padding': 4,
+    },
+    paint: { 'text-color': '#7a5418', 'text-halo-color': 'rgba(255,255,255,0.95)', 'text-halo-width': 2 },
+  }, 'oneway-arrows');
+
   // ── traffic (simulated)
   map.addSource('traffic', { type: 'geojson', data: EMPTY });
   map.addLayer({
@@ -145,9 +220,10 @@ export function installOverlays(map: MlMap): Overlays {
     id: 'demand', type: 'heatmap', source: 'demand', layout: { visibility: 'none' },
     paint: {
       'heatmap-weight': ['get', 'w'],
-      'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 12, 0.5, 15, 0.8, 17, 1],
-      'heatmap-radius': ['interpolate', ['exponential', 2], ['zoom'], 12, 10, 14, 22, 15, 38, 17, 140, 19, 520],
-      'heatmap-opacity': 0.72,
+      // radius is set per region (see setRegion) to ~1.7 grid cells at every zoom
+      'heatmap-intensity': 1.0,
+      'heatmap-radius': 20,
+      'heatmap-opacity': 0.85,
       'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
         0, 'rgba(70,170,180,0)', 0.12, 'rgba(70,170,180,0.35)', 0.35, 'rgba(150,205,120,0.55)', 0.6, 'rgba(242,198,82,0.65)', 0.82, 'rgba(238,128,84,0.72)', 1, 'rgba(222,86,110,0.8)'],
     },
@@ -157,6 +233,9 @@ export function installOverlays(map: MlMap): Overlays {
   map.addSource('catchment', { type: 'geojson', data: EMPTY });
   map.addLayer({ id: 'catchment-fill', type: 'fill', source: 'catchment', paint: { 'fill-color': ['get', 'colour'], 'fill-opacity': ['get', 'fo'] } }, before);
   map.addLayer({ id: 'catchment-line', type: 'line', source: 'catchment', paint: { 'line-color': ['get', 'colour'], 'line-width': 1.6, 'line-opacity': ['get', 'lo'], 'line-dasharray': [3, 2] } }, before);
+
+  // the paper covers the ground overlays (areas, traffic, demand) but not your lines and stops
+  for (const id of ['region-mask', 'veil-offer', 'territory-edge']) map.moveLayer(id, before);
 
   // ── lines
   map.addImage('chev', chevronImage(), { pixelRatio: 3 });
@@ -225,16 +304,18 @@ export function installOverlays(map: MlMap): Overlays {
     paint: { 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-color': ['get', 'colour'], 'circle-stroke-width': 2.5, 'circle-pitch-alignment': 'viewport' },
   }, 'oneway-arrows');
 
-  // ── real-world stop locations nobody serves yet (suggestions while building)
+  // ── stop spots: where stops can be built (real stop locations plus generated ones);
+  // spots outside the licensed area are faded
   const hover = ['boolean', ['feature-state', 'hover'], false] as ExpressionSpecification;
+  const licensed = ['boolean', ['get', 'licensed'], true] as ExpressionSpecification;
   map.addSource('osm-stops', { type: 'geojson', data: EMPTY, promoteId: 'id' });
   map.addLayer({
     id: 'osm-stops-dot', type: 'circle', source: 'osm-stops', layout: { visibility: 'none' },
     paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, ['case', hover, 5.5, 3.4], 16, ['case', hover, 8, 5], 18, ['case', hover, 11, 7]],
-      'circle-color': 'rgba(255,255,255,0.9)',
-      'circle-stroke-color': ['case', hover, '#4fa3e0', '#7b8a82'],
-      'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 14, 1.2, 17, 2],
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, ['case', hover, 6, 4], 16, ['case', hover, 9, 6], 18, ['case', hover, 12, 8]],
+      'circle-color': ['case', licensed, 'rgba(255,255,255,0.95)', 'rgba(255,255,255,0.55)'],
+      'circle-stroke-color': ['case', hover, '#4fa3e0', licensed, '#3f7fb0', 'rgba(110,125,118,0.6)'],
+      'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 14, ['case', hover, 2.4, 1.6], 17, ['case', hover, 3, 2.2]],
       'circle-pitch-alignment': 'viewport',
     },
   }, 'oneway-arrows');
@@ -256,13 +337,14 @@ export function installOverlays(map: MlMap): Overlays {
   let trafficSlot = -1;
   let routeIds: string[] = [];
   let zoneHover: string | null = null;
-  let zoneChosen: string | null = null;
+  let zoneChosen: string[] = [];
   const src = (id: string) => map.getSource(id) as GeoJSONSource;
 
   const setRegion = (r: Region | null) => {
     region = r;
     if (!r) {
-      for (const s of ['region-mask', 'zones', 'zone-labels', 'demand', 'traffic', 'osm-stops']) src(s).setData(EMPTY);
+      for (const s of ['zones', 'zone-labels', 'demand', 'traffic', 'osm-stops']) src(s).setData(EMPTY);
+      refreshTerritory();
       return;
     }
     const country = r.spec.country;
@@ -272,24 +354,46 @@ export function installOverlays(map: MlMap): Overlays {
       for (const id of ['lines-halo', 'lines', 'lines-hit']) map.setPaintProperty(id, 'line-offset', lineOffset());
       for (const lane of [0, 1, 2]) map.setLayoutProperty(`lines-chevrons-${lane}`, 'icon-offset', chevronOffsets(lane));
     }
-    const b = r.bounds;
-    src('region-mask').setData({
-      type: 'Feature', properties: {},
-      geometry: { type: 'Polygon', coordinates: [[[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]], [[b.w, b.s], [b.w, b.n], [b.e, b.n], [b.e, b.s], [b.w, b.s]]] },
-    });
-    // demand: residents + jobs per grid cell (estimates)
+    // demand: residents + jobs per grid cell (estimates), lightly smoothed so it reads as a
+    // field rather than a lattice, and scaled to this area's busy cells (95th percentile)
+    // rather than to its single busiest one
     const d = r.demand;
     const proj = projector(r.spec.centre);
-    const feats: Feature<Point>[] = [];
-    let max = 1;
-    for (let i = 0; i < d.w * d.h; i++) max = Math.max(max, d.residents[i] + d.jobs[i] * 0.8);
+    // cells no bus can reach (e.g. across water from the road network) are left out
+    const raw = new Float32Array(d.w * d.h);
     for (let j = 0; j < d.h; j++)
       for (let i = 0; i < d.w; i++) {
         const k = j * d.w + i;
         const v = d.residents[k] + d.jobs[k] * 0.8;
-        if (v < max * 0.02) continue;
+        if (v > 0 && nearestNode(r.graph, r.index, d.x0 + (i + 0.5) * d.cell, d.y0 + (j + 0.5) * d.cell, 250) >= 0) raw[k] = v;
+      }
+    const field = new Float32Array(raw.length);
+    for (let j = 0; j < d.h; j++)
+      for (let i = 0; i < d.w; i++) {
+        let sum = 0, wsum = 0;
+        for (let dj = -1; dj <= 1; dj++)
+          for (let di = -1; di <= 1; di++) {
+            const ii = i + di, jj = j + dj;
+            if (ii < 0 || jj < 0 || ii >= d.w || jj >= d.h) continue;
+            const wt = (di ? 1 : 2) * (dj ? 1 : 2);
+            sum += raw[jj * d.w + ii] * wt;
+            wsum += wt;
+          }
+        field[j * d.w + i] = sum / wsum;
+      }
+    // kernel ~1.7 cells wide at every zoom so neighbouring cells merge into one field
+    // (MapLibre zoom uses 512 px tiles: metres per pixel = 78271.5 * cos(lat) / 2^zoom)
+    const cellPx0 = (1.7 * d.cell) / (78271.5 * Math.cos((r.spec.centre[1] * Math.PI) / 180));
+    map.setPaintProperty('demand', 'heatmap-radius', ['interpolate', ['exponential', 2], ['zoom'], 0, cellPx0, 22, cellPx0 * 2 ** 22]);
+    const busy = Array.from(field).filter((v) => v > 0).sort((a, b) => a - b);
+    const ref = Math.max(1, busy[Math.floor(busy.length * 0.95)] ?? 1);
+    const feats: Feature<Point>[] = [];
+    for (let j = 0; j < d.h; j++)
+      for (let i = 0; i < d.w; i++) {
+        const v = field[j * d.w + i];
+        if (v < ref * 0.12) continue;
         const ll = proj.toLngLat(d.x0 + (i + 0.5) * d.cell, d.y0 + (j + 0.5) * d.cell);
-        feats.push({ type: 'Feature', properties: { w: Math.min(1, v / (max * 0.6)) }, geometry: { type: 'Point', coordinates: ll } });
+        feats.push({ type: 'Feature', properties: { w: Math.min(1, v / ref) }, geometry: { type: 'Point', coordinates: ll } });
       }
     src('demand').setData({ type: 'FeatureCollection', features: feats });
     refreshZones();
@@ -297,13 +401,119 @@ export function installOverlays(map: MlMap): Overlays {
     trafficSlot = -1;
   };
 
+  /** 0 operable, 1 can be licensed next, 2 hidden; while choosing a home area, all of it is shown */
+  const zoneLevels = (r: Region): Map<string, number> => {
+    const level = new Map<string, number>();
+    const owned = new Set(game?.state.territory.owned ?? []);
+    const playing = useSession.getState().phase === 'playing' && !!game;
+    for (const z of r.zones) level.set(z.id, !playing || owned.has(z.id) ? 0 : z.neighbours.some((n) => owned.has(n)) ? 1 : 2);
+    return level;
+  };
+
+  // basemap labels (streets, places, water, one-way arrows) only inside what is shown
+  const LABEL_LAYERS = ['street-labels', 'water-labels', 'place-labels', 'city-labels', 'oneway-arrows'].filter((id) => map.getLayer(id));
+  const baseFilter = new Map(LABEL_LAYERS.map((id) => [id, map.getFilter(id)]));
+  let labelArea = '';
+  const setLabelArea = (area: Polygon['coordinates'][] | null) => {
+    const key = area ? JSON.stringify(area) : '';
+    if (key === labelArea) return;
+    labelArea = key;
+    for (const id of LABEL_LAYERS) {
+      const f = baseFilter.get(id);
+      const within = area ? (['within', { type: 'MultiPolygon', coordinates: area }] as unknown as ExpressionSpecification) : null;
+      map.setFilter(id, within ? (f ? (['all', f, within] as ExpressionSpecification) : within) : (f ?? null));
+    }
+  };
+
+  let maskKey = '';
+  let lastMask: TerritoryMask | null = null;
+  let maskSink: ((m: TerritoryMask | null) => void) | null = null;
+  const emitMask = (m: TerritoryMask | null) => {
+    lastMask = m;
+    maskSink?.(m);
+  };
+  const refreshTerritory = () => {
+    const phase = useSession.getState().phase;
+    if (!region || (phase !== 'playing' && phase !== 'setup')) {
+      for (const s of ['region-mask', 'veil-offer', 'territory-edge']) src(s).setData(EMPTY);
+      setLabelArea(null);
+      if (maskKey) emitMask(null);
+      maskKey = '';
+      return;
+    }
+    const r = region;
+    const level = zoneLevels(r);
+    const key = `${r.spec.id}|${[...level.values()].join('')}`;
+    if (key === maskKey) return;
+    maskKey = key;
+    const b = r.bounds;
+    const world: LngLat[] = [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]];
+    const box: LngLat[] = [[b.w, b.s], [b.w, b.n], [b.e, b.n], [b.e, b.s], [b.w, b.s]];
+    const poly = (rings: LngLat[][]): Feature<Polygon> => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: rings } });
+    const hidden = [poly([world, box])];
+    const offered: Feature<Polygon>[] = [];
+    const shown: Polygon['coordinates'][] = [];
+    for (const z of r.zones) {
+      const ring = [...z.ring, z.ring[0]];
+      const lv = level.get(z.id);
+      if (lv === 2) hidden.push(poly([ring]));
+      else {
+        shown.push([ring]);
+        if (lv === 1) offered.push(poly([ring]));
+      }
+    }
+    src('region-mask').setData({ type: 'FeatureCollection', features: hidden });
+    src('veil-offer').setData({ type: 'FeatureCollection', features: offered });
+    // outline where the operable area meets the rest: test a point just across each edge
+    const P = projector(r.spec.centre);
+    const seeds = r.zones.map((z) => ({ id: z.id, xy: P.toXY(z.seed[0], z.seed[1]) }));
+    const zoneAtXY = (x: number, y: number) => {
+      let best = '', bd = Infinity;
+      for (const s of seeds) {
+        const d = (s.xy[0] - x) ** 2 + (s.xy[1] - y) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = s.id;
+        }
+      }
+      return best;
+    };
+    const edges: Feature<LineString>[] = [];
+    for (const z of r.zones) {
+      const lv = level.get(z.id)!;
+      if (lv === 2) continue;
+      for (let i = 0; i < z.ring.length; i++) {
+        const a = z.ring[i], c = z.ring[(i + 1) % z.ring.length];
+        const [ax, ay] = P.toXY(a[0], a[1]), [cx, cy] = P.toXY(c[0], c[1]);
+        const len = Math.hypot(cx - ax, cy - ay);
+        if (len < 1) continue;
+        const mx = (ax + cx) / 2, my = (ay + cy) / 2, nx = -(cy - ay) / len, ny = (cx - ax) / len;
+        const p1 = zoneAtXY(mx + nx * 6, my + ny * 6), p2 = zoneAtXY(mx - nx * 6, my - ny * 6);
+        const [qx, qy] = p1 === z.id ? [mx - nx * 6, my - ny * 6] : [mx + nx * 6, my + ny * 6];
+        const out = p1 === z.id ? p2 : p1;
+        const ll = P.toLngLat(qx, qy);
+        const inside = ll[0] > b.w && ll[0] < b.e && ll[1] > b.s && ll[1] < b.n;
+        const outLv = inside ? level.get(out) ?? 2 : 2;
+        // the operable area's own border (green), and the outer edge of the offered areas (faint)
+        const kind = lv === 0 && outLv > 0 ? 'own' : lv === 1 && outLv === 2 ? 'offer' : '';
+        if (kind) edges.push({ type: 'Feature', properties: { kind }, geometry: { type: 'LineString', coordinates: [a, c] } });
+      }
+    }
+    src('territory-edge').setData({ type: 'FeatureCollection', features: edges });
+    setLabelArea(shown);
+    emitMask(drawMask(r, level));
+  };
+
   const refreshZones = () => {
+    refreshTerritory();
     if (!region) return;
     const owned = new Set(game?.state.territory.owned ?? []);
     const setup = useSession.getState().phase === 'setup';
+    const level = zoneLevels(region);
     const feats: Feature<Polygon>[] = [];
     const labels: Feature<Point>[] = [];
     for (const z of region.zones) {
+      if (level.get(z.id) === 2) continue; // hidden
       let state = 'locked';
       let label = z.name;
       if (setup) state = 'pick';
@@ -323,17 +533,22 @@ export function installOverlays(map: MlMap): Overlays {
     src('zone-labels').setData({ type: 'FeatureCollection', features: labels });
   };
 
+  /** Stop spots (the only places stops can be built), minus those taken by a built stop. */
   const refreshOsmStops = () => {
     if (!region) return;
     const stops = Object.values(game?.state.stops ?? {});
+    const owned = new Set(game?.state.territory.owned ?? []);
     const feats: Feature<Point>[] = [];
-    region.osmStops.forEach((o, i) => {
+    stopSpots(region).forEach((o, i) => {
       for (const s of stops) {
         const dx = (s.lngLat[0] - o.lngLat[0]) * 111320 * Math.cos((o.lngLat[1] * Math.PI) / 180);
         const dy = (s.lngLat[1] - o.lngLat[1]) * 110540;
         if (dx * dx + dy * dy < STOP_RULES.minSpacingM ** 2) return;
       }
-      feats.push({ type: 'Feature', id: i + 1, properties: { id: i + 1, name: o.name }, geometry: { type: 'Point', coordinates: o.lngLat } });
+      const z = game?.geo.zoneAt(o.lngLat);
+      const licensed = !z || owned.has(z.id);
+      if (z && !licensed && !z.neighbours.some((n) => owned.has(n))) return; // hidden area
+      feats.push({ type: 'Feature', id: i + 1, properties: { id: i + 1, name: o.name, licensed }, geometry: { type: 'Point', coordinates: o.lngLat } });
     });
     src('osm-stops').setData({ type: 'FeatureCollection', features: feats });
   };
@@ -456,16 +671,18 @@ export function installOverlays(map: MlMap): Overlays {
     map.setLayoutProperty('demand', 'visibility', vis(ui.overlays.demand || phase === 'setup'));
     const zones = phase === 'setup' || (phase === 'playing' && (ui.overlays.areas || ui.tool === 'stop' || ui.tool === 'depot' || sel?.kind === 'zone'));
     for (const id of ['zones-fill', 'zones-line', 'zones-label', 'zones-hatch']) map.setLayoutProperty(id, 'visibility', vis(zones));
+    map.setLayoutProperty('offer-label', 'visibility', vis(phase === 'playing' && !zones));
     map.setLayoutProperty('zones-hatch', 'visibility', vis(zones && phase === 'playing'));
     const building = phase === 'playing' && (ui.tool === 'route' || ui.tool === 'stop');
     map.setLayoutProperty('osm-stops-dot', 'visibility', vis(building));
     map.setLayoutProperty('osm-stops-name', 'visibility', vis(building));
     // zone highlight
-    const chosenNow = phase === 'setup' ? useSession.getState().homeZone : sel?.kind === 'zone' ? sel.id : null;
-    if (chosenNow !== zoneChosen) {
-      if (zoneChosen) map.setFeatureState({ source: 'zones', id: zoneChosen }, { chosen: false });
+    const home = phase === 'setup' ? useSession.getState().homeZone : null;
+    const chosenNow = home && region ? startingZones(region.zones, home) : sel?.kind === 'zone' ? [sel.id] : [];
+    if (chosenNow.join() !== zoneChosen.join()) {
+      for (const id of zoneChosen) map.setFeatureState({ source: 'zones', id }, { chosen: false });
       zoneChosen = chosenNow;
-      if (zoneChosen) map.setFeatureState({ source: 'zones', id: zoneChosen }, { chosen: true });
+      for (const id of zoneChosen) map.setFeatureState({ source: 'zones', id }, { chosen: true });
     }
   };
 
@@ -504,9 +721,11 @@ export function installOverlays(map: MlMap): Overlays {
     if (s.overlays.traffic && !p.overlays.traffic) refreshTraffic(true);
     if (s.selection !== p.selection || s.hover !== p.hover || s.draft !== p.draft || s.overlays !== p.overlays || s.tool !== p.tool) applyStates();
   });
-  attach(session.game);
-
-  return {
+  const api: Overlays = {
+    watchMask(fn) {
+      maskSink = fn;
+      fn(lastMask);
+    },
     setStopHover(id) {
       if (id === stopHover) return;
       if (stopHover) map.setFeatureState({ source: 'osm-stops', id: stopHover }, { hover: false });
@@ -539,4 +758,6 @@ export function installOverlays(map: MlMap): Overlays {
       if (zoneHover) map.setFeatureState({ source: 'zones', id: zoneHover }, { hover: true });
     },
   };
+  attach(session.game);
+  return api;
 }

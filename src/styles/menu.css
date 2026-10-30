@@ -152,3 +152,4 @@
 @media (prefers-reduced-motion: reduce) {
   .mn-title h1, .mn-title p, .mn-start .mn-menu, .mn-start .mn-item, .mn-foot, .mn-flow .mn-panel { animation: none; }
 }
+.mn-zone-start { display: block; margin-top: 6px; font-size: 11.5px; font-weight: 700; color: var(--accent, #2f7fd6); line-height: 1.35; }

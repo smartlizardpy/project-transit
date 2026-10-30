@@ -108,12 +108,13 @@ for (let i = 0; i < 3; i++) await buyButtons.nth(Math.min(2, nBuy - 1)).click().
 console.log(await state());
 await page.keyboard.press('g');
 
-step('Draw a line with the line tool (click streets to build stops)');
+step('Draw a line with the line tool (click stop spots along a corridor)');
 await page.keyboard.press('r');
 await page.waitForTimeout(200);
 // pick a corridor: route between two main-road nodes ~2.5 km apart and take points every ~420 m
 const corridor = await page.evaluate(async () => {
-  const { routeWithFallback } = await import('/src/game/world/graph.ts');
+  const { routeWithFallback, distanceM } = await import('/src/game/world/graph.ts');
+  const { stopSpots } = await import('/src/game/spots.ts');
   const g = window.__game;
   const gr = g.region.graph;
   const owned = new Set(g.state.territory.owned);
@@ -147,7 +148,15 @@ const corridor = await page.evaluate(async () => {
     acc += Math.hypot(gr.x[q] - gr.x[p], gr.y[q] - gr.y[p]);
     if (acc >= 330) { pts.push([gr.lng[q], gr.lat[q]]); acc = 0; }
   }
-  return pts;
+  // stops can only go on stop spots: take the licensed spot nearest each corridor point
+  const spots = stopSpots(g.region).filter((s) => owned.has(g.geo.zoneAt(s.lngLat).id));
+  const out = [];
+  for (const p of pts) {
+    let best = null, bd = 220;
+    for (const s of spots) { const d = distanceM(s.lngLat, p); if (d < bd) { bd = d; best = s.lngLat; } }
+    if (best && !out.some((o) => distanceM(o, best) < 150)) out.push(best);
+  }
+  return out;
 });
 console.log('corridor points', corridor.length);
 for (const ll of corridor) {

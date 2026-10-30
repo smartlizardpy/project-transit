@@ -14,6 +14,7 @@ import { ECON } from '../game/content.ts';
 import { activeSeq, addWaypoint, appendStop, computePreview, useDraftPreview } from '../ui/routeDraft.ts';
 import { focusPoint, fitPoints } from '../ui/camera.ts';
 import { installShowcase } from './showcase.ts';
+import { stopSpots, type StopSpot } from '../game/spots.ts';
 
 export interface Controller {
   vehicles: VehicleLayer;
@@ -25,6 +26,7 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 export function installController(map: MlMap, city: CityLayer): Controller {
   const overlays = installOverlays(map);
+  overlays.watchMask((m) => city.setMask(m));
   const container = map.getContainer();
   const vehicles = new VehicleLayer(city, container);
   const markers = new MarkerLayer(map, { stop: (id, e) => onStopClick(id, e), depot: (id) => onDepotClick(id) });
@@ -208,12 +210,30 @@ export function installController(map: MlMap, city: CityLayer): Controller {
   const stopLabel = (c: ReturnType<typeof checkStop>) =>
     c.ok ? `<b>${esc(c.name)}</b><span>${c.road ? `${esc(c.road)} · ` : ''}${game!.money(ECON.stopCost)}</span>` : `<em>${esc(c.reason ?? 'Not possible here')}</em>`;
 
-  /** Nearest suggested real-world stop location under the pointer (screen px). */
-  const osmAt = (pt: { x: number; y: number }) => {
-    const f = map.queryRenderedFeatures([[pt.x - 9, pt.y - 9], [pt.x + 9, pt.y + 9]], { layers: ['osm-stops-dot'] })[0];
-    if (!f || !game) return null;
-    const o = game.region.osmStops[Number(f.properties?.id) - 1];
-    return o ? { id: Number(f.properties?.id), stop: o } : null;
+  /** The stop spot under the pointer (stops can only be built on spots). */
+  const spotAt = (pt: { x: number; y: number }) => {
+    if (!game) return null;
+    const fs = map.queryRenderedFeatures([[pt.x - 14, pt.y - 14], [pt.x + 14, pt.y + 14]], { layers: ['osm-stops-dot'] });
+    let best: { id: number; stop: StopSpot } | null = null, bestD = Infinity;
+    const spots = stopSpots(game.region);
+    for (const f of fs) {
+      const id = Number(f.properties?.id);
+      const s = spots[id - 1];
+      if (!s) continue;
+      const p = map.project(s.lngLat);
+      const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+      if (d < bestD) {
+        bestD = d;
+        best = { id, stop: s };
+      }
+    }
+    return best;
+  };
+  let lastSpotHint = 0;
+  const spotHint = () => {
+    if (performance.now() - lastSpotHint < 4000) return;
+    lastSpotHint = performance.now();
+    useUI.getState().notify('Stops can only be built on the stop spots: the round markers along the streets. Faded spots are outside your licensed area.', 'info');
   };
 
   /** Build a stop where the player clicked (snapped to the street), or explain why not. */
@@ -251,22 +271,30 @@ export function installController(map: MlMap, city: CityLayer): Controller {
       overlays.setZoneHover(null);
       if (ui.tool === 'route' || ui.tool === 'stop') {
         const hoveredStop = ui.hover?.kind === 'stop' ? game.state.stops[ui.hover.id] : null;
-        const osm = hoveredStop ? null : osmAt(e.point);
-        overlays.setStopHover(osm?.id ?? null);
+        const spot = hoveredStop ? null : spotAt(e.point);
+        overlays.setStopHover(spot?.id ?? null);
         if (hoveredStop) {
           markers.showGhost(null, false, '');
           if (ui.tool === 'route') setHoverTarget(hoveredStop.node);
           container.classList.add('hovering');
           return;
         }
-        const c = checkStop(game.state, game.region, game.geo, osm ? osm.stop.lngLat : at);
+        if (!spot) {
+          // only stop spots (and existing stops) can be picked
+          markers.showGhost(null, false, '');
+          if (ui.tool === 'route') setHoverTarget(null);
+          container.classList.remove('hovering');
+          return;
+        }
+        const c = checkStop(game.state, game.region, game.geo, spot.stop.lngLat);
         const near = c.clash ? game.state.stops[c.clash] : null;
         if (near && ui.tool === 'route') {
           markers.showGhost(null, false, '');
           setHoverTarget(near.node);
         } else {
-          const label = near ? `<em>${esc(c.reason ?? '')}</em>` : osm && c.ok ? `<b>${esc(osm.stop.name)}</b><span>Real stop location · ${game.money(ECON.stopCost)}</span>` : stopLabel(c);
-          markers.showGhost(c.node >= 0 ? c.lngLat : at, c.ok, label);
+          const what = spot.stop.osm ? 'Real stop location' : (c.road ?? 'Stop spot');
+          const label = near ? `<em>${esc(c.reason ?? '')}</em>` : c.ok ? `<b>${esc(spot.stop.name || c.name)}</b><span>${esc(what)} · ${game.money(ECON.stopCost)}</span>` : stopLabel(c);
+          markers.showGhost(c.node >= 0 ? c.lngLat : spot.stop.lngLat, c.ok, label);
           if (ui.tool === 'route') setHoverTarget(c.ok ? c.node : null);
         }
         container.classList.toggle('hovering', c.ok || !!near);
@@ -305,6 +333,26 @@ export function installController(map: MlMap, city: CityLayer): Controller {
     else if (ui.tool !== 'select') ui.setTool('select');
   });
 
+  // keep the camera over the area you can see: panning out into the blank paper eases back
+  map.on('moveend', (e) => {
+    if (!game || useSession.getState().phase !== 'playing' || !(e as { originalEvent?: unknown }).originalEvent) return;
+    const owned = game.state.territory.owned;
+    let w = Infinity, s = Infinity, east = -Infinity, n = -Infinity;
+    for (const z of game.region.zones) {
+      if (!owned.includes(z.id) && !z.neighbours.some((id) => owned.includes(id))) continue;
+      for (const [lng, lat] of z.ring) {
+        w = Math.min(w, lng);
+        east = Math.max(east, lng);
+        s = Math.min(s, lat);
+        n = Math.max(n, lat);
+      }
+    }
+    if (!Number.isFinite(w)) return;
+    const c = map.getCenter();
+    const lng = Math.min(east, Math.max(w, c.lng)), lat = Math.min(n, Math.max(s, c.lat));
+    if (lng !== c.lng || lat !== c.lat) map.easeTo({ center: [lng, lat], duration: 600 });
+  });
+
   map.on('click', (e: MapMouseEvent) => {
     const ui = useUI.getState();
     const phase = useSession.getState().phase;
@@ -320,23 +368,28 @@ export function installController(map: MlMap, city: CityLayer): Controller {
       if (vid) return ui.select({ kind: 'vehicle', id: vid });
       const f = map.queryRenderedFeatures([[e.point.x - 5, e.point.y - 5], [e.point.x + 5, e.point.y + 5]], { layers: ['lines-hit'] })[0];
       if (f?.properties?.id) return ui.select({ kind: 'line', id: f.properties.id as string });
-      if (ui.overlays.areas || ui.selection?.kind === 'zone') {
+      if (game.geo.inBounds(at, 0)) {
         const z = game.geo.zoneAt(at);
-        if (game.geo.inBounds(at, 0)) return ui.select({ kind: 'zone', id: z.id });
+        const owned = game.state.territory.owned;
+        // an area offered for licence (under the light veil) opens its licence card
+        const offered = !owned.includes(z.id) && z.neighbours.some((n) => owned.includes(n));
+        if (offered || ui.overlays.areas || ui.selection?.kind === 'zone') return ui.select({ kind: 'zone', id: z.id });
       }
       if (ui.selection) ui.select(null);
       return;
     }
     if (ui.tool === 'stop') {
-      const osm = osmAt(e.point);
-      const res = buildStopAt(osm ? osm.stop.lngLat : at, osm?.stop.name);
+      const spot = spotAt(e.point);
+      if (!spot) return spotHint();
+      const res = buildStopAt(spot.stop.lngLat, spot.stop.name || undefined);
       if (res && !res.built) ui.select({ kind: 'stop', id: res.id });
       return;
     }
     if (ui.tool === 'route') {
       if (e.originalEvent.shiftKey || e.originalEvent.altKey) return addVia(e.point, at);
-      const osm = osmAt(e.point);
-      const res = buildStopAt(osm ? osm.stop.lngLat : at, osm?.stop.name);
+      const spot = spotAt(e.point);
+      if (!spot) return spotHint();
+      const res = buildStopAt(spot.stop.lngLat, spot.stop.name || undefined);
       if (res) addToDraft(res.id);
       return;
     }

@@ -3,15 +3,10 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildRegion } from '../world/regionBuilder.ts';
 import type { RegionData, RegionSpec } from '../world/region.ts';
+import { PRESETS, presetSpec } from '../../app/presets.ts';
 
-export const ISTANBUL_SPEC: RegionSpec = {
-  id: 'istanbul-galata',
-  city: 'İstanbul',
-  area: 'Beyoğlu & Fatih',
-  country: 'TR',
-  centre: [28.9766, 41.0262],
-  tiles: [9509, 9510, 9511, 9512].flatMap((x) => [6140, 6141, 6142].map((y) => [x, y] as [number, number])),
-};
+/** the İstanbul starting city exactly as players get it (bundled tiles) */
+export const ISTANBUL_SPEC: RegionSpec = presetSpec(PRESETS[0]);
 
 let cached: RegionData | null = null;
 export function istanbulRegion(): RegionData {

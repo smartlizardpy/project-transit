@@ -65,3 +65,6 @@ export function pickWeighted<T>(items: [T, number][], r: number): T {
   }
   return items[items.length - 1][0];
 }
+
+/** blank paper shown outside the area a company can see */
+export const PAPER = '#efebe3';

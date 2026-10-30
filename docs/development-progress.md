@@ -48,7 +48,7 @@ Last updated: 2026-10-30.
 | Traffic conditions (simulated and labelled as such) | ✅ | `core.test.ts` (peak slower than night; journeys longer at 08:00); legend says "a model, not live data" |
 | Service quality (waiting, journey time, crowding, reliability, price) | ✅ | satisfaction popover shows the worst component and advice |
 | Reputation | ✅ | daily drift towards satisfaction; penalties for missed departures |
-| Territory expansion (adjacent areas, cost, reputation gate) | ✅ | `core.test.ts`; `progression.test.ts` (a scripted player licenses a second area and serves it) |
+| Territory expansion (adjacent areas, cost, reputation gate) | ✅ | starts with ~15 km² of land (`startingZones`); `core.test.ts`; `progression.test.ts` (a scripted player licenses a new area and serves it). Only the operable area and the areas for sale are shown. |
 | Objectives with grants | ✅ | 12 objectives; grants are not counted as operating income |
 | Meaningful decisions (fare, stop spacing, vehicle choice, timetable, loans) | ✅ | fare elasticity in the demand model; vehicle trade-offs in `docs/economy.md` |
 
@@ -82,17 +82,17 @@ Last updated: 2026-10-30.
 | Economy balancing | 🟡 | `docs/economy.md`; `balance.test.ts`; `progression.test.ts`. Retuned 2026-10-30. Pacing needs human playtesting. |
 | Performance profiling | ✅ | `perf.test.ts`: 70 buses on 10 lines take about 12 ms of CPU per real second at the fastest speed (budget 120 ms); `serialize` about 1 ms |
 | Save/load stability | ✅ | determinism after load; migration rejects newer versions; areas reconciled on load |
-| Visual regression review | ✅ | `pnpm shots` captures 16 screens at 3 sizes; reviewed 2026-10-30 |
+| Visual regression review | ✅ | `pnpm shots` captures 17 screens at 3 sizes; reviewed 2026-10-30 (to regenerate for the territory view) |
 | Fixes for interaction and simulation defects | ✅ | see the log below |
 
 ## Worldwide play
 
 | Location | Status | Notes |
 |---|---|---|
-| İstanbul (Beyoğlu & Fatih) | ✅ | bundled tiles, works offline; dense one-way streets, bridges |
+| İstanbul (Beyoğlu & Fatih) | ✅ | 30 bundled tiles (`scripts/bundle-tiles.mjs`), works offline; dense one-way streets, bridges |
 | Durham, UK (small town) | ✅ | downloaded from OpenFreeMap; left-hand traffic, £, rural roads; line built and running (`scripts/dev/scene.mjs … 1`) |
 | Barcelona (Eixample grid, €) | ✅ | downloaded; line built and running; one-way grid warnings are correct |
-| Tokyo (Shibuya, ¥, left-hand traffic) | ✅ | downloaded; line built and running |
+| Tokyo (Shibuya, ¥, left-hand traffic) | ✅ | downloaded (25 tiles, 1.6 s cold load in the browser); line built and running; starting area 15.2 km² |
 | Hamburg (Altstadt & St. Pauli, €) | ✅ | downloaded; line built and running, audit clean |
 | Any place via search (Nominatim, on Enter only) | 🟡 | search UI works in the browser; allowed in the desktop CSP |
 
@@ -143,3 +143,19 @@ Fallbacks:
   - 3D buses keep left in left-hand-traffic countries (UK, Japan), matching the line overlays.
   - Desktop quitting: macOS ⌘Q used to terminate at once, skipping the save. The app menu's Quit item is now our own: it asks the game to save (at most 3 s), then exits, with a 5 s fallback.
   - Native save round trip: `scripts/dev/native-saves.sh` covers three launches of the release app. All steps pass.
+  - Start screen: the menu city runs a real bus company behind the menu, and the camera follows its buses. New company setup is three short steps: place, home area, company.
+  - Esc in the game works again: it leaves the current tool, then opens the menu.
+  - From the player's feedback:
+    - **Stop spots.** Stops can only be built on stop spots: every real bus stop in OpenStreetMap, plus generated spots about every 300 m along main roads, and on residential streets where nothing else is within 450 m (`src/game/spots.ts`).
+      - Clicking anywhere else builds nothing and says why.
+      - `spots.test.ts` checks the spacing. It also checks that every generated spot is buildable, and that 99.9% of homes and jobs a bus can reach are within 500 m of a spot.
+    - **Line editor tray.** The instructions now sit in their own strip above the tray, so they are never cut off. The stats read "Outbound / return", "Round trip" and "Buses for a 10-min service".
+    - **Demand overlay.** It was a grid of uniform dots. It is now a smooth field, scaled to the busy 95th percentile of the area, with the heat radius following the 150 m cells at every zoom. Homes the road network cannot reach, such as across the water, are left out.
+    - **Bigger maps.** Each preset city covers about 2.5× the area (İstanbul: Zeytinburnu to Ortaköy, 6×5 tiles, 30 bundled offline). Custom places use about 9–10 km squares.
+    - **Bigger start.** A new company starts with its home area plus the areas around it: about 15 km² of land (water does not count). Licence prices and reputation gates count only areas bought after founding.
+    - **Only your territory is shown.**
+      - Your areas are drawn in full, with a green border.
+      - Areas you can license next sit under a light veil, with their name and price; clicking one opens its licence.
+      - Everything else is blank paper: map, 3D buildings (masked in the city shader), labels, stop spots and landmarks.
+      - Panning far into the paper eases the camera back.
+    - **Economy check after the bigger maps.** Destinations now compete across a larger city, so the reference Taksim → Karaköy line carries about 3,000 riders a day (was 4,300) and makes about +3,800 a day (was +6,000). The 40-day progression bot does better than before, about +7,000 a day with 2 lines and 7 buses, because the bigger start gives it better corridors. See `docs/economy.md`.

@@ -5,7 +5,7 @@ import { EDGE_ONEWAY, head, tail, route as routeRoad, type RoadGraph } from '../
 import { departures, flatTimetable } from '../timetable.ts';
 import { arrivalsAt, vehicleStops } from '../eta.ts';
 import { dayTotals, reconcile } from '../finance.ts';
-import { licenceInfo } from '../progress.ts';
+import { landOf, licenceInfo, licencesBought, startingZones, START_AREA_KM2 } from '../progress.ts';
 import { DAY, HOUR, MODEL } from '../content.ts';
 import { TripState } from '../types.ts';
 
@@ -325,11 +325,17 @@ describe('finance', () => {
 describe('territory', () => {
   it('blocks stops outside owned zones, and licences must be adjacent', () => {
     const game = newGame({ allZones: false, extraFunds: 2_000_000 });
-    const owned = game.state.territory.owned[0];
     const r = game.region;
-    const home = r.zones.find((z) => z.id === owned)!;
-    const neigh = r.zones.find((z) => home.neighbours.includes(z.id))!;
-    const far = r.zones.find((z) => z.id !== owned && !home.neighbours.includes(z.id))!;
+    const start = game.state.territory.owned.slice();
+    // a new company starts with its home area and the areas around it, about 15 km²
+    expect(start).toEqual(startingZones(r.zones, game.state.territory.home));
+    expect(start.length).toBeGreaterThan(2);
+    const km2 = start.reduce((a, id) => a + landOf(r.zones.find((z) => z.id === id)!), 0);
+    expect(km2).toBeGreaterThan(START_AREA_KM2 - 4);
+    expect(km2).toBeLessThan(START_AREA_KM2 + 5);
+    const touches = (z: { neighbours: string[] }) => start.some((id) => z.neighbours.includes(id));
+    const neigh = r.zones.find((z) => !start.includes(z.id) && touches(z))!;
+    const far = r.zones.find((z) => !start.includes(z.id) && !touches(z));
 
     const tryZone = (zid: string, expectOk: boolean | null) => {
       const z = r.zones.find((x) => x.id === zid)!;
@@ -347,7 +353,7 @@ describe('territory', () => {
     const rej = tryZone(neigh.id, null);
     expect(rej.res).not.toBeNull();
     if (!rej.res!.ok) expect(rej.res!.error).toMatch(/licen/i);
-    expect(game.state.territory.owned).toEqual([owned]);
+    expect(game.state.territory.owned).toEqual(start);
 
     // non-adjacent purchase fails
     if (far) {
@@ -363,11 +369,12 @@ describe('territory', () => {
   it('buying an adjacent zone deducts money and allows stops there', () => {
     const game = newGame({ allZones: false, extraFunds: 2_000_000 });
     game.state.company.reputation = 100; // isolate the money rule from reputation gating
-    const owned = game.state.territory.owned[0];
-    const home = game.region.zones.find((z) => z.id === owned)!;
-    const target = game.region.zones.find((z) => home.neighbours.includes(z.id))!;
+    const owned = game.state.territory.owned;
+    const target = game.region.zones.find((z) => !owned.includes(z.id) && z.neighbours.some((id) => owned.includes(id)))!;
     const info = licenceInfo(game, target.id)!;
     expect(info.adjacent).toBe(true);
+    // the first licence after founding is priced as the first purchase
+    expect(licencesBought(game.state)).toBe(0);
     const b0 = game.state.finance.balance;
     const res = game.buyLicence(target.id);
     expect(res.ok).toBe(true);

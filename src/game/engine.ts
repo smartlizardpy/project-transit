@@ -12,7 +12,7 @@ import { DemandModel, abandonAndReplan, generatePassengers, offloadAll, paxTotal
 import { bandAt, buildRunProfile, defaultTimetable, generateTrips, normaliseBands, requirement, scheduleAt, type Requirement, type RunProfile } from './timetable.ts';
 import { abortService, detachFromPattern, dispatch, minuteVehicles, sendToDepot, startDeadhead, tickVehicle, vehicleNode, vehicleXY } from './vehicles.ts';
 import { compactLedger, emptyFinance, flushHour, post, reconcile } from './finance.ts';
-import { checkObjectives, closeDay, licenceInfo, notify, routeWindow, unlockedModels } from './progress.ts';
+import { checkObjectives, closeDay, licenceInfo, notify, startingZones, routeWindow, unlockedModels } from './progress.ts';
 import { currencyFor, formatMoney, type Currency } from './currency.ts';
 import { DAY, DT, ECON, HOUR, LINE_COLOURS, MODEL, SERVICE, SPEEDS, STARTING_REPUTATION } from './content.ts';
 import { SAVE_VERSION, TripState, type GameState, type Id, type Route, type RouteKind, type Stop, type Timetable, type Trip, type Vehicle } from './types.ts';
@@ -54,7 +54,7 @@ export function newGameState(o: NewGameOptions): GameState {
     pax: { waiting: {}, onboard: {}, acc: {} },
     finance: emptyFinance(ECON.startingFunds),
     stats: { hours: [], routeHours: {}, days: [], total: { trips: 0, boardings: 0, abandoned: 0 } },
-    territory: { owned: [o.homeZone], home: o.homeZone },
+    territory: { owned: startingZones(o.region.zones, o.homeZone), home: o.homeZone, start: startingZones(o.region.zones, o.homeZone) },
     objectives: {},
     notifications: [],
     counters: { stop: 0, route: 0, vehicle: 0, depot: 0, ledger: 0, trip: 0, notification: 0 },
@@ -531,6 +531,7 @@ export class Game {
     const valid = new Set(this.region.zones.map((z) => z.id));
     for (const st of Object.values(this.state.stops)) if (!valid.has(st.zone)) st.zone = this.geo.zoneAt(st.lngLat).id;
     for (const d of Object.values(this.state.depots)) if (!valid.has(d.zone)) d.zone = this.geo.zoneAt(d.lngLat).id;
+    if (t.start?.some((id) => !valid.has(id))) t.start = t.start.filter((id) => valid.has(id));
     if (t.owned.every((id) => valid.has(id)) && valid.has(t.home)) return;
     const owned = new Set(t.owned.filter((id) => valid.has(id)));
     for (const st of Object.values(this.state.stops)) owned.add(st.zone);

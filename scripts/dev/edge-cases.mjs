@@ -53,9 +53,17 @@ const hoverAt = async (ll, name) => {
 };
 await page.keyboard.press('b');
 await hoverAt([28.9768, 41.0168], '3-water');
-const outside = await page.evaluate(() => {
-  const g = window.__game, gr = g.region.graph, owned = new Set(g.state.territory.owned);
-  for (let e = 0; e < gr.m; e += 7) { const v = gr.ea[e]; if (gr.cls[e] >= 2 && gr.cls[e] <= 4 && !owned.has(g.geo.zoneAt([gr.lng[v], gr.lat[v]]).id)) return [gr.lng[v], gr.lat[v]]; }
+await page.mouse.click(801, 451); // not a stop spot: nothing is built and a hint explains why
+await page.waitForTimeout(300);
+console.log('click water ->', await page.evaluate(() => ({ stops: Object.keys(window.__game.state.stops).length, toast: window.__ui.getState().toast?.text })));
+// a stop spot in an area offered for licence (spots in hidden areas are not shown at all)
+const outside = await page.evaluate(async () => {
+  const { stopSpots } = await import('/src/game/spots.ts');
+  const g = window.__game, owned = new Set(g.state.territory.owned);
+  for (const s of stopSpots(g.region)) {
+    const z = g.geo.zoneAt(s.lngLat);
+    if (!owned.has(z.id) && z.neighbours.some((n) => owned.has(n))) return s.lngLat;
+  }
   return null;
 });
 await hoverAt(outside, '4-outside-licence');

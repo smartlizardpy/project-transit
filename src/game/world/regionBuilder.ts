@@ -528,6 +528,7 @@ function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], _spec: Regio
   // stats from demand cells (nearest seed = Voronoi membership)
   const res = new Float64Array(seeds.length), jobs = new Float64Array(seeds.length);
   const wsum = new Float64Array(seeds.length), wx = new Float64Array(seeds.length), wy = new Float64Array(seeds.length);
+  const land = new Float64Array(seeds.length); // cells with streets or buildings
   for (let cy = 0; cy < grid.h; cy++)
     for (let cx = 0; cx < grid.w; cx++) {
       const k = cy * grid.w + cx;
@@ -537,6 +538,7 @@ function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], _spec: Regio
       const z = nearestSeed(seeds, x, y);
       res[z] += grid.residents[k];
       jobs[z] += grid.jobs[k];
+      land[z] += (grid.cell * grid.cell) / 1e6;
       wsum[z] += w;
       wx[z] += w * x;
       wy[z] += w * y;
@@ -569,6 +571,7 @@ function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], _spec: Regio
       seed: P.toLngLat(s.x, s.y),
       neighbours: [],
       areaKm2: Math.abs(area) / 1e6,
+      landKm2: Math.min(Math.abs(area) / 1e6, land[i]),
       residents: Math.round(res[i]),
       jobs: Math.round(jobs[i]),
       named: s.named,
