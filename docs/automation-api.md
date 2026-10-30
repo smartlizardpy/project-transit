@@ -2,13 +2,13 @@
 
 How Automation Studio workflows run, what they can read and do, and the rules that keep them safe. The node and function tables at the end are generated from the code (`node scripts/dev/automation-reference.mjs`).
 
-Engine code: `src/game/automation/` (types, registry, validate, executor, manage, templates, lab, live, events) and `src/game/expr.ts`. Commands: `src/game/commands.ts`. Tests: `src/game/test/automation.test.ts`, `src/game/test/commands.test.ts`.
+Engine code: `src/game/automation/` (types, registry, validate, executor, manage, templates, lab, live, events, city) and `src/game/expr.ts`. Commands: `src/game/commands.ts`. Tests: `src/game/test/automation.test.ts`, `src/game/test/automation-city.test.ts`, `src/game/test/commands.test.ts`.
 
 ## How a workflow runs
 
 - A workflow is a graph of nodes saved with the company (`state.automation`). Connections carry values from an output to an input; each input takes one connection.
 - **Game time only.** Schedules and conditions are checked once per game minute, inside the simulation step. Pausing the game pauses automation; faster speeds run it faster. Nothing uses wall-clock timers.
-- **Simulation events** (a bus arrives, departs, breaks down; a departure is missed; the day ends) are queued in the save and handled at the next game minute, so a reload neither loses nor repeats them. Events are only recorded when an enabled workflow listens for that kind.
+- **Simulation events** (a bus arrives, departs, breaks down; a departure is missed; the day ends; tomorrow's forecast comes out at 18:00; the weather changes on the hour; an event is announced) are queued in the save and handled at the next game minute, so a reload neither loses nor repeats them. Events are only recorded when an enabled workflow listens for that kind.
 - **One run** evaluates every enabled node in a fixed topological order. Nodes hanging off a trigger that did not fire receive *not active* and are skipped, as are nodes on the branch an If did not take. Nodes not attached to any trigger (shared data) run on every trigger. Data nodes have an optional **After** input: connect a trigger to it and the node reads its figures only when that trigger fired (the templates do this, so the canvas shows what starts what). The same state always gives the same result; runs are part of the deterministic simulation and continue identically after a reload (tested).
 - **Validation** (`validate.ts`) runs before every run and live in the editor: required inputs, port types, loops, unknown or deleted lines/stops/buses/depots, expression syntax, size limits. An enabled workflow with problems records a failed run instead of acting.
 
@@ -23,13 +23,18 @@ Values are numbers, yes/no, text, records and lists. Records are plain objects w
 | bus (`vehicle`) | `id`, `fleetNo`, `model`, `capacity`, `line`, `lineNumber`, `status`, `statusLabel`, `load`, `occupancy` (%), `condition` (%), `delay` (min), `depot`, `depotName`, `spare`, `free` (could start an extra trip now), `carrying` |
 | company | `balance`, `reputation`, `level`, `fare`, `resultToday`, `buses`, `lines` |
 | time | `t`, `time` (HH:MM), `hour`, `minute`, `weekday`, `weekend`, `day` |
-| event | depends on the trigger, e.g. `vehicle`, `fleetNo`, `line`, `lineNumber`, `stop`, `stopName`, `load`, `occupancy`, `delay`, `trip`; the end-of-day event carries the day's `boardings`, `journeys`, `gaveUp`, `trips`, `missed`, `onTime`, `satisfaction`, `fares`, `costs`, `result` |
+| event | depends on the trigger, e.g. `vehicle`, `fleetNo`, `line`, `lineNumber`, `stop`, `stopName`, `load`, `occupancy`, `delay`, `trip`; the end-of-day event carries the day's `boardings`, `journeys`, `gaveUp`, `trips`, `missed`, `onTime`, `satisfaction`, `fares`, `costs`, `result`; city event triggers carry `event`, `eventKind`, `eventTitle`, `venue`, `people`, `start`, `end`, `when`, `reason`; the forecast trigger carries the forecast fields below; the weather trigger carries `from`, `to` (0 dry, 1 light rain, 2 rain, 3 heavy rain, 4 snow), `label`, `wasLabel`, `time`, `temp` |
+| event details (`event` record from the event triggers and `data.events`) | `id`, `type` (football, concert, festival, gathering, rail, flight), `label`, `title`, `venue`, `place`, `people` (expected), `day`, `start`, `end` (HH:MM, with extra time once known), `when`, `startsIn`, `endsIn` (min), `underWay`, `over`, `cancelled`, `reason`, `lines` (how many of your lines are within 1 km; for a rail disruption, within 600 m of the closed stations) |
+| weather now | `condition` (0–4 as above), `label`, `raining`, `heavy`, `snow`, `temp` (°C), `rain` (mm this hour) |
+| weather today | `type`, `label`, `high`, `low`, `rain` (mm in the day), `wet` |
+| forecast (tomorrow, from 18:00) | `type`, `label`, `high`, `low`, `chanceOfRain` (%), `wet`, `storm` (heavy rain or snow), `hot` (32 °C or more). About 8 forecasts in 10 are right. |
+| calendar | `season`, `week` (of the 12-week year), `seasonWeek`, `year`, `weekend`, `publicHoliday`, `schoolDay`, `schoolHolidays`, `university` (teaching, exams, break), `festive`, `label`. The calendar is a typical pattern, not real dates. |
 
 All figures are read from the live simulation or from Network Control's recorded analytics; none are invented. When a figure is unavailable it is `null`, and comparisons with `null` are false.
 
 ## Actions and the shared command layer
 
-Every action node asks for a **command** (`commands.ts`): `assign_vehicle`, `dispatch_extra`, `set_headway`, `suspend_line`, `set_fare`, `service_vehicle`, `move_depot`. The player's own buttons use the same game methods, and `checkCommand` is a pure dry run that explains in plain words what would happen (for example: a bus carrying passengers finishes its trip, returns to its depot and then joins the new line). Automations cannot do anything the player could not do, and they never bypass the simulation's rules: an extra departure is a real trip that a real bus prepares for, drives to and runs.
+Every action node asks for a **command** (`commands.ts`): `assign_vehicle`, `dispatch_extra`, `set_headway`, `suspend_line`, `service_plan`, `set_fare`, `service_vehicle`, `move_depot`. The player's own buttons use the same game methods, and `checkCommand` is a pure dry run that explains in plain words what would happen (for example: a bus carrying passengers finishes its trip, returns to its depot and then joins the new line). Automations cannot do anything the player could not do, and they never bypass the simulation's rules: an extra departure is a real trip that a real bus prepares for, drives to and runs.
 
 ## Modes
 
@@ -37,7 +42,7 @@ Every action node asks for a **command** (`commands.ts`): `assign_vehicle`, `dis
 |---|---|
 | Observe | Nothing changes. The run records what each action would have done. |
 | Suggest | Each action becomes a suggestion in Network Control → Automation. It is checked again when you approve it, and expires after 30 game minutes. |
-| Automatic | Actions run within the limits below. **Big changes** (frequency, fare, suspending a line) still become suggestions unless the workflow is allowed to make big changes. |
+| Automatic | Actions run within the limits below. **Big changes** (frequency, fare, suspending a line, switching a service plan) still become suggestions unless the workflow is allowed to make big changes. |
 
 A **test run** from the editor never changes the game or the workflow's memory; it describes what the actions would do.
 
@@ -96,6 +101,12 @@ Start a workflow: on a schedule or when something happens in the game.
 | A bus breaks down `trigger.breakdown` | Runs when a bus breaks down. | – | Event (event), Bus (bus), Line (line) | Line |
 | Many people waiting `trigger.waiting` | Runs when the number waiting at a stop rises above a threshold (again only after it has dropped well below). | – | Event (event), Stop (stop) | At least, On line |
 | Balance falls below `trigger.balance` | Runs when the bank balance drops below an amount. | – | Event (event), Company (record) | Below |
+| Tomorrow’s forecast `trigger.forecast` | Runs at 18:00 when tomorrow’s weather forecast comes out. About 8 forecasts in 10 are right; a miss is usually close. | – | Event (event), Forecast (record) | When it says |
+| The weather changes `trigger.weather` | Runs on the hour when the weather changes: rain starts, heavy rain or snow starts, or it dries up. Roads are slower in rain and fewer people walk or cycle. | – | Event (event), Weather now (record) | When, From, Until |
+| An event is announced `trigger.eventAnnounced` | Runs when a match, concert, festival or gathering is announced (usually 3 to 10 days ahead, short-notice ones the day before), or when a rail or flight disruption begins. | – | Event (event), Event details (record), Lines nearby (list) | Events, At least, Near line |
+| Before an event starts `trigger.eventStart` | Runs a set time before an announced event starts, once per event. Crowds arrive over the three hours before a match. | – | Event (event), Event details (record), Lines nearby (list) | Minutes before, Events, At least, Near line |
+| When an event ends `trigger.eventEnd` | Runs a set time before or after an event ends, once per event. Most people leave within half an hour of the end; a match may go to extra time. | – | Event (event), Event details (record), Lines nearby (list) | Minutes after the end, Events, At least, Near line |
+| A kind of day `trigger.calendar` | Runs at a set time on days of a kind: school holidays, public holidays, exam weeks, weekends or a season. The calendar is a typical pattern, not real dates. | – | Event (event), Calendar (record) | On, At, Only the first day of a run |
 | Run by hand `trigger.manual` | Runs when you press Run in Automation Studio. | – | Event (event) | – |
 
 #### Data
@@ -113,6 +124,9 @@ Read live lines, stops, buses, the company and Network Control analytics.
 | Find a free bus `data.findBus` | The bus that could start an extra trip on a line soonest: one of the line’s own idle buses, or a spare at a depot. Buses carrying passengers are never chosen. | Line (line, optional) | Bus (bus), Found (yes/no) | Line, Take from |
 | Company `data.company` | Balance, reputation, level, fare and today’s result. | After (anything, optional) | Company (record), Balance (number) | – |
 | Time `data.time` | The game clock: time, hour, weekday, weekend. | After (anything, optional) | Time (record), Hour (number) | – |
+| Weather `data.weather` | The weather now (rain, temperature), today’s weather and tomorrow’s forecast once it is out at 18:00. | After (anything, optional) | Now (record), Today (record), Tomorrow (forecast) (record), Raining now (yes/no), Temperature (number) | – |
+| Calendar `data.calendar` | Today’s season and week, and the kind of day: weekend, public holiday, school day or holidays, university teaching, exams or break (a typical pattern). | After (anything, optional) | Calendar (record), School holidays (yes/no), Public holiday (yes/no) | – |
+| Events `data.events` | Announced events under way or coming up, soonest first: matches, concerts, festivals, gatherings and disruptions. | After (anything, optional) | Events (list), Next event (record), How many (number) | Within, Events, Near line |
 | Network Control figure `data.analytics` | A measure from Network Control’s recorded history, e.g. average wait per stop over the last 7 days. | After (anything, optional) | Rows (list), Total (number) | Measure, For each, Days |
 
 #### Logic
@@ -171,6 +185,7 @@ Change the game, with the same rules as when you do it yourself.
 | Move bus to depot `action.moveDepot` | Bases a bus at another depot. A parked bus drives there on the road; a working bus goes there next time it returns. | When (anything, optional), Bus (bus or list) | Result (record), Done (yes/no) | Depot |
 | Change frequency `action.headway` | Sets how often a line runs. High impact: needs your approval unless the workflow is allowed to make big changes. **Big change.** | When (anything, optional), Line (line, optional), Every (min) (number, optional) | Result (record), Done (yes/no) | Line, Every, Timetable |
 | Suspend or resume line `action.suspend` | Stops or restarts a line’s timetable. High impact. **Big change.** | When (anything, optional), Line (line, optional) | Result (record), Done (yes/no) | Line, Action |
+| Switch a service plan `action.servicePlan` | Switches one of a line’s manual service plans on or off (made in the line’s timetable, for example a "Rain" or "Match day" plan). Departures not yet given to buses follow it. High impact. **Big change.** | When (anything, optional), Line (line or list, optional) | Result (record), Done (yes/no) | Line, Plan name, Switch |
 | Change the fare `action.fare` | Sets the fare for every new journey. High impact. **Big change.** | When (anything, optional), Fare (number, optional) | Result (record), Done (yes/no) | Fare |
 | Send a notification `action.notify` | Adds a notification for you. Use {value} or {event.fleetNo} in the text to include values. | When (anything, optional), Value (anything, optional) | Result (record) | Title, Message, Tone |
 | Add to report `action.report` | Writes a line to this workflow’s report (shown in its history). Use {value} to include a value. | Value (anything, optional) | – | Text |

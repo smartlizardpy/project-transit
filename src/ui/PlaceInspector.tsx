@@ -18,6 +18,8 @@ import { TRANSIT_SERVICE } from '../game/activity/transit.ts';
 import type { CityPlace } from '../game/world/places.ts';
 import { approx, share } from './network/common.tsx';
 import type { Game } from '../game/engine.ts';
+import { EVENT_TEMPLATES, actualEnd, whenLabel, type GameEvent } from '../game/events.ts';
+import { hhmm } from '../game/time.ts';
 
 type Icon = ComponentType<{ size?: number; weight?: 'fill' | 'bold' | 'regular' }>;
 export const PLACE_ICON: Record<PlaceCategory, Icon> = {
@@ -160,6 +162,58 @@ function CityTransit({ game, p }: { game: Game; p: CityPlace }) {
   );
 }
 
+/** Events at the place: what is coming (announced), what is on, and how recent ones went. */
+function PlaceEvents({ game, p }: { game: Game; p: CityPlace }) {
+  const t = game.t;
+  const mine = game.eventList().filter((ev) => ev.place === p.id && (ev.announced || ev.start <= t));
+  if (!mine.length) return null;
+  const now = mine.filter((ev) => !ev.cancelled && ev.start <= t && actualEnd(ev) > t);
+  const next = mine.filter((ev) => ev.start > t).sort((a, b) => a.start - b.start).slice(0, 4);
+  const past = mine.filter((ev) => actualEnd(ev) <= t).sort((a, b) => b.start - a.start).slice(0, 3);
+  const row = (ev: GameEvent, status: React.ReactNode) => (
+    <div className="mini-row" key={ev.id} style={{ alignItems: 'flex-start' }}>
+      <div className="grow">
+        <div className="t" style={{ fontWeight: 700 }}>{EVENT_TEMPLATES[ev.kind].label}{ev.series ? `, day ${ev.series[0]} of ${ev.series[1]}` : ''}</div>
+        <div className="faint" style={{ fontSize: 12 }}>
+          {whenLabel(ev, t, game.state.clock.startWeekday)}–{hhmm(actualEnd(ev))}
+          {ev.people > 0 && ` · about ${ev.people.toLocaleString('en-GB')} expected`}
+          {ev.reason && ` · ${ev.reason}`}
+        </div>
+      </div>
+      {status}
+    </div>
+  );
+  return (
+    <div className="section">
+      <div className="label" style={{ marginBottom: 6 }}>Events</div>
+      <div className="mini-list">
+        {now.map((ev) => row(ev, <span className="pill warn">On now</span>))}
+        {next.map((ev) => row(ev, ev.cancelled ? <span className="pill">Called off</span> : <span className="pill info">Coming</span>))}
+        {past.map((ev) =>
+          row(
+            ev,
+            ev.cancelled ? (
+              <span className="pill">Called off</span>
+            ) : ev.people > 0 ? (
+              <span className="faint num" style={{ fontSize: 12, textAlign: 'right' }}>
+                {(ev.carried ?? 0).toLocaleString('en-GB')} journeys on your buses
+                {ev.lost ? <><br />{ev.lost.toLocaleString('en-GB')} gave up or stranded</> : null}
+              </span>
+            ) : (
+              <span className="pill">Over</span>
+            ),
+          ),
+        )}
+      </div>
+      {next.some((ev) => !ev.cancelled) && (
+        <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>
+          Crowds arrive over the hours before and leave together at the end; roads nearby get busy and parking is scarce. Extra departures, spare buses or a match-day service plan carry more of them. Events bring no money of their own: only the fares of people who board.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PlaceInspector({ id, close }: { id: string; close: React.ReactNode }) {
   const game = useGameUpdates(1);
   if (!game) return null;
@@ -229,6 +283,7 @@ export function PlaceInspector({ id, close }: { id: string; close: React.ReactNo
             </div>
           )}
         </div>
+        <PlaceEvents game={game} p={p} />
         <WhenBusy game={game} p={p} />
         <CityTransit game={game} p={p} />
         <HowPeopleTravel game={game} id={p.id} beyond={!p.reachable} />

@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-30 (phase 4).
+Last updated: 2026-10-30 (phase 5).
 
 ## Phase 0. Foundations ✅
 
@@ -218,7 +218,56 @@ Screenshots come from the company simulated for phase 3, played on by `scripts/c
 - There is no credits screen yet; the climate credit is in the weather popover.
 - Network Control's weather markers and the line inspector's rainy-against-dry comparison come in phase 6. Air-conditioned buses are a later option.
 
-## Phase 5. Events ⬜
+## Phase 5. Events 🟡
+
+Built and tested. 🟡 until the owner has played it: matches, concerts, festivals, public gatherings and rail disruptions are scheduled from the map's venues, announced days ahead, and bring crowds that travel there and home again; lines get service plans; automation can react to events, the forecast and the weather.
+
+| Item | Status | Evidence |
+|---|---|---|
+| Event templates as data (`src/game/events.ts`): arrival and leaving curves, length, local traffic, parking and taxi difficulty, outdoor or not. The schedule is a pure function of (seed, venue, day), generated ten days ahead and saved; no draws from the shared random stream | ✅ | `events.test.ts` "the schedule" (3 tests): the same for the same seed over 168 days, venues and seats respected, generated ten days ahead, no shared draws |
+| Kinds: **football** (grounds of 800+ seats; big grounds at home every other week, smaller ones weekly; not in summer; 8% go to extra time), **concerts** (halls of 1,000+ seats, up to two a week, fewer in summer; summer concerts in stadiums of 20,000+), **festivals** (one of the three largest parks, about two weekends a year), **public gatherings** (public holidays, the festive Sunday, and rare short-notice ones with a reason), **rail disruptions** (1–3 links of the metro, train or tram network for 1–4 hours, about one day in twelve) and **flight disruptions** (only where an airport is on the map). In İstanbul's 84-day year: 54 concerts at 5 venues, 19 matches at 3 grounds, 8 gatherings, 1 three-day festival, 4 rail disruptions, no flight disruptions | ✅ | `events.test.ts`; counts measured on the bundled İstanbul map |
+| Announcements 3–10 days ahead at 09:00 (short-notice gatherings the day before, disruptions when they begin), with a notification that opens the venue | ✅ | `events.test.ts` "is generated ten days ahead, saved, and announced with a notice"; screenshots `event-announced.png`, `event-place-card.png` |
+| Crowd travel: a new traveller type, from homes across the map (half; distance decay 9 km), through stations and piers (a quarter), the rest from beyond the map. To the venue's stops within 800 m, with parking and taxis penalised near it; home again on linked returns timed by the end and the leaving curve | ✅ | `events.test.ts` "a match day at the stadium" (plan section 17, stadium). Measured on a line to Tüpraş Stadyumu, 30,000 at the match: 97% of the bus trips there start in the three hours before kick-off; 73% of those who came by bus have their ride home within 45 minutes of the end; returns never exceed arrivals; the stadium stop's 21:00–24:00 boardings are 199 against 40 on an ordinary evening; the line's day is 8% busier |
+| Roads near the venue slower as crowds arrive and leave (through the traffic model's local additions), not elsewhere and not in timetables | ✅ | `events.test.ts` "slows roads near the stadium…" |
+| No event money: only the fares of attendees who board | ✅ | `events.test.ts` "charges only the fares…" (ledger audit, plan section 17 economy) |
+| Rail disruption closes its stretch of the background transit network; journeys through it look for other ways, and your line gains riders where it runs | ✅ | `events.test.ts` "a rail disruption closes its stretch…" (Taksim–Şişhane metro) |
+| Flight disruption: arrivals held back and then bunched | 🟡 | Built; not reachable in İstanbul (both airports are beyond the bundled map), so no test of its own yet |
+| Outdoor events called off when heavy rain or snow is forecast; indoor ones go ahead | ✅ | `events.test.ts` "outdoor events are called off…" |
+| Place card **Events** section (on now, coming, called off, and past events with "N journeys on your buses" and how many gave up or were stranded); a flag on the venue's map marker ("On now", "Today 19:30", "Tomorrow 20:00", the weekday) | ✅ | screenshots `event-place-card.png`, `event-on-now.png`, `event-after.png` |
+| **Service plans** on a line's timetable (up to 8): for a season, school holidays, university breaks, public holidays, event days near the line, or switched by hand or by automation; the first that applies wins; trips already run are kept | ✅ | `service-plans.test.ts` (8 tests); `events.test.ts` "a match-day service plan…" (applies on match day only, and only once the match is announced); screenshot `timetable-service-plans.png` |
+| Objectives: **Match day** (1,000 journeys for one event, few giving up), **Night network** (250 trips between midnight and 05:00), **Airport link** (300 air travellers in a day; offered only where an airport is on the map) | ✅ | `events.test.ts` "objectives for events, nights and airports" (3 tests) |
+| **Automation** (owner's request, brought forward from phase 6): triggers *Tomorrow's forecast*, *The weather changes*, *An event is announced*, *Before an event starts*, *When an event ends*, *A kind of day*; data nodes *Weather*, *Calendar*, *Events*; action *Switch a service plan* (a big change, so it needs permission); ready-made workflows *Extra buses for big events*, *Rain plan when a storm is forecast*, *Extra bus when heavy rain starts*, *Cover a rail disruption*, *Events in the next three days*. All act through the normal command layer | ✅ | `automation-city.test.ts` (7 tests); `docs/automation-api.md` (reference regenerated); screenshots `automation-city-templates.png`, `automation-event-flow.png`, `automation-storm-flow.png` |
+| Determinism: two runs through a match day are identical; a reload during the match carries on the same (no duplicated events) | ✅ | `events.test.ts` "determinism"; `automation-city.test.ts` reload check |
+| Calibration within the limits | ✅ | table below |
+
+Screenshots come from a company simulated for a month by `scripts/capture-network.mjs sim`, played on by `scripts/capture-events.mjs` until the generated calendar announced an event (nothing staged). That company has no stop near the concert hall, so its card honestly shows 0 journeys on your buses; the stadium test line above shows a served match.
+
+**Calibration** (`CALIBRATE=check pnpm calibrate`; events on):
+
+| Figure | Now | Baseline | Change | Limit |
+|---|---|---|---|---|
+| Reference riders, weekday | 3,469 | 3,611 | −3.9% | ±10% |
+| Reference riders, weekend | 2,897 | 3,076 | −5.8% | ±15% |
+| Reference boardings a day | 3,278 | 3,432 | −4.5% | ±10% |
+| Reference result a day | 3,755 | 4,032 | −6.9% | ±20% |
+| Reference satisfaction | 0.74 | 0.77 | | above 0.6 |
+| Thin line result, day 2 | −2,110 | −2,190 | | below 0 |
+| Crowded line peak load | 0.97 | 0.97 | | above 0.8 |
+
+Events add a handful of riders to the reference week (weekday 3,467 → 3,469, weekend 2,889 → 2,897): its line does not pass a venue.
+
+**Changes from the plan, and why:**
+- **Automation for events and the weather came in this phase**, at the owner's request; the plan had it in phase 6. The `applyServicePlan` of the plan is the *Switch a service plan* action (the `service_plan` command). Phase 6 keeps the rest: Network Control groupings, weekly roll-ups, panel additions and MCP tools.
+- **Festivals are a city-wide draw** (a weekly chance of 25% in spring and 35% in summer, about two weekends a year, in one of the three largest parks), not a per-park rate: per-park rates gave 27 festival days a year, many in small courtyards.
+- **Event-day plans wait for the announcement**, so a timetable never gives an event away before its notice.
+- **A trigger's "Lines nearby" output stops the branch when no line is near** (like "First item" with an empty list), so a workflow is not switched off for failed runs at venues the company does not serve.
+
+**Known gaps:**
+- The estimate (Network Control's estimated demand and the place card's hourly pattern) does not include event trips yet.
+- Visitors arriving through stations and piers walk from the gateway; they do not ride the background transit network to the venue.
+- Flight disruptions need an airport on the map: none in İstanbul, so Airport link is not offered there.
+- Football fixtures name no opponents (by design, plan section 9.3).
+- Event days are not yet labelled in Network Control's day records or compared in the line inspector (phase 6).
 
 ## Phase 6. Network Control and automation ⬜
 

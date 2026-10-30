@@ -9,7 +9,7 @@ import { dayTypeLabel, seasonWeekLabel, yearSeasonLabel } from '../game/calendar
 import { window as statWindow, SAT_COMPONENTS } from '../game/progress.ts';
 import { dayTotals } from '../game/finance.ts';
 import { session, useSession } from '../app/session.ts';
-import { focusDepot, focusLine, focusStop, focusVehicle, focusZone } from './camera.ts';
+import { focusDepot, focusLine, focusPoint, focusStop, focusVehicle, focusZone } from './camera.ts';
 import type { Game } from '../game/engine.ts';
 import { companyLevel } from '../game/control.ts';
 import { WeatherChip } from './WeatherChip.tsx';
@@ -360,6 +360,12 @@ function openRef(n: Notification) {
   } else if (r.kind === 'zone') {
     ui.select({ kind: 'zone', id: r.id });
     focusZone(r.id);
+  } else if (r.kind === 'place') {
+    // event venues and stations: the place card, and the map on the place
+    const g = session.game;
+    const p = g?.geo.places.byId.get(r.id);
+    ui.select({ kind: 'place', id: r.id });
+    if (p) focusPoint(p.lngLat, 15.5);
   }
 }
 

@@ -54,7 +54,7 @@ export const TYPE_COUNT = TRAVELLERS.length;
 
 /** What a tour is for; each kind has its traveller type, destinations and timing. */
 export type Attraction =
-  | 'work' | 'shift' | 'school' | 'university' | 'shopping' | 'errand' | 'health' | 'leisure' | 'night' | 'visit' | 'business' | 'airport';
+  | 'work' | 'shift' | 'school' | 'university' | 'shopping' | 'errand' | 'health' | 'leisure' | 'night' | 'visit' | 'business' | 'airport' | 'event';
 
 /** A mixture of normal curves: [weight, mean, sd] in hours. */
 export type Curve = [number, number, number][];
@@ -109,6 +109,9 @@ export const KINDS: TourKind[] = [
   { id: 'business', label: 'Business and lunch', type: T.commuter, attr: 'business', decay: 2200, gate: 'working', start: { weekday: [[1, 12.5, 1.4], [0.5, 15.5, 1.5]], weekend: [[1, 13, 2]] }, stay: [[1, 1, 0.4]], days: [1, 1, 1, 1, 1, 0.25, 0.15] },
   { id: 'fly', label: 'To the airport', type: T.air, attr: 'airport', decay: 60000, oneWay: true, start: { weekday: [[0.8, 6, 1.2], [1, 11.5, 2.5], [1, 17.5, 2.5]], weekend: [[1, 8, 2], [1, 14, 3], [0.8, 19, 2.5]] }, stay: [[1, 0, 1]], days: [1, 0.95, 0.95, 1, 1.1, 0.95, 1.05] },
   { id: 'landed', label: 'From the airport', type: T.air, attr: 'airport', decay: 60000, oneWay: true, toHome: true, start: { weekday: [[0.6, 8.5, 1.5], [1, 14, 2.5], [1, 20.5, 2.5]], weekend: [[1, 10, 2.5], [1, 15, 3], [0.8, 21, 2]] }, stay: [[1, 0, 1]], days: [1, 0.95, 0.95, 1, 1.1, 0.95, 1.05] },
+  // attendees of matches, concerts, festivals and gatherings (events.ts): not part of the tour
+  // matrix (no production here); their timing and way home come from the event itself
+  { id: 'event', label: 'Events', type: T.event, attr: 'event', decay: 9000, start: { weekday: [[1, 19, 2]], weekend: [[1, 17, 3]] }, stay: [[1, 2.5, 0.5]], days: [1, 1, 1, 1, 1, 1, 1] },
 ];
 export const KIND = Object.fromEntries(KINDS.map((k, i) => [k.id, i])) as Record<string, number>;
 export const KIND_COUNT = KINDS.length;
@@ -220,6 +223,8 @@ export const WEATHER = {
     shift: [1, 1, 1, 1, 0.96],
     business: [1, 1, 0.98, 0.95, 0.85],
     airport: [1, 1, 1, 1, 0.97],
+    // ticket holders mostly go anyway
+    event: [1, 1, 0.98, 0.95, 0.9],
   } as Record<Attraction, number[]>,
   /** visitors and leisure at parks and beaches, and shoppers at malls (people move indoors) */
   park: [1, 0.8, 0.55, 0.3, 0.4],

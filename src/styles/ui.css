@@ -404,6 +404,10 @@ button.lrow:hover { background: var(--card-hover); }
 .dest-mk .dname { position: absolute; left: 50%; bottom: 36px; transform: translate(-50%, 3px); white-space: nowrap; font-size: 13px; font-weight: 800; color: #4b5560; background: rgba(255,255,255,0.86); padding: 3px 9px; border-radius: 8px; opacity: 0; transition: opacity 160ms, transform 160ms; pointer-events: none; }
 .zoom-near .dest-mk .dname, .dest-mk:hover .dname { opacity: 1; transform: translate(-50%, 0); }
 .zoom-far .dest-mk .badge { transform: scale(0.8); }
+/* an announced event at the place: a small label above the marker */
+.dest-mk .ev-flag { position: absolute; left: 50%; bottom: 31px; transform: translateX(-50%); white-space: nowrap; font-size: 11px; font-weight: 800; color: #fff; background: #2a332e; padding: 2px 7px; border-radius: 7px; box-shadow: 0 0 0 1.5px #fff; pointer-events: none; }
+.dest-mk.has-event .dname { bottom: 54px; }
+.zoom-hidden .dest-mk.has-event { opacity: 1; pointer-events: auto; }
 /* places open their card with the select tool; with other tools a click places a stop as usual */
 .map-root:not(.tool-route):not(.tool-stop):not(.tool-depot) .dest-mk .badge { cursor: pointer; }
 .dest-mk.sel .badge { box-shadow: 0 0 0 2.5px #fff, 0 3px 10px rgba(30,40,35,0.32); }

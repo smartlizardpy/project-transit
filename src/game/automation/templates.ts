@@ -133,6 +133,88 @@ export const TEMPLATES: Template[] = [
       return g;
     },
   },
+  {
+    id: 'event-crowds',
+    name: 'Extra buses for big events',
+    description: 'For a match, concert, festival or gathering of 3,000 people or more: an extra departure on each of your lines near the venue an hour before it starts, ten minutes before it ends and a quarter of an hour after.',
+    mode: 'suggest',
+    build: (game) => {
+      const g = graph(game);
+      const rows: [string, Record<string, Value>, string][] = [
+        ['trigger.eventStart', { minutes: 60, kinds: 'crowds', people: 3000 }, 'An hour before the start'],
+        ['trigger.eventEnd', { minutes: -10, kinds: 'crowds', people: 3000 }, '10 min before the end'],
+        ['trigger.eventEnd', { minutes: 15, kinds: 'crowds', people: 3000 }, '15 min after the end'],
+      ];
+      rows.forEach(([type, cfg, label], i) => {
+        const t = g.add(type, 0, i, cfg, label);
+        const go = g.add('action.dispatch', 1, i);
+        g.link(t, 'lines', go, 'line');
+      });
+      return g;
+    },
+  },
+  {
+    id: 'storm-plan',
+    name: 'Rain plan when a storm is forecast',
+    description: 'At 18:00, when tomorrow’s forecast says heavy rain or snow, switch on the line’s manual "Rain" service plan; otherwise switch it off. Make the plan in the line’s timetable first (for example more buses at the peaks, as roads are slower).',
+    mode: 'observe',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.forecast', 0, 0, { when: 'any' });
+      const f = g.add('math.field', 1, 0, { field: 'storm' }, 'Storm forecast?');
+      const iff = g.add('logic.if', 2, 0);
+      const on = g.add('action.servicePlan', 3, 0, { line: firstLine(game), plan: 'Rain', on: 'on' });
+      const off = g.add('action.servicePlan', 3, 1, { line: firstLine(game), plan: 'Rain', on: 'off' });
+      g.link(t, 'forecast', f, 'record');
+      g.link(f, 'value', iff, 'condition');
+      g.link(iff, 'yes', on, 'when');
+      g.link(iff, 'no', off, 'when');
+      return g;
+    },
+  },
+  {
+    id: 'rain-extra',
+    name: 'Extra bus when heavy rain starts',
+    description: 'When heavy rain or snow starts between 07:00 and 20:00, find a free bus and run an extra departure on the line: roads are slower, so buses fall behind.',
+    mode: 'suggest',
+    build: (game) => {
+      const g = graph(game);
+      g.add('trigger.weather', 0, 0, { when: 'heavy', from: 7, to: 20 });
+      const find = g.add('data.findBus', 1, 0, { line: firstLine(game) });
+      const go = g.add('action.dispatch', 2, 0, { line: firstLine(game) });
+      g.link(find, 'found', go, 'when');
+      g.link(find, 'bus', go, 'bus');
+      return g;
+    },
+  },
+  {
+    id: 'disruption-cover',
+    name: 'Cover a rail disruption',
+    description: 'When a metro, train or tram stretch closes, run an extra departure on each of your lines near it: its passengers are looking for another way to travel.',
+    mode: 'suggest',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.eventAnnounced', 0, 0, { kinds: 'disruption', people: 0 });
+      const go = g.add('action.dispatch', 1, 0);
+      g.link(t, 'lines', go, 'line');
+      return g;
+    },
+  },
+  {
+    id: 'events-week',
+    name: 'Events in the next three days',
+    description: 'Every morning at 07:00, write the announced events of the next three days to this workflow’s report.',
+    mode: 'automatic',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.time', 0, 0, { time: '07:00' });
+      const ev = g.add('data.events', 1, 0, { hours: '72', kinds: 'any' });
+      const r = g.add('action.report', 2, 0, { text: '{value} events in the next three days' });
+      g.link(t, 'event', ev, 'after');
+      g.link(ev, 'count', r, 'value');
+      return g;
+    },
+  },
 ];
 
 /** Create a workflow from a template. */

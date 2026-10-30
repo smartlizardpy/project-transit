@@ -16,7 +16,8 @@ import { recordTrip } from './progress.ts';
 import { recAlight, recBoard, recFare, recGaveUp, recLeftBehind } from './analytics/record.ts';
 import { hourOfDay } from './time.ts';
 import { ActivityModel, returnMinutes, type ChoiceContext, type DayEstimate } from './activity/model.ts';
-import { KINDS, KIND_COUNT, TRAVELLERS } from './activity/params.ts';
+import { KIND, KINDS, KIND_COUNT, TRAVELLERS } from './activity/params.ts';
+import { eventReturnMinutes } from './events.ts';
 import { hashString, unit } from './hash.ts';
 
 export const PURPOSES = ['work', 'education', 'shopping', 'leisure', 'other'] as const;
@@ -549,7 +550,10 @@ function goAway(game: Game, g: PaxGroup) {
   if (!kind || kind.oneWay) return;
   const t = game.state.clock.t;
   const now = Math.floor(t / 60);
-  const mins = returnMinutes(g.pu, g.n, unit(hashString(`${g.o}>${g.d}`), t, g.pu));
+  const u = unit(hashString(`${g.o}>${g.d}`), t, g.pu);
+  // event attendees head home when the event ends (or when they have had enough of a festival)
+  const ev = g.pu === KIND.event ? game.eventFor(g.d, t) : null;
+  const mins = ev ? eventReturnMinutes(ev, t, g.n, u) : returnMinutes(g.pu, g.n, u);
   const key = `${g.d}>${g.o}>${g.pu}`;
   const arr = (game.state.pax.away[key] ??= []);
   game.counters.away += mins.length;

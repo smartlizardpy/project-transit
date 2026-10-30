@@ -53,11 +53,15 @@ export interface TransitSkim {
   modes: Uint8Array;
   /** entries with a journey */
   count: number;
+  /** the best journey between any two zones (events: from an attendee's zone to the venue's), cached */
+  between: (i: number, j: number) => Path | null;
+  /** closed links (rail disruptions) this skim was built without */
+  closed: string;
 }
 
 export const MODE_BITS: TransitMode[] = ['metro', 'tram', 'rail', 'ferry', 'funicular', 'cable'];
 
-interface Path { ivt: number; wait: number; changes: number; walk: number; modes: number }
+export interface Path { ivt: number; wait: number; changes: number; walk: number; modes: number }
 
 /** A small binary min-heap of (cost, state). */
 class Heap {
@@ -103,15 +107,15 @@ class Heap {
 }
 
 /** Best paths between all pairs of stations (a station and the mode you are on are the state). */
-function stationPaths(net: TransitNet): Path[][] {
+function stationPaths(net: TransitNet, closed: Set<number>): Path[][] {
   const S = net.stations.length;
   const ok = (m: TransitMode) => !!net.modes[m]?.ok && !!TRANSIT_SERVICE[m];
   // edges by (station, mode) state
   type Edge = { to: number; m: TransitMode; min: number };
   const adj: Edge[][] = Array.from({ length: S }, () => []);
   const walks: { to: number; min: number }[][] = Array.from({ length: S }, () => []);
-  for (const l of net.links) {
-    if (!ok(l.mode)) continue;
+  for (const [li, l] of net.links.entries()) {
+    if (!ok(l.mode) || closed.has(li)) continue;
     if (l.mode === 'ferry' && l.m < MIN_FERRY_M) {
       const min = (l.m * CHOICE.detour) / CHOICE.walkSpeed;
       walks[l.a].push({ to: l.b, min });
@@ -186,14 +190,15 @@ function stationPaths(net: TransitNet): Path[][] {
   return out;
 }
 
-/** Skims every tour-matrix entry by existing transit (an empty skim without a network). */
-export function buildTransitSkim(net: TransitNet | undefined, zs: ActivityZones, m: TourMatrix): TransitSkim {
+/** Skims every tour-matrix entry by existing transit (an empty skim without a network); `closed`: links out of service. */
+export function buildTransitSkim(net: TransitNet | undefined, zs: ActivityZones, m: TourMatrix, closed: number[] = []): TransitSkim {
   const E = m.tours.length;
   const skim: TransitSkim = {
     walk: new Float32Array(E).fill(Infinity), ivt: new Float32Array(E).fill(Infinity), wait: new Float32Array(E), changes: new Uint8Array(E), modes: new Uint8Array(E), count: 0,
+    between: () => null, closed: closed.join(','),
   };
   if (!net || net.stations.length < 2 || !net.links.length) return skim;
-  const paths = stationPaths(net);
+  const paths = stationPaths(net, new Set(closed));
   const walkMin = (d: number) => (d * CHOICE.detour) / CHOICE.walkSpeed;
   // stations within a walk of each zone's centre (or a place's entrance)
   const access = zs.list.map((z) => {
@@ -205,45 +210,45 @@ export function buildTransitSkim(net: TransitNet | undefined, zs: ActivityZones,
     });
     return out;
   });
-  const cache = new Map<number, number>();
   const Z = zs.list.length;
-  for (let e = 0; e < E; e++) {
-    const i = m.o[e], j = m.d[e];
-    if (i === j) continue;
+  const pairs = new Map<number, Path | null>();
+  const between = (i: number, j: number): Path | null => {
+    if (i === j) return null;
     const key = i * Z + j;
-    let best = cache.get(key);
-    if (best === undefined) {
-      best = -1;
-      let bc = Infinity;
-      let bw = 0, bp: Path | null = null;
-      for (const a of access[i])
-        for (const b of access[j]) {
-          if (a.s === b.s) continue;
-          const p = paths[a.s][b.s];
-          if (!Number.isFinite(p.ivt)) continue;
-          const w = a.w + b.w + p.walk;
-          const c = PICK.walk * w + p.ivt + PICK.wait * p.wait + PICK.change * p.changes;
-          if (c < bc) (bc = c), (bw = w), (bp = p);
-        }
-      if (bp) {
-        best = e;
-        skim.walk[e] = bw;
-        skim.ivt[e] = bp.ivt;
-        skim.wait[e] = bp.wait;
-        skim.changes[e] = bp.changes;
-        skim.modes[e] = bp.modes;
+    let r = pairs.get(key);
+    if (r !== undefined) return r;
+    let bc = Infinity;
+    r = null;
+    for (const a of access[i] ?? [])
+      for (const b of access[j] ?? []) {
+        if (a.s === b.s) continue;
+        const p = paths[a.s][b.s];
+        if (!Number.isFinite(p.ivt)) continue;
+        const w = a.w + b.w + p.walk;
+        const c = PICK.walk * w + p.ivt + PICK.wait * p.wait + PICK.change * p.changes;
+        if (c < bc) (bc = c), (r = { ...p, walk: w });
       }
-      cache.set(key, best);
-    } else if (best >= 0) {
-      skim.walk[e] = skim.walk[best];
-      skim.ivt[e] = skim.ivt[best];
-      skim.wait[e] = skim.wait[best];
-      skim.changes[e] = skim.changes[best];
-      skim.modes[e] = skim.modes[best];
-    }
-    if (Number.isFinite(skim.ivt[e])) skim.count++;
+    pairs.set(key, r);
+    return r;
+  };
+  skim.between = between;
+  for (let e = 0; e < E; e++) {
+    const p = between(m.o[e], m.d[e]);
+    if (!p) continue;
+    skim.walk[e] = p.walk;
+    skim.ivt[e] = p.ivt;
+    skim.wait[e] = p.wait;
+    skim.changes[e] = p.changes;
+    skim.modes[e] = p.modes;
+    skim.count++;
   }
   return skim;
+}
+
+/** Generalised minutes of one leg by existing transit along a path at an hour's wait factor (Infinity: none). */
+export function transitPathLeg(p: Path | null, ty: TravellerType, waitFactor: number, wx: WeatherEffect = NO_WEATHER): number {
+  if (!p || !(waitFactor > 0) || !Number.isFinite(p.ivt)) return Infinity;
+  return ty.walk * p.walk * wx.walk + p.ivt + ty.wait * p.wait * waitFactor * wx.wait + ty.change * p.changes + CHOICE.transitConst;
 }
 
 /** Generalised minutes of one leg by existing transit for entry `e` at an hour's wait factor (Infinity: none). */

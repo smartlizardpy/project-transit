@@ -111,6 +111,8 @@ function cellAttraction(g: DemandGrid, k: number, shift: number, uni: boolean): 
     visit: leis * 0.15 + shop * 0.05,
     business: work * 0.5 + (shop + leis) * 0.3,
     airport: 0,
+    // events bring their own attendees (events.ts)
+    event: 0,
   };
 }
 

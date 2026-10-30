@@ -17,9 +17,10 @@ import { ECON } from '../content.ts';
 import { Grid } from '../world/places.ts';
 import { buildActivityZones, zonesKey, type ActivityZones } from './zones.ts';
 import { distributeTours, type TourMatrix } from './od.ts';
-import { CHOICE, KINDS, KIND_COUNT, STAY_HOME, TRAVELLERS, crowding, type Curve, type TravellerType } from './params.ts';
+import { CHOICE, KIND, KINDS, KIND_COUNT, STAY_HOME, TRAVELLERS, crowding, type Curve, type TravellerType } from './params.ts';
+import { EVENT, EVENT_TEMPLATES, arriveShare, returnShareFrom, type GameEvent } from '../events.ts';
 import { dayTiming, PROFILE, type DayTiming } from './profiles.ts';
-import { buildTransitSkim, transitLeg, transitWaitFactor, type TransitSkim } from './transit.ts';
+import { buildTransitSkim, transitLeg, transitPathLeg, transitWaitFactor, type TransitSkim } from './transit.ts';
 import { NO_WEATHER, tripFactor, type WeatherEffect } from './conditions.ts';
 
 /** a zone's walk to one of your stops */
@@ -66,6 +67,15 @@ export interface RateOut {
   rate: Float32Array;
   /** per pair, the share of each tour kind (pairs × KIND_COUNT) */
   mix: Float32Array;
+}
+
+/** An event's attendees: origin zones with their share of the attendance (homes or stations), the venue's zone and point, and your stops near it. */
+export interface EventSetup {
+  origins: { z: number; w: number; home: boolean }[];
+  zone: number;
+  x: number;
+  y: number;
+  stops: { s: number; w: number; share: number }[];
 }
 
 const NEAR_STOP_M = 450;
@@ -197,9 +207,16 @@ export class ActivityModel {
   near: { s: number; extra: number }[][] = [];
   /** zones that reach at least one stop, in index order */
   reach: number[] = [];
-  /** the city's existing transit between the zones of each tour-matrix entry */
+  /** the city's existing transit between the zones of each tour-matrix entry (with any closed links) */
   transit: TransitSkim | null = null;
+  /** the skim with every link open (kept while a disruption lasts) */
+  private transitOpen: TransitSkim | null = null;
   private day: { n: number; timing: DayTiming } | null = null;
+  /** your stops' positions and a grid over them (from the last rebuild), for walks to venues */
+  private stopXY: [number, number][] = [];
+  private stopGrid = new Grid<number>(300);
+  /** per event: where its attendees come from and the stops near its venue (cleared on rebuilds) */
+  private eventCache = new Map<string, EventSetup>();
 
   /** Volumes and start times for the game day containing `t` (calendar and place profiles). */
   timing(game: Game, t: number): DayTiming {
@@ -230,10 +247,19 @@ export class ActivityModel {
     if (!this.zones || this.zones.key !== key) {
       this.zones = buildActivityZones(inp);
       this.tours = distributeTours(this.zones);
-      this.transit = buildTransitSkim(game.region.transit, this.zones, this.tours);
+      this.transit = this.transitOpen = buildTransitSkim(game.region.transit, this.zones, this.tours);
       this.access = [];
+      this.eventCache.clear();
     }
     return this.zones;
+  }
+
+  /** The city's transit with the links closed by disruptions at `t` (rebuilt only when that set changes). */
+  private ensureTransit(game: Game, t: number) {
+    const closed = game.closedTransitLinks(t);
+    const key = closed.join(',');
+    if (this.transit?.closed === key) return;
+    this.transit = key ? buildTransitSkim(game.region.transit, this.zones!, this.tours!, closed) : this.transitOpen;
   }
 
   /** Walks from each zone to the served stops (when stops, lines or territory change). */
@@ -243,6 +269,9 @@ export class ActivityModel {
     const R = CHOICE.accessM / CHOICE.detour;
     const grid = new Grid<number>(300);
     xy.forEach(([x, y], s) => grid.add(x, y, s));
+    this.stopXY = xy;
+    this.stopGrid = grid;
+    this.eventCache.clear();
     const nearest = (x: number, y: number): { s: number; d: number } | null => {
       let best = -1, bd = Infinity;
       for (const s of grid.near(x, y, R)) {
@@ -379,12 +408,12 @@ export class ActivityModel {
       return a;
     };
     const home = new Map<string, { avail: number; wait: number }>();
-    const wayHome = (sk: Skim, k: number) => {
-      const key = `${sk.rkey}|${k}`;
+    const wayHome = (sk: Skim, k: number, ret?: number[], rkey = '') => {
+      const key = `${sk.rkey}|${k}|${rkey}`;
       let v = home.get(key);
       if (!v) {
         let avail = 0, wait = 0;
-        const share = RETURN_SHARE[k];
+        const share = ret ?? RETURN_SHARE[k];
         const lines = sk.routes.map(headways);
         for (let off = 0; off < HORIZON; off++) {
           if (!share[off]) continue;
@@ -410,14 +439,15 @@ export class ActivityModel {
     // the weather: walking to the stop and waiting weigh more (the way home is taken to be the same)
     const wx = ctx.wx ?? NO_WEATHER;
     /** null: no itinerary between the two stops (or their neighbours) this hour */
-    return (sa: number, sb: number, k: number, ty: TravellerType, wa: number, wb: number, strandedLeg: number) => {
+    /** `ret`, `rkey`: when people come home, by hour from now (events), and a key for it */
+    return (sa: number, sb: number, k: number, ty: TravellerType, wa: number, wb: number, strandedLeg: number, ret?: number[], rkey?: string) => {
       const sk = skim(sa, sb);
       if (!sk) return null;
       const it = sk.it;
       const base = ty.walk * wx.walk * (wa + wb + sk.extra) + sk.ivt + ty.change * it.transfers + ty.fare * fareMin + ty.rel * sk.rel + CHOICE.networkConst;
       const out = base + ty.wait * wx.wait * it.wait;
       if (KINDS[k].oneWay) return { pair: sk.pair, out, tour: out, avail: 1 };
-      const h = wayHome(sk, k);
+      const h = wayHome(sk, k, ret, rkey);
       return { pair: sk.pair, out, tour: out + h.avail * (base + ty.wait * wx.wait * h.wait) + (1 - h.avail) * strandedLeg, avail: h.avail };
     };
   }
@@ -425,7 +455,9 @@ export class ActivityModel {
   /** Per-minute rates on your network for the hour starting at `t0`. */
   rates(game: Game, t0: number, ctx: ChoiceContext): RateOut {
     const zs = this.ensureZones(game);
+    this.ensureTransit(game, t0);
     const m = this.tours!;
+    const flights = game.flightFactors(t0);
     const day = this.timing(game, t0);
     const hour = Math.floor(((t0 % 86400) + 86400) % 86400 / 3600);
     const wf = transitWaitFactor(hour);
@@ -444,7 +476,9 @@ export class ActivityModel {
         // timing and volume follow the profile of the activity end (the airport for arrivals)
         const act = kind.toHome ? i : j;
         const pk = zs.profile[act] * K + k;
-        const th = m.tours[e] * day.factor[pk] * day.share[pk * 24 + hour] * tripFactor(wx, k, zs.park[act], zs.beach[act], zs.profile[act] === PROFILE.mall);
+        let th = m.tours[e] * day.factor[pk] * day.share[pk * 24 + hour] * tripFactor(wx, k, zs.park[act], zs.beach[act], zs.profile[act] === PROFILE.mall);
+        // delayed flights: arrivals held back, then bunched (flight disruptions)
+        if (kind.toHome && flights.size) th *= flights.get(zs.list[i].place ?? '') ?? 1;
         if (!(th > 1e-4)) continue;
         const ty = TRAVELLERS[kind.type];
         const d = m.dist[e];
@@ -480,6 +514,7 @@ export class ActivityModel {
         }
       }
     }
+    this.eventRates(game, t0, ctx, cost, out);
     const keys = [...out.keys()].sort((x, y) => x - y);
     const res: RateOut = { pairs: Int32Array.from(keys), rate: new Float32Array(keys.length), mix: new Float32Array(keys.length * K) };
     keys.forEach((key, n) => {
@@ -491,6 +526,126 @@ export class ActivityModel {
   }
 
   /**
+   * Event attendees setting off in the hour from `t0` (events.ts): from homes on the map (long
+   * distance decay) and from stations and piers, to the stops near the venue. Their way home is
+   * scored at the event's end, so a match ending after the last bus sends people to taxis.
+   * Parking near the venue is scarce and taxis hard to find, so capacity you provide wins riders.
+   * No money comes with an event: only those who board pay their fare.
+   */
+  private eventRates(game: Game, t0: number, ctx: ChoiceContext, cost: ReturnType<ActivityModel['networkCost']>, out: Map<number, { r: number; mix: Float64Array }>) {
+    const zs = this.zones!;
+    const hour = Math.floor(((t0 % 86400) + 86400) % 86400 / 3600);
+    const wf = transitWaitFactor(hour);
+    const wx = ctx.wx ?? NO_WEATHER;
+    const k = KIND.event;
+    const kind = KINDS[k];
+    const ty = TRAVELLERS[kind.type];
+    const lam = 2 * CHOICE.scale;
+    for (const ev of game.crowdEventsSettingOff(t0, t0 + 3600)) {
+      const share = arriveShare(ev, t0, t0 + 3600);
+      if (!(share > 1e-4)) continue;
+      const set = this.eventSetup(game, ev);
+      if (!set.stops.length) continue;
+      const tpl = EVENT_TEMPLATES[ev.kind];
+      const total = ev.people * share * wx.trips[k];
+      const ret = returnShareFrom(ev, t0, HORIZON);
+      let transitHome = 0;
+      for (let off = 0; off < HORIZON; off++) if (transitWaitFactor((hour + off) % 24) > 0) transitHome += ret[off];
+      const zv = zs.list[set.zone];
+      for (const o of set.origins) {
+        const gi = this.access[o.z];
+        if (!gi?.length) continue;
+        const th = total * o.w;
+        if (!(th > 1e-4)) continue;
+        const zi = zs.list[o.z];
+        const d = Math.max(zi.inner / 2, Math.hypot(zi.x - set.x, zi.y - set.y));
+        const others = otherModes(d, ty, ctx.traffic, zv.parking + tpl.parking, wx);
+        others.taxi += tpl.taxiWait;
+        const carShare = o.home ? Math.min(1, zi.car * ty.car) : 0;
+        const strandedLeg = others.taxi + CHOICE.stranded;
+        const leg = transitPathLeg(this.transit!.between(o.z, set.zone), ty, wf, wx);
+        const tr = Number.isFinite(leg) ? leg + transitHome * leg + (1 - transitHome) * strandedLeg : Infinity;
+        for (const a of gi) {
+          const sa = o.home ? a.sp : a.sa;
+          if (!(sa > 0)) continue;
+          const wa = o.home ? a.wp : a.wa;
+          for (const b of set.stops) {
+            const c = cost(a.s, b.s, k, ty, wa, b.w, strandedLeg, ret, ev.id);
+            if (!c) continue;
+            const withCar = logitFirst(lam, c.tour, 2 * others.walk, 2 * others.bike, 2 * others.car, 2 * others.taxi, tr);
+            const noCar = logitFirst(lam, c.tour, 2 * others.walk, 2 * others.bike, 2 * others.taxi, tr);
+            const p = ctx.smax * (carShare * withCar + (1 - carShare) * noCar);
+            if (!(p > 0)) continue;
+            const r = (th * sa * b.share * p) / 60;
+            let x = out.get(c.pair);
+            if (!x) out.set(c.pair, (x = { r: 0, mix: new Float64Array(KIND_COUNT) }));
+            x.r += r;
+            x.mix[k] += r;
+          }
+        }
+      }
+    }
+  }
+
+  /** Where an event's attendees come from, the venue's zone, and your stops within a walk of it (cached per event). */
+  eventSetup(game: Game, ev: GameEvent): EventSetup {
+    const hit = this.eventCache.get(ev.id);
+    if (hit) return hit;
+    const zs = this.ensureZones(game);
+    const place = game.geo.places.byId.get(ev.place);
+    const [x, y] = game.geo.xy(place?.lngLat ?? ev.at);
+    // the venue's zone: its own place zone, else the zone of its cell, else the nearest
+    let zone = zs.list.findIndex((z) => z.kind === 'place' && z.place === ev.place);
+    if (zone < 0) {
+      const g = game.region.demand;
+      const cx = Math.floor((x - g.x0) / g.cell), cy = Math.floor((y - g.y0) / g.cell);
+      const cell = cx >= 0 && cy >= 0 && cx < g.w && cy < g.h ? cy * g.w + cx : -1;
+      zone = cell >= 0 ? (zs.actOf[cell] >= 0 ? zs.actOf[cell] : zs.homeOf[cell]) : -1;
+    }
+    if (zone < 0) {
+      let bd = Infinity;
+      zs.list.forEach((z, i) => {
+        const d = Math.hypot(z.x - x, z.y - y);
+        if (z.kind !== 'beyond' && d < bd) (bd = d), (zone = i);
+      });
+    }
+    // origins: homes with a long decay, and stations and piers near the venue
+    const origins: EventSetup['origins'] = [];
+    const K = KIND_COUNT;
+    let sumH = 0, sumG = 0;
+    const gate = new Set(['rail_station', 'metro_station', 'ferry_pier', 'bus_station']);
+    const hw: number[] = [], gw: number[] = [];
+    zs.list.forEach((z, i) => {
+      const d = Math.hypot(z.x - x, z.y - y);
+      hw[i] = z.kind !== 'place' && z.residents > 0 ? z.residents * Math.exp(-d / EVENT.decay) : 0;
+      let prod = 0;
+      if (z.kind === 'place' && z.place && gate.has(game.geo.places.byId.get(z.place)?.category ?? '')) for (let kk = 0; kk < K; kk++) prod += zs.prod[i * K + kk];
+      gw[i] = prod > 0 ? prod * Math.exp(-d / EVENT.gatewayDecay) : 0;
+      sumH += hw[i];
+      sumG += gw[i];
+    });
+    zs.list.forEach((_, i) => {
+      if (hw[i] > 0 && sumH > 0) origins.push({ z: i, w: (EVENT.local * hw[i]) / sumH, home: true });
+      if (gw[i] > 0 && sumG > 0) origins.push({ z: i, w: (EVENT.gateway * gw[i]) / sumG, home: false });
+    });
+    // your stops within a walk of the venue's entrance (or another way in), nearest first
+    const pts: [number, number][] = [[x, y], ...(place?.access ?? []).map((ll) => game.geo.xy(ll))];
+    const R = EVENT.walkM / CHOICE.detour;
+    const best = new Map<number, number>();
+    for (const [px, py] of pts)
+      for (const s of this.stopGrid.near(px, py, R)) {
+        const d = Math.hypot(this.stopXY[s][0] - px, this.stopXY[s][1] - py);
+        if (d <= R && d < (best.get(s) ?? Infinity)) best.set(s, d);
+      }
+    const near = [...best.entries()].sort((a, b) => a[1] - b[1] || a[0] - b[0]).slice(0, 3);
+    const ws = near.map(([, d]) => Math.exp(-((d * CHOICE.detour) / CHOICE.walkSpeed) / 3));
+    const wsum = ws.reduce((a, b) => a + b, 0) || 1;
+    const set: EventSetup = { zone, x, y, origins, stops: near.map(([s, d], i) => ({ s, w: (d * CHOICE.detour) / CHOICE.walkSpeed, share: ws[i] / wsum })) };
+    this.eventCache.set(ev.id, set);
+    return set;
+  }
+
+  /**
    * Modelled trips for one whole day between activity zones, by mode (walk, bike, car, taxi, your
    * network): what everyone does, not only your passengers. `hours[h]` is the choice context for
    * the hour starting at `day0 + h` hours (an empty itinerary map when no line runs). Only pairs
@@ -499,6 +654,7 @@ export class ActivityModel {
    */
   estimate(game: Game, day0: number, hours: ChoiceContext[], inScope: (z: number) => boolean): DayEstimate {
     const zs = this.ensureZones(game);
+    this.ensureTransit(game, game.t);
     const m = this.tours!;
     const Z = zs.list.length, K = KIND_COUNT;
     const day = this.timing(game, day0 + 12 * 3600);

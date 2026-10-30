@@ -10,7 +10,7 @@ import { startDrafting } from './routeDraft.ts';
 import { ECON, MODEL, MODELS, DAY } from '../game/content.ts';
 import { STATUS_LABEL } from '../game/vehicles.ts';
 import { waitingAt } from '../game/passengers.ts';
-import { OBJECTIVES, licenceInfo, routeMoney, routeWindow, unlockedModels } from '../game/progress.ts';
+import { objectivesFor, licenceInfo, routeMoney, routeWindow, unlockedModels } from '../game/progress.ts';
 import { CATEGORY_LABEL, dayTotals } from '../game/finance.ts';
 import { hhmm } from '../game/time.ts';
 import type { LedgerCategory } from '../game/types.ts';
@@ -537,9 +537,9 @@ function CompanyPanel({ game }: { game: Game }) {
 
         <div className="section">
           <div className="section-head"><span style={{ fontWeight: 800, fontSize: 14 }}>Objectives</span>
-            <span className="faint" style={{ fontSize: 12, fontWeight: 600 }}>{OBJECTIVES.filter((o) => st.objectives[o.id]?.done).length}/{OBJECTIVES.length}</span></div>
+            <span className="faint" style={{ fontSize: 12, fontWeight: 600 }}>{objectivesFor(game).filter((o) => st.objectives[o.id]?.done).length}/{objectivesFor(game).length}</span></div>
           <div className="list">
-            {OBJECTIVES.map((o) => {
+            {objectivesFor(game).map((o) => {
               const s = st.objectives[o.id];
               const p = s?.done ? 1 : s?.progress ?? 0;
               const reward = [o.reward.cash ? game.money(o.reward.cash) : '', o.reward.rep ? `+${o.reward.rep} reputation` : '', o.reward.label ?? ''].filter(Boolean).join(' · ');

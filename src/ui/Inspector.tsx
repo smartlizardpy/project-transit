@@ -13,6 +13,7 @@ import { MODEL, ECON, STOP_RULES } from '../game/content.ts';
 import { STATUS_LABEL } from '../game/vehicles.ts';
 import { routeWindow, routeMoney, licenceInfo } from '../game/progress.ts';
 import { describeTimetable } from '../game/timetable.ts';
+import { serviceDayOf } from '../game/time.ts';
 import { occupied, waitingAt } from '../game/passengers.ts';
 import type { LngLat } from '../game/world/graph.ts';
 import { PLACE_LABEL, placeSignificance, walkDistanceM } from '../game/world/places.ts';
@@ -299,6 +300,7 @@ function LineInspector({ id }: { id: string }) {
   const w = routeWindow(game.state, id, 24);
   const money = routeMoney(game.state, id, 1);
   const weekend = game.isWeekend(game.t);
+  const todayPlan = game.dayPlan(id, serviceDayOf(game.t));
   const req = game.requirement(id);
   const assigned = r.vehicles.length;
   const short = req && req.peak > assigned;
@@ -360,7 +362,8 @@ function LineInspector({ id }: { id: string }) {
             <span className="label">Timetable · {weekend ? 'weekend' : 'weekday'}</span>
             <button className="link" onClick={() => useUI.getState().openModal({ kind: 'timetable', route: id })}>Edit</button>
           </div>
-          <div className="t" style={{ fontWeight: 700 }}>{describeTimetable(r.timetable, weekend)}</div>
+          <div className="t" style={{ fontWeight: 700 }}>{describeTimetable({ ...r.timetable, [weekend ? 'weekend' : 'weekday']: todayPlan.plan }, weekend)}</div>
+          {todayPlan.planId && <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>Today this is the "{todayPlan.name}" plan, not the normal timetable.</div>}
           {req && <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>Needs {req.peak} bus{req.peak === 1 ? '' : 'es'} at peak · round trip ≈ {Math.round(Math.max(0, ...req.bands.map((b) => b.cycle)))} min incl. layover</div>}
         </div>
         <div className="section">

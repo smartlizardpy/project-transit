@@ -19,6 +19,8 @@ const KIND_GLYPH: Partial<Record<PlaceCategory, Glyph>> = {
   rail_station: 'hub', metro_station: 'hub', ferry_pier: 'hub', tram_stop: 'hub', bus_station: 'hub', cable_car: 'hub',
   attraction: 'culture', venue: 'culture', stadium: 'culture',
 };
+/** shown only while an event is announced there (festivals and gatherings in parks) */
+const EVENT_GLYPH: Partial<Record<PlaceCategory, Glyph>> = { park: 'culture', beach: 'culture' };
 const GLYPH_COLOUR: Record<Glyph, string> = { culture: '#b0745a', shopping: '#c98a3a', education: '#5f7fc4', hub: '#3f8a8e', health: '#d0605a', air: '#3f8a8e' };
 const AIR_GLYPH = `<svg width="14" height="14" viewBox="0 0 14 14"><path d="M6.2 1.6c0-.5.4-.9.8-.9s.8.4.8.9v3.6l4.9 2.9v1.4L7.8 8v2.6l1.5 1.1v1.1L7 12.2l-2.3.6v-1.1l1.5-1.1V8L1.3 9.5V8.1l4.9-2.9Z" fill="#fff"/></svg>`;
 const GLYPH: Record<Glyph, string> = {
@@ -43,6 +45,8 @@ export class MarkerLayer {
   private draftMarkers: Marker[] = [];
   private pois: { m: Marker; el: HTMLDivElement; id: string }[] = [];
   private poiKey = '';
+  /** places with an announced event in the next three days, and its label (refreshed hourly) */
+  private flagKey = '';
   /** chips at the map edge pointing to airports beyond the map */
   private edges: { el: HTMLDivElement; place: CityPlace }[] = [];
   private ghost: Marker;
@@ -85,9 +89,31 @@ export class MarkerLayer {
           // landmarks follow the visible territory (a new licence reveals more)
           if (g.state.territory.owned.join() !== this.poiKey) this.rebuildPois();
         }),
+        // event flags: announcements, starts and ends
+        g.on('minute', () => {
+          if (g.t % 900 === 0 && this.flagsKey(g) !== this.flagKey) this.rebuildPois();
+        }),
       );
     this.rebuild();
     this.rebuildPois();
+  }
+
+  /** Announced events in the next three days by place: "On now", "Today 19:00", "Tomorrow", "Sat". */
+  private eventFlags(g: Game): Map<string, string> {
+    const out = new Map<string, string>();
+    const t = g.t, today = Math.floor(t / 86400);
+    const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    for (const ev of g.upcomingEvents()) {
+      if (ev.people <= 0 || ev.start > (today + 3) * 86400 || out.has(ev.place)) continue;
+      const d = Math.floor(ev.start / 86400);
+      const hm = `${String(Math.floor((ev.start % 86400) / 3600)).padStart(2, '0')}:${String(Math.floor((ev.start % 3600) / 60)).padStart(2, '0')}`;
+      out.set(ev.place, ev.start <= t ? 'On now' : d === today ? `Today ${hm}` : d === today + 1 ? `Tomorrow ${hm}` : WD[(((g.state.clock.startWeekday + d) % 7) + 7) % 7]);
+    }
+    return out;
+  }
+
+  private flagsKey(g: Game) {
+    return [...this.eventFlags(g)].map(([k, v]) => `${k}=${v}`).join('|');
   }
 
   private rebuildPois() {
@@ -107,7 +133,11 @@ export class MarkerLayer {
       return owned.has(z.id) || z.neighbours.some((n) => owned.has(n));
     };
     const all = region.cityPlaces ?? [];
-    const picked: CityPlace[] = [];
+    const flags = g ? this.eventFlags(g) : new Map<string, string>();
+    this.flagKey = g ? this.flagsKey(g) : '';
+    const glyphOf = (p: CityPlace) => KIND_GLYPH[p.category] ?? (flags.has(p.id) ? EVENT_GLYPH[p.category] : undefined);
+    // venues with an event coming up first, so they are always shown
+    const picked: CityPlace[] = all.filter((p) => p.reachable && flags.has(p.id) && glyphOf(p) && visible(p)).sort((a, b) => a.id.localeCompare(b.id));
     const sorted = all.filter((p) => p.reachable && KIND_GLYPH[p.category] && visible(p)).sort((a, b) => placeSignificance(b) - placeSignificance(a) || a.id.localeCompare(b.id));
     const near = (a: LngLat, b: LngLat) => Math.abs(a[0] - b[0]) < 0.0035 && Math.abs(a[1] - b[1]) < 0.0025;
     for (const p of sorted) {
@@ -116,12 +146,13 @@ export class MarkerLayer {
       picked.push(p);
     }
     for (const p of picked) {
-      const glyph = KIND_GLYPH[p.category]!;
+      const glyph = glyphOf(p)!;
+      const flag = flags.get(p.id);
       const el = document.createElement('div');
-      el.className = 'dest-mk';
+      el.className = flag ? 'dest-mk has-event' : 'dest-mk';
       el.style.setProperty('--c', GLYPH_COLOUR[glyph]);
-      el.innerHTML = `<div class="badge">${GLYPH[glyph]}</div><div class="dname">${esc(p.name)}</div>`;
-      el.title = `${p.name} · ${PLACE_LABEL[p.category]}`;
+      el.innerHTML = `<div class="badge">${GLYPH[glyph]}</div>${flag ? `<div class="ev-flag">${esc(flag)}</div>` : ''}<div class="dname">${esc(p.name)}</div>`;
+      el.title = `${p.name} · ${PLACE_LABEL[p.category]}${flag ? ` · event: ${flag}` : ''}`;
       this.onPlaceClick(el, p.id);
       this.pois.push({ m: new Marker({ element: el, anchor: 'center', pitchAlignment: 'viewport', rotationAlignment: 'viewport' }).setLngLat(p.lngLat).addTo(this.map), el, id: p.id });
     }

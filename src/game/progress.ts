@@ -1,6 +1,8 @@
 // Statistics, passenger satisfaction, reputation, territory licensing and objectives.
 
 import type { Game } from './engine.ts';
+import { KIND, TYPE } from './activity/params.ts';
+import { actualEnd } from './events.ts';
 import type { DayStats, GameState, HourStats, Id, Notification, PaxGroup, RouteHour } from './types.ts';
 import { DAY, ECON, HOUR, MODELS } from './content.ts';
 import { dayTotals, post } from './finance.ts';
@@ -63,6 +65,8 @@ export function recordTrip(game: Game, g: PaxGroup, completed: boolean, stranded
   for (let i = 0; i < 5; i++) hs.comp[i] += sc.comp[i] * g.n;
   hs.waitSum += (g.w / 60) * g.n;
   recJourney(state, g, completed, sc, stranded);
+  // event attendees count towards their event (the stop near the venue: where they got off, or set off home)
+  if (g.pu === KIND.event) game.noteEventTrip(g.ret ? g.o : g.d, g.n, completed);
   const route = g.fr ?? g.legs[0]?.r;
   if (route && state.routes[route]) {
     const rh = routeHour(state, route);
@@ -371,6 +375,8 @@ export interface ObjectiveDef {
   reward: { cash?: number; rep?: number; label?: string };
   /** progress 0..1 */
   check: (game: Game) => number;
+  /** whether it can be done on this map (for example, an airport within reach); always when absent */
+  available?: (game: Game) => boolean;
 }
 
 const hasRouteWith = (game: Game) => Object.values(game.state.routes).filter((r) => !r.suspended && r.vehicles.length > 0);
@@ -474,7 +480,53 @@ export const OBJECTIVES: ObjectiveDef[] = [
     reward: { cash: 80_000, rep: 4, label: 'Transport authority award' },
     check: (g) => Math.max(window(g.state, 24).trips, ...g.state.stats.days.map((d) => d.trips)) / 5000,
   },
+  {
+    id: 'match-day',
+    title: 'Match day',
+    description: 'Carry 1,000 journeys to and from one event (a match, concert, festival or gathering), with no more than 1 in 10 of its travellers on your network giving up or stranded.',
+    reward: { cash: 30_000, rep: 3, label: 'Events partnership' },
+    check: (g) => {
+      let best = 0;
+      for (const ev of g.eventList()) {
+        if (ev.people <= 0 || ev.cancelled) continue;
+        const carried = ev.carried ?? 0, lost = ev.lost ?? 0;
+        let p = Math.min(1, carried / 1000) * (lost <= 0.1 * (carried + lost) ? 1 : 0.9);
+        // counted once the crowd has gone home
+        if (g.t < actualEnd(ev) + 2 * HOUR) p = Math.min(p, 0.99);
+        best = Math.max(best, p);
+      }
+      return best;
+    },
+  },
+  {
+    id: 'night-network',
+    title: 'Night network',
+    description: 'Carry 250 passengers between midnight and 05:00 in one night, when the metro and trams have stopped.',
+    reward: { cash: 20_000, rep: 2, label: 'Night-time economy grant' },
+    check: (g) => {
+      const nights = new Map<number, number>();
+      for (const h of g.state.stats.hours) if (h.h % 24 < 5) nights.set(Math.floor(h.h / 24), (nights.get(Math.floor(h.h / 24)) ?? 0) + h.trips);
+      return Math.max(0, ...nights.values()) / 250;
+    },
+  },
+  {
+    id: 'airport-link',
+    title: 'Airport link',
+    description: 'Carry 300 air travellers to or from the airport in one day.',
+    reward: { cash: 40_000, rep: 3, label: 'Airport access contract' },
+    available: (g) => (g.region.cityPlaces ?? []).some((p) => p.category === 'airport' && p.reachable),
+    check: (g) => {
+      const air = TYPE.air;
+      const days = [...g.state.analytics.days, g.state.analytics.today];
+      return Math.max(0, ...days.map((d) => d.net.jk?.[air] ?? 0)) / 300;
+    },
+  },
 ];
+
+/** Objectives that can be done on this map. */
+export function objectivesFor(game: Game): ObjectiveDef[] {
+  return OBJECTIVES.filter((o) => !o.available || o.available(game));
+}
 
 /** Progress towards serving a kind of destination on a line with real ridership (0..1). */
 function servesKind(game: Game, kinds: string[], within: number, riders: number): number {
@@ -493,7 +545,7 @@ function servesKind(game: Game, kinds: string[], within: number, riders: number)
 /** Re-evaluate objectives; grant rewards exactly once. */
 export function checkObjectives(game: Game) {
   const state = game.state;
-  for (const def of OBJECTIVES) {
+  for (const def of objectivesFor(game)) {
     const st = (state.objectives[def.id] ??= { done: false, progress: 0 });
     if (st.done) continue;
     const p = Math.max(0, Math.min(1, def.check(game)));

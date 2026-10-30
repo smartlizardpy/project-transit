@@ -5,11 +5,12 @@ import type { LngLat } from './world/graph.ts';
 import type { RegionSpec } from './world/region.ts';
 import type { PlaceSnapshotState } from './world/places.ts';
 import type { WeatherKind, WeatherState } from './weather.ts';
+import type { EventsState } from './events.ts';
 
 import type { AnalyticsState } from './analytics/types.ts';
 import type { ControlState } from './control.ts';
 import type { AutomationState } from './automation/types.ts';
-import type { CalendarState } from './calendar.ts';
+import type { CalendarState, Season } from './calendar.ts';
 
 export type Id = string;
 
@@ -62,6 +63,28 @@ export interface Timetable {
   weekend: DayPlan;
   /** minimum recovery time at termini, minutes */
   layover: number;
+  /** saved variants of the weekday and weekend plans; the first enabled one that holds replaces the normal plan */
+  plans?: ServicePlan[];
+}
+
+/** When a service plan runs. */
+export type PlanCondition =
+  | { kind: 'season'; season: Season }
+  | { kind: 'school_holidays' }
+  | { kind: 'uni_break' }
+  | { kind: 'public_holiday' }
+  /** an event at a venue near the line that day */
+  | { kind: 'event_day' }
+  /** switched by the player (and by automation) */
+  | { kind: 'manual'; on: boolean };
+
+export interface ServicePlan {
+  id: string;
+  name: string;
+  enabled: boolean;
+  when: PlanCondition;
+  weekday: DayPlan;
+  weekend: DayPlan;
 }
 
 export type RouteKind = 'loop' | 'linear';
@@ -335,7 +358,7 @@ export interface Notification {
   tone: 'info' | 'good' | 'warn' | 'bad';
   title: string;
   body?: string;
-  ref?: { kind: 'vehicle' | 'route' | 'stop' | 'depot' | 'zone'; id: Id };
+  ref?: { kind: 'vehicle' | 'route' | 'stop' | 'depot' | 'zone' | 'place'; id: Id };
   read?: boolean;
 }
 
@@ -389,4 +412,6 @@ export interface WorldState {
   places: PlaceSnapshotState;
   /** today's weather and the next two days', with tomorrow's forecast once issued (filled on load when missing) */
   weather?: WeatherState;
+  /** the event schedule, generated ten days ahead, and recent events with their results (filled on load when missing) */
+  events?: EventsState;
 }

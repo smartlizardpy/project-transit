@@ -13,6 +13,7 @@ import { aggregate, MEASURE, type GroupBy } from '../analytics/query.ts';
 import { extraOption } from '../vehicles.ts';
 import { DAY, HOUR } from '../content.ts';
 import { hhmm } from '../time.ts';
+import { DAY_FILTER, EVENT_FILTER, EVENT_FILTER_SHORT, FORECAST_FILTER, WEATHER_FILTER, calendarRec, eventRec, eventsAhead, linesNearEvent, weatherRecs } from './city.ts';
 
 /** Marker for "this branch is not active". Never stored in the save. */
 export const OFF: { readonly __off: true } = Object.freeze({ __off: true as const });
@@ -91,7 +92,7 @@ export interface NodeResult {
 
 export interface TriggerSpec {
   /** the game event it listens to (queued), or 'clock' / 'condition' (checked each minute), or 'manual' */
-  source: 'clock' | 'condition' | 'manual' | 'arrive' | 'depart' | 'missed' | 'breakdown' | 'day';
+  source: 'clock' | 'condition' | 'manual' | 'arrive' | 'depart' | 'missed' | 'breakdown' | 'day' | 'forecast' | 'weather' | 'eventAnnounced';
 }
 
 export interface NodeDef {
@@ -161,6 +162,26 @@ const triggerEntity = (ctx: NodeCtx) => {
     stop: typeof e.stop === 'string' ? ctx.live.stop(e.stop) ?? OFF : OFF,
   };
 };
+
+/** Event triggers: the event as a record, and your lines near it. */
+function eventTriggerOut(ctx: NodeCtx, what: string): NodeResult {
+  const ev = ctx.game.eventList().find((x) => x.id === ctx.event.event);
+  if (!ev) return { out: { event: ctx.event, details: OFF, lines: [] }, note: `${what}: the event is no longer on the calendar.` };
+  const lines = linesNearEvent(ctx.game, ev).map((id) => ctx.live.line(id)).filter((x): x is Rec => !!x);
+  // like "First item": with none of your lines nearby, nothing connected to "Your lines nearby" runs
+  const near = lines.length ? `${lines.length} of your lines nearby.` : 'None of your lines is nearby, so nothing connected to “Your lines nearby” runs.';
+  return { out: { event: ctx.event, details: eventRec(ctx.game, ev), lines: lines.length ? lines : OFF }, note: `${what}: ${ev.title}, ${str(ctx.event.when)}${ev.people ? `, about ${ev.people} people` : ''}. ${near}` };
+}
+const eventKindCfg = (def = 'crowds'): ConfigField => ({ id: 'kinds', label: 'Events', kind: 'select', default: def, options: EVENT_FILTER });
+const minPeopleCfg: ConfigField = { id: 'people', label: 'At least', kind: 'number', default: 0, min: 0, max: 200000, step: 500, unit: 'people', help: 'Only events expected to draw at least this many (0: any size).' };
+const eventScope = (game: Game, c: WfNode['config']) => {
+  const kinds = EVENT_FILTER_SHORT[String(c.kinds ?? 'crowds')] ?? 'events';
+  const people = Number(c.people) || 0;
+  const line = typeof c.line === 'string' && c.line ? ` near line ${game.state.routes[c.line]?.number ?? '?'}` : '';
+  return `${kinds}${people ? ` of ${people.toLocaleString('en-GB')}+` : ''}${line}`;
+};
+const nearLineCfg: ConfigField = { id: 'line', label: 'Near line', kind: 'line', default: '', allowAny: true, help: 'Only events within a kilometre of this line’s stops. Leave empty for any event.' };
+const eventOuts: PortDef[] = [{ id: 'event', label: 'Event', type: 'event' }, { id: 'details', label: 'Event details', type: 'record' }, { id: 'lines', label: 'Lines nearby', type: 'list', help: 'Your lines with a stop within 1 km. When there are none, nothing connected here runs.' }];
 
 function actionOut(rec: Rec | Rec[]): NodeResult {
   const list = Array.isArray(rec) ? rec : [rec];
@@ -243,6 +264,49 @@ export const NODES: NodeDef[] = [
     inputs: [], outputs: [eventOut, { id: 'company', label: 'Company', type: 'record' }], trigger: { source: 'condition' },
     config: [{ id: 'amount', label: 'Below', kind: 'number', default: 20000, min: -1_000_000, max: 100_000_000, step: 1000 }],
     run: (ctx) => ({ out: { event: ctx.event, company: ctx.live.company() }, note: `Balance ${str(ctx.event.balance)}.` }),
+  },
+  {
+    type: 'trigger.forecast', category: 'trigger', label: 'Tomorrow’s forecast', description: 'Runs at 18:00 when tomorrow’s weather forecast comes out. About 8 forecasts in 10 are right; a miss is usually close.',
+    inputs: [], outputs: [eventOut, { id: 'forecast', label: 'Forecast', type: 'record' }], trigger: { source: 'forecast' },
+    config: [{ id: 'when', label: 'When it says', kind: 'select', default: 'any', options: FORECAST_FILTER }],
+    run: (ctx) => ({ out: { event: ctx.event, forecast: weatherRecs(ctx.game).tomorrow ?? OFF }, note: `Forecast for tomorrow: ${str(ctx.event.label)}, ${str(ctx.event.high)} °C, ${str(ctx.event.chanceOfRain)}% chance of rain.` }),
+  },
+  {
+    type: 'trigger.weather', category: 'trigger', label: 'The weather changes', description: 'Runs on the hour when the weather changes: rain starts, heavy rain or snow starts, or it dries up. Roads are slower in rain and fewer people walk or cycle.',
+    inputs: [], outputs: [eventOut, { id: 'weather', label: 'Weather now', type: 'record' }], trigger: { source: 'weather' },
+    config: [
+      { id: 'when', label: 'When', kind: 'select', default: 'rain', options: WEATHER_FILTER },
+      { id: 'from', label: 'From', kind: 'number', default: 0, min: 0, max: 23, unit: 'h', help: 'Only between these hours of the day.' },
+      { id: 'to', label: 'Until', kind: 'number', default: 24, min: 1, max: 24, unit: 'h' },
+    ],
+    run: (ctx) => ({ out: { event: ctx.event, weather: weatherRecs(ctx.game).now }, note: `${str(ctx.event.label)} from ${str(ctx.event.time)} (was ${str(ctx.event.wasLabel).toLowerCase()}).` }),
+  },
+  {
+    type: 'trigger.eventAnnounced', category: 'trigger', label: 'An event is announced', description: 'Runs when a match, concert, festival or gathering is announced (usually 3 to 10 days ahead, short-notice ones the day before), or when a rail or flight disruption begins.',
+    inputs: [], outputs: eventOuts, trigger: { source: 'eventAnnounced' }, config: [eventKindCfg('any'), minPeopleCfg, nearLineCfg],
+    run: (ctx) => eventTriggerOut(ctx, 'Announced'),
+  },
+  {
+    type: 'trigger.eventStart', category: 'trigger', label: 'Before an event starts', description: 'Runs a set time before an announced event starts, once per event. Crowds arrive over the three hours before a match.',
+    inputs: [], outputs: eventOuts, trigger: { source: 'condition' },
+    config: [{ id: 'minutes', label: 'Minutes before', kind: 'number', default: 90, min: 0, max: 360, step: 5, unit: 'min' }, eventKindCfg(), minPeopleCfg, nearLineCfg],
+    run: (ctx) => eventTriggerOut(ctx, 'Starting soon'),
+  },
+  {
+    type: 'trigger.eventEnd', category: 'trigger', label: 'When an event ends', description: 'Runs a set time before or after an event ends, once per event. Most people leave within half an hour of the end; a match may go to extra time.',
+    inputs: [], outputs: eventOuts, trigger: { source: 'condition' },
+    config: [{ id: 'minutes', label: 'Minutes after the end', kind: 'number', default: -10, min: -120, max: 120, step: 5, unit: 'min', help: 'Negative: before the end (for example -10 to have buses waiting when it finishes).' }, eventKindCfg(), minPeopleCfg, nearLineCfg],
+    run: (ctx) => eventTriggerOut(ctx, 'Ending'),
+  },
+  {
+    type: 'trigger.calendar', category: 'trigger', label: 'A kind of day', description: 'Runs at a set time on days of a kind: school holidays, public holidays, exam weeks, weekends or a season. The calendar is a typical pattern, not real dates.',
+    inputs: [], outputs: [eventOut, { id: 'calendar', label: 'Calendar', type: 'record' }], trigger: { source: 'clock' },
+    config: [
+      { id: 'day', label: 'On', kind: 'select', default: 'school_holidays', options: DAY_FILTER },
+      { id: 'time', label: 'At', kind: 'time', default: '05:00' },
+      { id: 'first', label: 'Only the first day of a run', kind: 'boolean', default: true, help: 'For example the first day of the school holidays, not every day of them.' },
+    ],
+    run: (ctx) => ({ out: { event: ctx.event, calendar: calendarRec(ctx.game) }, note: `${str(calendarRec(ctx.game).label)}, ${str(ctx.event.time)}.` }),
   },
   {
     type: 'trigger.manual', category: 'trigger', label: 'Run by hand', description: 'Runs when you press Run in Automation Studio.',
@@ -355,6 +419,41 @@ export const NODES: NodeDef[] = [
     type: 'data.time', category: 'data', label: 'Time', description: 'The game clock: time, hour, weekday, weekend.',
     inputs: [afterIn], outputs: [{ id: 'time', label: 'Time', type: 'record' }, { id: 'hour', label: 'Hour', type: 'number' }], config: [],
     run: (ctx) => { const t = ctx.live.time(); return { out: { time: t, hour: t.hour } }; },
+  },
+  {
+    type: 'data.weather', category: 'data', label: 'Weather', description: 'The weather now (rain, temperature), today’s weather and tomorrow’s forecast once it is out at 18:00.',
+    inputs: [afterIn],
+    outputs: [{ id: 'now', label: 'Now', type: 'record' }, { id: 'today', label: 'Today', type: 'record' }, { id: 'tomorrow', label: 'Tomorrow (forecast)', type: 'record' }, { id: 'raining', label: 'Raining now', type: 'boolean' }, { id: 'temp', label: 'Temperature', type: 'number' }],
+    config: [],
+    run: (ctx) => {
+      const w = weatherRecs(ctx.game);
+      return { out: { now: w.now, today: w.today, tomorrow: w.tomorrow ?? OFF, raining: !!w.now.raining || !!w.now.snow, temp: w.now.temp }, note: `${str(w.now.label)}, ${str(w.now.temp)} °C. Today: ${str(w.today.label).toLowerCase()}.${w.tomorrow ? ` Tomorrow: ${str(w.tomorrow.label).toLowerCase()}.` : ' No forecast for tomorrow yet.'}` };
+    },
+  },
+  {
+    type: 'data.calendar', category: 'data', label: 'Calendar', description: 'Today’s season and week, and the kind of day: weekend, public holiday, school day or holidays, university teaching, exams or break (a typical pattern).',
+    inputs: [afterIn],
+    outputs: [{ id: 'calendar', label: 'Calendar', type: 'record' }, { id: 'schoolHolidays', label: 'School holidays', type: 'boolean' }, { id: 'publicHoliday', label: 'Public holiday', type: 'boolean' }],
+    config: [],
+    run: (ctx) => {
+      const c = calendarRec(ctx.game);
+      return { out: { calendar: c, schoolHolidays: !!c.schoolHolidays, publicHoliday: !!c.publicHoliday }, note: `${str(c.season)}, week ${str(c.seasonWeek)}: ${str(c.label).toLowerCase()}.` };
+    },
+  },
+  {
+    type: 'data.events', category: 'data', label: 'Events', description: 'Announced events under way or coming up, soonest first: matches, concerts, festivals, gatherings and disruptions.',
+    inputs: [afterIn],
+    outputs: [{ id: 'events', label: 'Events', type: 'list' }, { id: 'next', label: 'Next event', type: 'record' }, { id: 'count', label: 'How many', type: 'number' }],
+    config: [
+      { id: 'hours', label: 'Within', kind: 'select', default: '24', options: [{ value: '3', label: 'The next 3 hours' }, { value: '24', label: 'The next day' }, { value: '72', label: 'The next 3 days' }, { value: '240', label: 'The next 10 days' }] },
+      eventKindCfg('any'),
+      nearLineCfg,
+    ],
+    run: (ctx, _inp, cfg) => {
+      const list = eventsAhead(ctx.game, Number(cfg.hours) || 24, str(cfg.kinds) || 'any', str(cfg.line) || undefined).map((ev) => eventRec(ctx.game, ev));
+      ctx.spend(list.length);
+      return { out: { events: list, next: list[0] ?? OFF, count: list.length }, note: list.length ? `${list.length} event${list.length === 1 ? '' : 's'}; next: ${str(list[0].title)}, ${str(list[0].when)}.` : 'No events in that time.' };
+    },
   },
   {
     type: 'data.analytics', category: 'data', label: 'Network Control figure', description: 'A measure from Network Control’s recorded history, e.g. average wait per stop over the last 7 days.',
@@ -665,6 +764,18 @@ export const NODES: NodeDef[] = [
     },
   },
   {
+    type: 'action.servicePlan', category: 'action', label: 'Switch a service plan', description: 'Switches one of a line’s manual service plans on or off (made in the line’s timetable, for example a "Rain" or "Match day" plan). Departures not yet given to buses follow it. High impact.',
+    inputs: [whenIn, { id: 'line', label: 'Line', type: 'line', optional: true, list: true }], outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }],
+    config: [lineCfg(), { id: 'plan', label: 'Plan name', kind: 'text', default: 'Rain', help: 'The name of a manual service plan on the line.' }, { id: 'on', label: 'Switch', kind: 'select', default: 'on', options: [{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }] }],
+    action: { impact: 'high' },
+    run: (ctx, inp, cfg) => {
+      if (!go(inp)) return { out: { result: OFF, done: false }, note: 'Condition was false.' };
+      const lines = inp.line !== undefined ? items(inp.line).map((x) => idOf(x, 'line')).filter((x): x is string => !!x) : [str(cfg.line)].filter(Boolean);
+      if (!lines.length) throw new Error('Choose or connect a line.');
+      return actionOut(lines.map((route) => ctx.act({ type: 'service_plan', route, plan: str(cfg.plan), on: str(cfg.on) !== 'off' })));
+    },
+  },
+  {
     type: 'action.fare', category: 'action', label: 'Change the fare', description: 'Sets the fare for every new journey. High impact.',
     inputs: [whenIn, { id: 'fare', label: 'Fare', type: 'number', optional: true }], outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }],
     config: [{ id: 'fare', label: 'Fare', kind: 'number', default: 1.8, min: 0, max: 10, step: 0.05 }], action: { impact: 'high' },
@@ -799,6 +910,24 @@ export function triggerLabel(game: Game, node: WfNode): string {
     case 'trigger.waiting': return `${c.threshold}+ people waiting${line}`;
     case 'trigger.balance': return `Balance below ${game.money(Number(c.amount) || 0, { compact: true })}`;
     case 'trigger.manual': return 'Run by hand';
+    case 'trigger.forecast': {
+      const f = String(c.when ?? 'any');
+      return f === 'any' ? 'Tomorrow’s forecast (18:00)' : `Forecast at 18:00: ${FORECAST_FILTER.find((x) => x.value === f)?.label.toLowerCase() ?? f}`;
+    }
+    case 'trigger.weather': {
+      const w = WEATHER_FILTER.find((x) => x.value === c.when)?.label.replace(/ \(any rain\)$/, '') ?? 'The weather changes';
+      return `${w}${(c.from ?? 0) !== 0 || (c.to ?? 24) !== 24 ? `, ${String(c.from).padStart(2, '0')}:00–${String(c.to).padStart(2, '0')}:00` : ''}`;
+    }
+    case 'trigger.eventAnnounced': return `Announced: ${eventScope(game, c)}`;
+    case 'trigger.eventStart': return `${Number(c.minutes) || 0} min before ${eventScope(game, c)}`;
+    case 'trigger.eventEnd': {
+      const m = Number(c.minutes) || 0;
+      return `${m === 0 ? 'At the end of' : m < 0 ? `${-m} min before the end of` : `${m} min after the end of`} ${eventScope(game, c)}`;
+    }
+    case 'trigger.calendar': {
+      const d = DAY_FILTER.find((x) => x.value === c.day)?.label ?? String(c.day);
+      return `${c.first !== false ? `First day of ${d.toLowerCase()}` : d}, ${c.time}`;
+    }
     default: return NODE[node.type]?.label ?? node.type;
   }
 }

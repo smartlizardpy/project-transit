@@ -19,6 +19,9 @@ import { dayTotals } from '../finance.ts';
 import { hhmm, weekdayOf } from '../time.ts';
 import { notify } from '../progress.ts';
 import { waitingAt } from '../passengers.ts';
+import { dayMatches, eventKindMatches, forecastMatches, linesNearEvent, weatherChangeMatches, weatherRecs } from './city.ts';
+import { actualEnd, type GameEvent } from '../events.ts';
+import { CONDITION_LABEL, hourCondition } from '../weather.ts';
 
 export const RUN_LIMITS = {
   /** node evaluations and list items handled per run */
@@ -475,6 +478,8 @@ export function processAutomation(game: Game) {
   const mod = Math.floor((t % DAY) / 60);
   const hod = Math.floor((t % DAY) / HOUR);
   const wd = weekdayOf(game.state.clock.startWeekday, t);
+  // event trigger keys (`ev:` …) hold the time they can be forgotten
+  if (mod === 0) for (const [k, v] of Object.entries(a.schedule)) if (k.startsWith('ev:') && v < t) delete a.schedule[k];
   const fire = (wf: Workflow, nodeId: string, event: Rec): boolean => {
     if (budget <= 0) return false;
     const n = (a.hourly.byWf[wf.id] ?? 0) + 1;
@@ -529,6 +534,30 @@ export function processAutomation(game: Game) {
           }
           break;
         }
+        case 'trigger.eventStart':
+        case 'trigger.eventEnd': {
+          // once per event, at the set time (a game loaded a little later still catches it)
+          const mins = Number(c.minutes ?? (node.type === 'trigger.eventStart' ? 90 : -10)) || 0;
+          for (const ev of game.eventList()) {
+            if (!ev.announced || ev.cancelled) continue;
+            const at = node.type === 'trigger.eventStart' ? ev.start - mins * 60 : actualEnd(ev) + mins * 60;
+            if (t < at || t >= at + 15 * 60) continue;
+            const k = `ev:${wf.id}:${node.id}:${ev.id}`;
+            if (a.schedule[k] || !eventFilterMatches(game, c, ev)) continue;
+            a.schedule[k] = actualEnd(ev) + DAY;
+            fire(wf, node.id, { kind: 'event', source: node.type === 'trigger.eventStart' ? 'eventStart' : 'eventEnd', ...game.eventData(ev) });
+          }
+          break;
+        }
+        case 'trigger.calendar': {
+          const [hh, mm] = String(c.time ?? '05:00').split(':').map(Number);
+          if (mod !== (hh || 0) * 60 + (mm || 0)) break;
+          const today = Math.floor(t / DAY), kind = String(c.day ?? 'school_holidays');
+          if (!dayMatches(game, kind, today)) break;
+          if (c.first !== false && dayMatches(game, kind, today - 1)) break;
+          fire(wf, node.id, { kind: 'event', source: 'calendar', day: kind });
+          break;
+        }
         case 'trigger.balance': {
           const amt = Number(c.amount) || 0;
           const k = `${wf.id}:${node.id}`;
@@ -560,8 +589,28 @@ export function processAutomation(game: Game) {
   a.queue.splice(0, i);
 }
 
+/** Event triggers' settings: kind of event, size and a line near it. */
+function eventFilterMatches(game: Game, c: Workflow['nodes'][number]['config'], ev: GameEvent): boolean {
+  if (!eventKindMatches(String(c.kinds ?? 'crowds'), ev)) return false;
+  if ((Number(c.people) || 0) > ev.people) return false;
+  if (typeof c.line === 'string' && c.line && !linesNearEvent(game, ev).includes(c.line)) return false;
+  return true;
+}
+
 function matches(game: Game, wf: Workflow, node: Workflow['nodes'][number], d: Record<string, string | number | boolean | null>): boolean {
   const c = node.config;
+  switch (node.type) {
+    case 'trigger.eventAnnounced': {
+      const ev = game.eventList().find((x) => x.id === d.event);
+      return !!ev && eventFilterMatches(game, c, ev);
+    }
+    case 'trigger.forecast': return forecastMatches(String(c.when ?? 'any'), d);
+    case 'trigger.weather': {
+      const h = Number(d.hour ?? 0), from = Number(c.from ?? 0), to = Number(c.to ?? 24);
+      const inHours = from <= to ? h >= from && h < to : h >= from || h < to;
+      return inHours && weatherChangeMatches(String(c.when ?? 'rain'), Number(d.from ?? 0), Number(d.to ?? 0));
+    }
+  }
   if (typeof c.line === 'string' && c.line && d.line !== c.line) return false;
   switch (node.type) {
     case 'trigger.arrive': return !(typeof c.stop === 'string' && c.stop && d.stop !== c.stop);
@@ -588,6 +637,11 @@ function eventLabel(game: Game, node: Workflow['nodes'][number], e: Rec): string
     case 'trigger.waiting': return `${e.waiting} waiting at ${e.stopName}`;
     case 'trigger.balance': return `Balance ${game.money(Number(e.balance) || 0, { compact: true })}`;
     case 'trigger.day': return `Day ${e.dayNumber} ended`;
+    case 'trigger.forecast': return `Forecast for tomorrow: ${e.label}`;
+    case 'trigger.weather': return `${e.label} from ${e.time ?? hhmm(game.t)}`;
+    case 'trigger.eventAnnounced': return `Announced: ${e.eventTitle}, ${e.when}`;
+    case 'trigger.eventStart': return `${e.eventTitle} starts at ${e.start}`;
+    case 'trigger.eventEnd': return `${e.eventTitle} ends at ${e.end}`;
     default: return triggerLabel(game, node);
   }
 }
@@ -623,6 +677,21 @@ export function sampleEvent(game: Game, node: Workflow['nodes'][number]): Rec {
   if (node.type === 'trigger.balance') base.balance = Math.round(s.finance.balance);
   if (node.type === 'trigger.missed' && r) base.dep = hhmm(game.t);
   if (node.type === 'trigger.day') Object.assign(base, daySummary(game, Math.floor(game.t / DAY) - 1));
+  // weather and events: the real forecast, weather and next event in the game
+  if (node.type === 'trigger.forecast') {
+    const w = weatherRecs(game);
+    Object.assign(base, w.tomorrow ?? w.today);
+  }
+  if (node.type === 'trigger.weather') {
+    const day = Math.floor(game.t / DAY), h = Math.floor((game.t % DAY) / HOUR);
+    const w = game.weatherDay(day)?.actual;
+    const to = w ? hourCondition(w, h) : 0, from = w && h > 0 ? hourCondition(w, h - 1) : to;
+    Object.assign(base, { from, to, label: CONDITION_LABEL[to], wasLabel: CONDITION_LABEL[from], hour: h, time: hhmm(day * DAY + h * HOUR) });
+  }
+  if (node.type === 'trigger.eventAnnounced' || node.type === 'trigger.eventStart' || node.type === 'trigger.eventEnd') {
+    const ev = game.upcomingEvents().find((x) => eventFilterMatches(game, c, x)) ?? game.upcomingEvents()[0];
+    if (ev) Object.assign(base, game.eventData(ev));
+  }
   return base;
 }
 

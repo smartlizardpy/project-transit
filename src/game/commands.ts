@@ -14,6 +14,7 @@ export type Command =
   | { type: 'dispatch_extra'; route: Id; pat?: number; vehicle?: Id }
   | { type: 'set_headway'; route: Id; minutes: number; band?: number | 'all'; days?: 'weekday' | 'weekend' | 'both' }
   | { type: 'suspend_line'; route: Id; suspended: boolean }
+  | { type: 'service_plan'; route: Id; plan: string; on: boolean }
   | { type: 'set_fare'; fare: number }
   | { type: 'service_vehicle'; vehicle: Id }
   | { type: 'move_depot'; vehicle: Id; depot: Id };
@@ -46,13 +47,21 @@ export const COMMAND_LABEL: Record<Command['type'], string> = {
   dispatch_extra: 'Extra departure',
   set_headway: 'Change frequency',
   suspend_line: 'Suspend or resume a line',
+  service_plan: 'Switch a service plan',
   set_fare: 'Change the fare',
   service_vehicle: 'Send a bus for maintenance',
   move_depot: 'Move a bus to another depot',
 };
 
 /** High-impact commands change what passengers are offered or pay; automations need permission. */
-export const HIGH_IMPACT = new Set<Command['type']>(['set_headway', 'suspend_line', 'set_fare']);
+export const HIGH_IMPACT = new Set<Command['type']>(['set_headway', 'suspend_line', 'service_plan', 'set_fare']);
+
+/** A line's service plan by id or name (names are matched without regard to case). */
+export function findPlan(game: Game, route: Id, plan: string) {
+  const plans = game.state.routes[route]?.timetable.plans ?? [];
+  const want = plan.trim().toLowerCase();
+  return plans.find((p) => p.id === plan) ?? plans.find((p) => p.name.trim().toLowerCase() === want) ?? null;
+}
 
 const lineName = (game: Game, id: Id | null) => (id ? `line ${game.state.routes[id]?.number ?? '?'}` : 'no line');
 
@@ -135,6 +144,19 @@ export function checkCommand(game: Game, cmd: Command): CommandCheck {
       if (r.suspended === cmd.suspended) return { ...base, ok: true, noop: true, summary, transition: `Line ${r.number} is already ${cmd.suspended ? 'suspended' : 'running'}.`, target, key };
       return { ...base, ok: true, summary, transition: cmd.suspended ? `No new trips start on line ${r.number}; buses finish the trips they are on and return to the depot.` : `Line ${r.number} runs its timetable again.`, target, key };
     }
+    case 'service_plan': {
+      const r = s.routes[cmd.route];
+      const target = `route:${cmd.route}`;
+      const key = `plan:${cmd.plan.trim().toLowerCase()}:${cmd.on}`;
+      const summary = `${cmd.on ? 'Switch on' : 'Switch off'} the "${cmd.plan}" plan on ${lineName(game, cmd.route)}`;
+      if (!r) return { ...base, ok: false, summary, reason: 'That line no longer exists.', target, key };
+      const p = findPlan(game, cmd.route, cmd.plan);
+      if (!p) return { ...base, ok: false, summary, reason: `Line ${r.number} has no service plan called "${cmd.plan}". Add a manual plan in its timetable first.`, target, key };
+      if (p.when.kind !== 'manual') return { ...base, ok: false, summary, reason: `The "${p.name}" plan on line ${r.number} switches itself on by its condition; only manual plans can be switched.`, target, key };
+      if (!p.enabled) return { ...base, ok: false, summary, reason: `The "${p.name}" plan on line ${r.number} is turned off in the timetable.`, target, key };
+      if (p.when.on === cmd.on) return { ...base, ok: true, noop: true, summary, transition: `The "${p.name}" plan is already ${cmd.on ? 'on' : 'off'}.`, target, key };
+      return { ...base, ok: true, summary, transition: cmd.on ? `Line ${r.number} runs its "${p.name}" plan from now: departures not yet given to buses follow it.` : `Line ${r.number} goes back to its normal timetable for departures not yet given to buses.`, target, key };
+    }
     case 'set_fare': {
       const target = 'company:fare';
       const fare = Math.round(cmd.fare * 20) / 20;
@@ -193,6 +215,7 @@ export function runCommand(game: Game, cmd: Command, src = 'player'): Result<{ c
       break;
     }
     case 'suspend_line': r = game.updateRoute(cmd.route, { suspended: cmd.suspended }); break;
+    case 'service_plan': r = game.switchServicePlan(cmd.route, findPlan(game, cmd.route, cmd.plan)!.id, cmd.on); break;
     case 'set_fare': r = game.setFare(cmd.fare); break;
     case 'service_vehicle': r = game.serviceVehicle(cmd.vehicle); break;
     case 'move_depot': r = game.moveToDepot(cmd.vehicle, cmd.depot); break;

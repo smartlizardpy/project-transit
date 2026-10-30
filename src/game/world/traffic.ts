@@ -55,6 +55,11 @@ export class SimulatedTraffic implements TrafficProvider {
    * unless the player plans for it.
    */
   conditions: (t: number) => number = () => 1;
+  /**
+   * Local congestion at game time t (events: roads near a venue as crowds arrive and leave), as
+   * extra congestion per road edge. Applied to live congestion only, like `conditions`.
+   */
+  local: (t: number) => Map<number, number> | null = () => null;
   /** per-edge static weight (class × density × bottleneck) */
   private weight: Float32Array;
   /** per-edge direction bias -1..1 (which way the morning peak flows) */
@@ -139,6 +144,8 @@ export class SimulatedTraffic implements TrafficProvider {
       this.cacheSlot = slot;
       const tt = slot * 300 + 150;
       for (let i = 0; i < this.cache.length; i++) this.cache[i] = this.compute(i, tt, true);
+      const add = this.local(tt);
+      if (add) for (const [e, v] of add) for (const de of [2 * e, 2 * e + 1]) if (de < this.cache.length) this.cache[de] = Math.min(1, this.cache[de] + v);
     }
     return this.cache[de];
   }
