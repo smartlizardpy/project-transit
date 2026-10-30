@@ -16,8 +16,11 @@ import { recordTrip } from './progress.ts';
 import { hourOfDay } from './time.ts';
 
 export const PURPOSES = ['work', 'education', 'shopping', 'leisure', 'other'] as const;
-/** outbound trips per resident per day, by purpose (return trips are modelled separately) */
-const RATE = [0.4, 0.15, 0.22, 0.2, 0.12];
+/**
+ * Outbound trips per resident per day, by purpose (return trips are modelled separately).
+ * With returns this is about 2.7 trips per person per day by all modes, typical for a city.
+ */
+const RATE = [0.5, 0.19, 0.27, 0.25, 0.15];
 /** distance decay length per purpose, metres */
 const DECAY = [3600, 2600, 1800, 2600, 3000];
 /** non-home-based trip makers per job, and visitors per unit of shopping/leisure attraction */

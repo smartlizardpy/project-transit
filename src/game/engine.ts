@@ -106,6 +106,7 @@ export class Game {
     this.trafficIntensity = this.traffic.intensity;
     this.currency = currencyFor(state.region.country);
     if (state.region.fingerprint !== region.fingerprint) this.resnap();
+    this.reconcileTerritory();
     for (const r of Object.values(state.routes)) this.rebuildDerived(r.id);
     this.reindexTrips();
     const pax = paxTotals(state);
@@ -518,6 +519,26 @@ export class Game {
     s.tripDay = {};
     s.region.fingerprint = this.region.fingerprint;
     if (moved) notify(this, 'info', 'Map data was updated', 'Street data for this city changed since your last save. Stops were re-attached to the nearest street and buses returned to their depots.');
+  }
+
+  /**
+   * Operating areas are generated from map data, so a newer version of the game (or changed source
+   * data) can redraw them. Keep every area where the company has stops or depots, and the rest of
+   * the licences that still exist.
+   */
+  private reconcileTerritory() {
+    const t = this.state.territory;
+    const valid = new Set(this.region.zones.map((z) => z.id));
+    for (const st of Object.values(this.state.stops)) if (!valid.has(st.zone)) st.zone = this.geo.zoneAt(st.lngLat).id;
+    for (const d of Object.values(this.state.depots)) if (!valid.has(d.zone)) d.zone = this.geo.zoneAt(d.lngLat).id;
+    if (t.owned.every((id) => valid.has(id)) && valid.has(t.home)) return;
+    const owned = new Set(t.owned.filter((id) => valid.has(id)));
+    for (const st of Object.values(this.state.stops)) owned.add(st.zone);
+    for (const d of Object.values(this.state.depots)) owned.add(d.zone);
+    if (!valid.has(t.home)) t.home = Object.values(this.state.depots)[0]?.zone ?? [...owned][0] ?? this.region.zones[0].id;
+    owned.add(t.home);
+    t.owned = [...owned];
+    notify(this, 'info', 'Operating areas were redrawn', 'Area boundaries changed since your last save. You keep every area where you have stops or depots.');
   }
 
   // ═════════════════════════════════════════ commands

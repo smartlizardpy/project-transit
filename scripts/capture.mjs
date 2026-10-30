@@ -5,6 +5,9 @@
 //   pnpm shots                       # 1920x1080, 2560x1440, 1366x768 → docs/screenshots
 //   node scripts/capture.mjs 1366x768 # one size
 //   SHOTS_DIR=out PRESET=1 node scripts/capture.mjs   # other folder / starting city (index in PRESETS)
+//
+// The committed screenshots are reduced to 256 colours to keep the repository small, e.g. with Pillow:
+//   python3 -c "from PIL import Image; import glob; [Image.open(f).convert('RGB').quantize(256).save(f, optimize=True) for f in glob.glob('docs/screenshots/*.png')]"
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 

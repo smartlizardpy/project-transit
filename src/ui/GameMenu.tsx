@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { X, Play, FloppyDisk, FolderOpen, GearSix, SignOut, Power, Trash, ArrowLeft } from '@phosphor-icons/react';
 import '../styles/menu.css';
 import { useSession, session, loadSettings, saveSettings, type AppSettings } from '../app/session.ts';
-import { exitApp, isDesktop, type SaveMeta } from '../app/persistence.ts';
+import { exitApp, isDesktop, isFullscreen, setFullscreen, type SaveMeta } from '../app/persistence.ts';
 import { useUI } from '../state/store.ts';
 import { useGame } from './hooks.ts';
 import { CompanyMark } from './logos.tsx';
@@ -92,6 +92,8 @@ export function SettingsDialog({ onClose }: { onClose?: () => void }) {
   const close = () => (onClose ? onClose() : useUI.getState().openModal(null));
   const game = useGame();
   const [s, setS] = useState<AppSettings>(loadSettings);
+  const [full, setFull] = useState(false);
+  useEffect(() => void isFullscreen().then(setFull), []);
   const [, force] = useState(0);
   const patch = (p: Partial<AppSettings>) => {
     const n = { ...s, ...p };
@@ -109,6 +111,10 @@ export function SettingsDialog({ onClose }: { onClose?: () => void }) {
             value={String(s.autosaveMinutes)}
             onChange={(v) => patch({ autosaveMinutes: Number(v) })}
           />
+        </div>
+        <div className="mn-set-row">
+          <div><b>Fullscreen</b><span>Also F11.</span></div>
+          <button role="switch" aria-checked={full} aria-label="Fullscreen" className={'mn-switch' + (full ? ' on' : '')} onClick={() => void setFullscreen(!full).then(() => isFullscreen().then(setFull))}><i /></button>
         </div>
         {game && gs && (
           <>

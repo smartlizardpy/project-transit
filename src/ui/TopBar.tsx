@@ -123,7 +123,7 @@ const SPEED_BUTTONS = [
   { v: 1, icon: <Play size={17} weight="fill" />, label: 'Normal speed (1 min ≈ 7.5 s)', k: '1' },
   { v: 2, icon: <CaretRight size={18} weight="bold" />, label: 'Fast (1 h ≈ 2 min)', k: '2' },
   { v: 3, icon: <FastForward size={18} weight="fill" />, label: 'Faster (1 h ≈ 30 s)', k: '3' },
-  { v: 4, icon: <CaretDoubleRight size={18} weight="bold" />, label: 'Fastest (1 day ≈ 3 min)', k: '4' },
+  { v: 4, icon: <CaretDoubleRight size={18} weight="bold" />, label: 'Fastest (1 day ≈ 2 min)', k: '4' },
 ];
 
 function DayBar({ game }: { game: Game }) {

@@ -13,6 +13,7 @@ import { Onboarding, GameOver } from './ui/Onboarding.tsx';
 import { useKeyboard } from './ui/keyboard.ts';
 import { mapRuntime } from './map/runtime.ts';
 import { session, useSession } from './app/session.ts';
+import { toggleFullscreen } from './app/persistence.ts';
 import { useUI } from './state/store.ts';
 import { CompanyMark } from './ui/logos.tsx';
 import './styles/ui.css';
@@ -83,8 +84,7 @@ export function App() {
       if (e.key === 'F10' || (e.key.toLowerCase() === 'u' && e.shiftKey)) setHud((x) => !x);
       if (e.key === 'F11') {
         e.preventDefault();
-        if (document.fullscreenElement) void document.exitFullscreen();
-        else void document.documentElement.requestFullscreen().catch(() => {});
+        void toggleFullscreen();
       }
     };
     window.addEventListener('keydown', h);

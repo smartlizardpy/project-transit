@@ -123,6 +123,27 @@ export function persistence(): Persistence {
 }
 
 /** Quit the desktop app (no-op in the browser). */
+/** Fullscreen through the native window on desktop (the webview has no Fullscreen API there). */
+export async function isFullscreen(): Promise<boolean> {
+  if (isDesktop()) {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    return getCurrentWindow().isFullscreen().catch(() => false);
+  }
+  return !!document.fullscreenElement;
+}
+
+export async function setFullscreen(on: boolean) {
+  if (isDesktop()) {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    await getCurrentWindow().setFullscreen(on).catch(() => {});
+  } else if (on) await document.documentElement.requestFullscreen().catch(() => {});
+  else if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+}
+
+export async function toggleFullscreen() {
+  await setFullscreen(!(await isFullscreen()));
+}
+
 export async function exitApp() {
   if (isDesktop()) await invoke('app_exit').catch(() => window.close());
 }

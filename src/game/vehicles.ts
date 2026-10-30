@@ -256,9 +256,8 @@ export function startDeadhead(game: Game, v: Vehicle, toNode: number, to: 'route
   } else {
     const s = v.pos.s;
     if (s >= p.length - 0.5 || s <= 0.01) {
-      const here = vehicleNode(game, v);
-      from = here.node;
-      prevEdge = here.prevEdge;
+      // a bus standing at the end of its path (e.g. at a terminus) may turn round
+      from = vehicleNode(game, v).node;
     } else {
       // mid-segment: keep the current segment so the bus continues smoothly
       const i = segmentAt(p, s);

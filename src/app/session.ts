@@ -45,15 +45,14 @@ export const useSession = create<SessionStore>(() => ({
 
 export interface AppSettings {
   autosaveMinutes: number;
-  edgePan: boolean;
-  showFps: boolean;
 }
 
 const SETTINGS_KEY = 'pt-settings-v1';
 export function loadSettings(): AppSettings {
-  const d: AppSettings = { autosaveMinutes: 5, edgePan: false, showFps: false };
+  const d: AppSettings = { autosaveMinutes: 5 };
   try {
-    return { ...d, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') };
+    const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}');
+    return { autosaveMinutes: typeof raw.autosaveMinutes === 'number' ? raw.autosaveMinutes : d.autosaveMinutes };
   } catch {
     return d;
   }

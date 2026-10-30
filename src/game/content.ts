@@ -11,7 +11,7 @@ export const HOUR = 3600;
 export const SERVICE_DAY_START = 3 * HOUR;
 
 /** Game seconds per real second for each speed setting (0 = paused). */
-export const SPEEDS = [0, 8, 30, 120, 480] as const;
+export const SPEEDS = [0, 8, 30, 120, 720] as const;
 
 export interface VehicleModel {
   id: string;
@@ -87,7 +87,7 @@ export const ECON = {
   fareMin: 0.4,
   fareMax: 4.5,
   /** driver wage incl. on-costs, per staffed hour */
-  driverPerHour: 27,
+  driverPerHour: 24,
   /** diesel price per unit of energyPerKm */
   fuelPrice: 1,
   /** electricity is cheaper per unit */

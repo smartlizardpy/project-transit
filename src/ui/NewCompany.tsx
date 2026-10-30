@@ -161,6 +161,10 @@ function Setup() {
   const [logo, setLogo] = useState(0);
   useEffect(() => { flyToRegion(); }, []);
   const zones = useMemo(() => [...(region?.zones ?? [])].sort((a, b) => b.residents + b.jobs - (a.residents + a.jobs)), [region]);
+  // suggest the busiest area; the player can pick any other
+  useEffect(() => {
+    if (!useSession.getState().homeZone && zones[0]) useSession.setState({ homeZone: zones[0].id });
+  }, [zones]);
   const refs = useRef(new Map<string, HTMLButtonElement>());
   useEffect(() => {
     if (homeZone) refs.current.get(homeZone)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
