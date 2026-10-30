@@ -4,7 +4,7 @@
 
 import type { LngLat } from '../game/world/graph.ts';
 import type { RegionSpec } from '../game/world/region.ts';
-import { tilesAround } from '../game/world/regionBuilder.ts';
+import { tilesAround } from '../game/world/zoneTiles.ts';
 
 export interface CityPreset {
   id: string;

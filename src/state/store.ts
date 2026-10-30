@@ -9,6 +9,7 @@ export type Selection =
   | { kind: 'stop'; id: string }
   | { kind: 'depot'; id: string }
   | { kind: 'zone'; id: string }
+  | { kind: 'place'; id: string }
   | null;
 export type Panel = 'fleet' | 'finance' | 'lines' | 'company' | 'network' | null;
 export type NetworkTab = 'overview' | 'passengers' | 'stops' | 'lines' | 'fleet' | 'reports' | 'automation';

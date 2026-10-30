@@ -157,6 +157,6 @@ The game's website is a separate static site in [`website/`](website/README.md).
 
 ## Data and attribution
 
-Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). Tiles from [OpenMapTiles](https://openmaptiles.org/), served by [OpenFreeMap](https://openfreemap.org/). Place search uses [Nominatim](https://nominatim.org/), only when you press Enter. Attribution is shown on the map at all times.
+Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). Tiles from [OpenMapTiles](https://openmaptiles.org/), served by [OpenFreeMap](https://openfreemap.org/). Place search uses [Nominatim](https://nominatim.org/), only when you press Enter. Attribution is shown on the map at all times. Airport types and locations come from [OurAirports](https://ourairports.com/data/) (public domain); airport passenger numbers, stadium capacities, student numbers and hospital beds from [Wikidata](https://www.wikidata.org/) (CC0). Both are bundled (`scripts/data/build-airports.mjs`, `scripts/data/build-wikidata.mjs`), so the game makes no extra requests for them.
 
 The UI font is Figtree (SIL Open Font License), and the icons are Phosphor (MIT). All art is original: the buses, markers, logos and illustrations are drawn in code.

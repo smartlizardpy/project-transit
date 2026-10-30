@@ -1,0 +1,20 @@
+{
+  "recorded": "see git history",
+  "scenarios": {
+    "reference": {
+      "ridersWeekday": 3610.75,
+      "ridersWeekend": 3075.5,
+      "boardingsPerDay": 3432.3333333333335,
+      "resultPerDay": 4032.0400000000004,
+      "satisfaction": 0.7689322723422544
+    },
+    "thin": {
+      "ridersDay2": 97,
+      "resultDay2": -2189.6
+    },
+    "crowded": {
+      "peakLoad": 0.9705882352941176,
+      "boardings0609": 420
+    }
+  }
+}

@@ -4,6 +4,7 @@
 
 import type { Region } from './world/region.ts';
 import { Geo } from './world/geo.ts';
+import { placeSnapshot, placesDigest } from './world/places.ts';
 import { SimulatedTraffic } from './world/traffic.ts';
 import { route as routeLeg, type LngLat } from './world/graph.ts';
 import { buildPatterns, checkDepot, checkStop, type Pattern } from './network.ts';
@@ -16,6 +17,8 @@ import { compactLedger, emptyFinance, flushHour, post, reconcile } from './finan
 import { checkObjectives, closeDay, licenceInfo, notify, startingZones, routeWindow, unlockedModels } from './progress.ts';
 import { currencyFor, formatMoney, type Currency } from './currency.ts';
 import { DAY, DT, ECON, HOUR, LINE_COLOURS, MODEL, SERVICE, SPEEDS, STARTING_REPUTATION } from './content.ts';
+import { calendarDay, newCalendar, type CalendarDay } from './calendar.ts';
+import { mix } from './hash.ts';
 import { SAVE_VERSION, TripState, type GameState, type Id, type Route, type RouteKind, type Stop, type Timetable, type Trip, type Vehicle } from './types.ts';
 import { hhmm, serviceDayOf, serviceDayWeekend, weekdayOf } from './time.ts';
 import { emptyAnalytics } from './analytics/types.ts';
@@ -83,13 +86,15 @@ export interface NewGameOptions {
 }
 
 export function newGameState(o: NewGameOptions): GameState {
+  const seed = (o.seed ?? Math.floor(Math.random() * 2 ** 31)) >>> 0;
+  const startWeekday = o.startWeekday ?? 0;
   const state: GameState = {
     version: SAVE_VERSION,
     meta: { id: `g${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`, created: Date.now(), saved: 0, playSeconds: 0 },
     region: { ...o.region.spec, fingerprint: o.region.fingerprint },
     company: { name: o.company.name.trim() || 'City Transit', colour: o.company.colour, logo: o.company.logo, founded: 0, reputation: STARTING_REPUTATION, fare: ECON.referenceFare, status: 'ok', redDays: 0 },
-    clock: { t: (o.startHour ?? 5) * HOUR, startWeekday: o.startWeekday ?? 0 },
-    rng: (o.seed ?? Math.floor(Math.random() * 2 ** 31)) >>> 0,
+    clock: { t: (o.startHour ?? 5) * HOUR, startWeekday },
+    rng: seed,
     stops: {},
     routes: {},
     depots: {},
@@ -108,6 +113,7 @@ export function newGameState(o: NewGameOptions): GameState {
     analytics: emptyAnalytics(Math.floor(((o.startHour ?? 5) * HOUR) / DAY)),
     control: emptyControl(),
     automation: emptyAutomation(),
+    world: { seed: mix(seed, 0x57041d), calendar: newCalendar(startWeekday), places: placeSnapshot(o.region.cityPlaces ?? []) },
   };
   post(state, { amt: ECON.startingFunds, cat: 'equity', memo: `Founding capital, ${state.company.name}` });
   return state;
@@ -160,6 +166,8 @@ export class Game {
     this.trafficIntensity = this.traffic.intensity;
     this.currency = currencyFor(state.region.country);
     if (state.region.fingerprint !== region.fingerprint) this.resnap();
+    // the save keeps a snapshot of the significant places; refresh it when the map data changed
+    if (this.state.world.places.digest !== placesDigest(region.cityPlaces ?? [])) this.state.world.places = placeSnapshot(region.cityPlaces ?? []);
     this.reconcileTerritory();
     for (const r of Object.values(state.routes)) this.rebuildDerived(r.id);
     this.reindexTrips();
@@ -335,6 +343,11 @@ export class Game {
 
   isWeekend(t: number) {
     return weekdayOf(this.state.clock.startWeekday, t) >= 5;
+  }
+
+  /** Where time `t` falls in the game year (season and week; never a real date). */
+  calendarAt(t = this.state.clock.t): CalendarDay {
+    return calendarDay(this.state.world.calendar, this.state.clock.startWeekday, Math.floor(t / DAY));
   }
 
   vehicleList(): Vehicle[] {

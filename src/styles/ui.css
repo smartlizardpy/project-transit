@@ -386,6 +386,19 @@ button.lrow:hover { background: var(--card-hover); }
 .dest-mk .dname { position: absolute; left: 50%; bottom: 36px; transform: translate(-50%, 3px); white-space: nowrap; font-size: 13px; font-weight: 800; color: #4b5560; background: rgba(255,255,255,0.86); padding: 3px 9px; border-radius: 8px; opacity: 0; transition: opacity 160ms, transform 160ms; pointer-events: none; }
 .zoom-near .dest-mk .dname, .dest-mk:hover .dname { opacity: 1; transform: translate(-50%, 0); }
 .zoom-far .dest-mk .badge { transform: scale(0.8); }
+/* places open their card with the select tool; with other tools a click places a stop as usual */
+.map-root:not(.tool-route):not(.tool-stop):not(.tool-depot) .dest-mk .badge { cursor: pointer; }
+.dest-mk.sel .badge { box-shadow: 0 0 0 2.5px #fff, 0 3px 10px rgba(30,40,35,0.32); }
+.dest-mk.sel .dname { opacity: 1; transform: translate(-50%, 0); }
+/* airports beyond the map: a chip on the screen edge, in their direction */
+.edge-chip {
+  position: absolute; left: 0; top: 0; z-index: 2; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px;
+  border-radius: 13px; background: var(--card); color: var(--text); font-size: 12px; font-weight: 800; white-space: nowrap; cursor: pointer;
+  box-shadow: 0 3px 10px rgba(20,28,24,0.28); user-select: none;
+}
+.edge-chip svg { flex: none; }
+.edge-chip .km { color: var(--text-3); font-weight: 700; font-variant-numeric: tabular-nums; }
+.edge-chip:hover, .edge-chip.sel { background: var(--card-hover); }
 
 /* cursors per tool */
 .map-root.tool-route .maplibregl-canvas-container { cursor: crosshair; }

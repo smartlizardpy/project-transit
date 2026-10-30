@@ -99,6 +99,9 @@ export interface PatternService {
   available: boolean;
 }
 
+/** registry categories that count as transport hubs */
+const STATION_CATEGORIES = new Set(['airport', 'rail_station', 'metro_station', 'ferry_pier', 'tram_stop', 'bus_station', 'cable_car']);
+
 export class DemandModel {
   /** served stops in index order */
   stops: Id[] = [];
@@ -116,8 +119,8 @@ export class DemandModel {
   rate = new Float32Array(0);
   /** potential trips per stop per day (both directions), for UI */
   stopPotential = new Map<Id, number>();
-  /** rail stations and ferry piers within reach of each served stop */
-  hubs = new Map<Id, { name: string; kind: string; weight: number }[]>();
+  /** stations and piers of the Place Registry within reach of each served stop */
+  hubs = new Map<Id, { id: string; name: string; category: string; tier: number }[]>();
   slot = -1;
   services: PatternService[] = [];
   dirty = true;
@@ -167,15 +170,17 @@ export class DemandModel {
     // transport hubs: people arriving by train, metro, tram or ferry continue by bus, and
     // people head for the hub to travel on. Both scale with the hub's size.
     this.hubs.clear();
+    // (Which hubs a stop serves comes from the Place Registry; the demand they add still uses
+    // the older point weights until journeys replace them, so phase 1 leaves demand unchanged.)
     this.stops.forEach((id, s) => {
-      const list: { name: string; kind: string; weight: number }[] = [];
       let w = 0;
       for (const q of game.geo.poisNear(state.stops[id].lngLat, 320)) {
         if (q.p.kind !== 'station' && q.p.kind !== 'ferry') continue;
-        const k = q.p.weight * (1 - q.d / 450);
-        w += k;
-        if (q.p.weight >= 100) list.push({ name: q.p.name, kind: q.p.kind, weight: q.p.weight });
+        w += q.p.weight * (1 - q.d / 450);
       }
+      const list = game.geo.places
+        .near(state.stops[id].lngLat, 320, (p) => STATION_CATEGORIES.has(p.category) && p.scale.tier <= 4)
+        .map((q) => ({ id: q.place.id, name: q.place.name, category: q.place.category, tier: q.place.scale.tier }));
       if (list.length) this.hubs.set(id, list);
       if (w > 0) {
         this.prod[s] += w * 1.4;

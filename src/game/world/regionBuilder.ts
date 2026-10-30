@@ -7,6 +7,8 @@ import { classifyRings, clipLine, clipRing, latToMercY, lngToMercX, mercXToLng, 
 import { zoneId } from './zoneTiles.ts';
 import { buildGraph, projector, RoadClass, EDGE_BRIDGE, EDGE_ONEWAY, EDGE_TUNNEL, distanceM, type LngLat, type Segment, buildIndex, nearestNode, STOP_CLASSES, nodeHasClass } from './graph.ts';
 import type { DemandGrid, OsmStop, Place, Poi, PoiKind, RegionData, RegionSpec, StreetName, Zone } from './region.ts';
+import { buildPlaces, PLACE_AEROWAY, PLACE_LANDCOVER, PLACE_LANDUSE, PLACE_POI, ringArea, type RawAerodrome, type RawLine, type RawPoi, type RawPoly } from './placeBuilder.ts';
+import { hashString } from '../hash.ts';
 
 const Z = 14;
 
@@ -132,6 +134,38 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
   let nBuildings = 0, withHeight = 0, missingTiles = 0;
   const seenPoi = new Set<string>();
   const seenPlace = new Set<string>();
+  // inputs for the Place Registry (placeBuilder.ts)
+  const regPois: RawPoi[] = [];
+  const regPolys = new Map<string, RawPoly>();
+  const regLines: RawLine[] = [];
+  const aerodromes: RawAerodrome[] = [];
+  const seenAero = new Set<number>();
+  /** the tile feature id (OSM-derived, stable for the same map data), or a hash when missing */
+  const fid = (f: { id?: number }, salt: string) => (typeof f.id === 'number' && f.id > 0 ? f.id : hashString(salt));
+  const addPoly = (layer: RawPoly['layer'], cls: string, id: number, ring: number[]) => {
+    const key = `${layer}:${id}`;
+    const area = ringArea(ring);
+    let p = regPolys.get(key);
+    if (!p) regPolys.set(key, (p = { id, layer, cls, rings: [], area: 0, x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }));
+    p.rings.push(ring);
+    p.area += area;
+    for (let k = 0; k < ring.length; k += 2) {
+      p.x0 = Math.min(p.x0, ring[k]);
+      p.x1 = Math.max(p.x1, ring[k]);
+      p.y0 = Math.min(p.y0, ring[k + 1]);
+      p.y1 = Math.max(p.y1, ring[k + 1]);
+    }
+  };
+  /** outer rings of a polygon feature in local metres, clipped to the tile */
+  const outerRings = (f: { loadGeometry(): Pt[][] }, extent: number, ll: (p: Pt) => LngLat) =>
+    classifyRings(f.loadGeometry()).map((poly) => {
+      const out: number[] = [];
+      for (const q of clipRing(poly[0], 0, extent)) {
+        const [lng, lat] = ll(q);
+        out.push(...P.toXY(lng, lat));
+      }
+      return out;
+    }).filter((r) => r.length >= 6);
 
   let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
   tiles.forEach((t, ti) => {
@@ -155,6 +189,19 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
         const f = T.feature(i);
         if (f.type !== 2) continue;
         const p = f.properties as Record<string, string | number | boolean>;
+        if (p.class === 'rail' || p.class === 'transit' || p.class === 'ferry') {
+          const id = fid(f, `line|${t.x}|${t.y}|${i}`);
+          for (const line of f.loadGeometry())
+            for (const piece of clipLine(line, 0, T.extent)) {
+              const pts: number[] = [];
+              for (const q of piece) {
+                const [lng, lat] = ll(q);
+                pts.push(...P.toXY(lng, lat));
+              }
+              regLines.push({ id, cls: String(p.class), sub: String(p.subclass ?? ''), service: p.service ? String(p.service) : '', pts });
+            }
+          continue;
+        }
         const cls = ROAD_CLASS[String(p.class)];
         if (cls === undefined) continue;
         if (p.service === 'parking_aisle' || p.service === 'driveway') continue;
@@ -177,6 +224,19 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
         if (f.type !== 2) continue;
         const p = f.properties as Record<string, string>;
         const name = p['name:latin'] ?? p.name;
+        if (name && p.class === 'ferry') {
+          // named ferry routes: how many call at a pier (Place Registry)
+          for (const line of f.loadGeometry())
+            for (const piece of clipLine(line, 0, TN.extent)) {
+              const pts: number[] = [];
+              for (const q of piece) {
+                const [lng, lat] = ll(q);
+                pts.push(...P.toXY(lng, lat));
+              }
+              regLines.push({ id: hashString(`ferry|${name}`), cls: 'ferry_route', sub: '', service: '', pts });
+            }
+          continue;
+        }
         if (!name || !(String(p.class) in ROAD_CLASS)) continue;
         for (const line of f.loadGeometry())
           for (const piece of clipLine(line, 0, TN.extent)) {
@@ -201,6 +261,10 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
         if (!g || g.x < 0 || g.y < 0 || g.x > PO.extent || g.y > PO.extent) continue;
         const at = ll(g);
         const name = (p['name:latin'] ?? p.name) as string | undefined;
+        if (PLACE_POI.has(String(p.class))) {
+          const [x, y] = P.toXY(at[0], at[1]);
+          regPois.push({ id: fid(f, `poi|${p.class}|${name ?? ''}|${at[0].toFixed(5)},${at[1].toFixed(5)}`), cls: String(p.class), sub: String(p.subclass ?? ''), name: name ? String(name) : '', x, y, rank: Number(p.rank ?? 99) });
+        }
         if (p.subclass === 'bus_stop') {
           if (name) rawStops.push({ name: String(name), at });
           continue;
@@ -243,7 +307,12 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
       for (let i = 0; i < LU.length; i++) {
         const f = LU.feature(i);
         if (f.type !== 3) continue;
-        const cls = LANDUSE_PRIORITY[String((f.properties as Record<string, string>).class)];
+        const luName = String((f.properties as Record<string, string>).class);
+        if (PLACE_LANDUSE.has(luName)) {
+          const id = fid(f, `landuse|${luName}|${t.x}|${t.y}|${i}`);
+          for (const r of outerRings(f as unknown as { loadGeometry(): Pt[][] }, LU.extent, ll)) addPoly('landuse', luName, id, r);
+        }
+        const cls = LANDUSE_PRIORITY[luName];
         if (!cls) continue;
         for (const poly of classifyRings(f.loadGeometry() as Pt[][])) {
           const toXY = (r: Pt[]) => {
@@ -265,6 +334,33 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
           }
           landuse.push({ cls, ring, holes: poly.slice(1).map(toXY).filter((h) => h.length >= 6), x0, y0, x1, y1 });
         }
+      }
+    }
+
+    // ---------------- parks, gardens and beaches; airport aprons; airport labels (registry only)
+    for (const [layerName, keep, key] of [['landcover', PLACE_LANDCOVER, 'subclass'], ['aeroway', PLACE_AEROWAY, 'class']] as const) {
+      const L = vt.layers[layerName];
+      if (!L) continue;
+      const ll = toLL(L.extent);
+      for (let i = 0; i < L.length; i++) {
+        const f = L.feature(i);
+        const c = String((f.properties as Record<string, string>)[key] ?? '');
+        if (f.type !== 3 || !keep.has(c)) continue;
+        const id = fid(f, `${layerName}|${c}|${t.x}|${t.y}|${i}`);
+        for (const r of outerRings(f as unknown as { loadGeometry(): Pt[][] }, L.extent, ll)) addPoly(layerName, c, id, r);
+      }
+    }
+    const AL = vt.layers.aerodrome_label;
+    if (AL) {
+      const ll = toLL(AL.extent);
+      for (let i = 0; i < AL.length; i++) {
+        const f = AL.feature(i);
+        const p = f.properties as Record<string, string>;
+        const g = f.loadGeometry()[0]?.[0];
+        const id = fid(f, `aero|${p.iata ?? ''}|${p.icao ?? ''}|${p.name ?? ''}`);
+        if (!g || seenAero.has(id)) continue;
+        seenAero.add(id);
+        aerodromes.push({ id, name: String(p['name:latin'] ?? p.name ?? ''), iata: p.iata || undefined, icao: p.icao || undefined, cls: String(p.class ?? ''), lngLat: ll(g) });
       }
     }
 
@@ -382,6 +478,22 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
   progress?.('Mapping operating areas', 0, 1);
   const zones = buildZones(places, grid, pois, spec, P);
 
+  // ---------------- the Place Registry
+  progress?.('Finding airports, stations and destinations', 0, 1);
+  const tileSet = new Set(spec.tiles.map(([x, y]) => `${x},${y}`));
+  const cityPlaces = buildPlaces({
+    centre: spec.centre,
+    toXY: P.toXY,
+    toLngLat: P.toLngLat,
+    inRegion: (lng, lat) => tileSet.has(`${Math.floor(lngToMercX(lng) * 2 ** Z)},${Math.floor(latToMercY(lat) * 2 ** Z)}`),
+    pois: regPois,
+    polys: [...regPolys.values()],
+    lines: regLines,
+    aerodromes,
+    buildings,
+    labels: places,
+  });
+
   // ---------------- coverage
   let roadM = 0, oneway = 0, bridges = 0, tunnels = 0;
   for (let ed = 0; ed < graph.m; ed++) {
@@ -405,6 +517,7 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
     bounds: { w, s, e, n },
     pois: pois.sort((a, b) => b.weight - a.weight),
     places,
+    cityPlaces,
     demand: grid,
     zones,
     osmStops,
@@ -419,6 +532,7 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
       pois: rawPoi.length,
       osmStops: osmStops.length,
       places: places.length,
+      cityPlaces: cityPlaces.length,
       traffic: 'simulated',
       missingTiles,
     },
@@ -581,16 +695,4 @@ function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], spec: Region
     if (z && z.highlights.length < 4 && !z.highlights.includes(p.name)) z.highlights.push(p.name);
   }
   return zones;
-}
-
-/** z14 tiles covering a box of `size` tiles around a point. */
-export function tilesAround(centre: LngLat, cols: number, rows: number): [number, number][] {
-  const n = 2 ** Z;
-  const fx = ((centre[0] + 180) / 360) * n;
-  const s = Math.sin((centre[1] * Math.PI) / 180);
-  const fy = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n;
-  const x0 = Math.round(fx - cols / 2), y0 = Math.round(fy - rows / 2);
-  const out: [number, number][] = [];
-  for (let y = y0; y < y0 + rows; y++) for (let x = x0; x < x0 + cols; x++) out.push([x, y]);
-  return out;
 }

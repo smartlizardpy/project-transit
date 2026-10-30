@@ -3,14 +3,16 @@
 
 import type { LngLat } from './world/graph.ts';
 import type { RegionSpec } from './world/region.ts';
+import type { PlaceSnapshotState } from './world/places.ts';
 
 import type { AnalyticsState } from './analytics/types.ts';
 import type { ControlState } from './control.ts';
 import type { AutomationState } from './automation/types.ts';
+import type { CalendarState } from './calendar.ts';
 
 export type Id = string;
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 
 // ─────────────────────────────────────────── company
 
@@ -351,4 +353,21 @@ export interface GameState {
   control: ControlState;
   /** Automation Studio workflows, memory and history (save version 2) */
   automation: AutomationState;
+  /** the city around the company: calendar, and later weather, events and places (save version 3) */
+  world: WorldState;
+}
+
+/**
+ * City Activity Engine state (save version 3). `seed` never changes after creation: weather,
+ * events and other city randomness hash it with the day, so they never draw from `rng` (which
+ * breakdowns advance) and a reloaded game sees the same city.
+ */
+export interface WorldState {
+  seed: number;
+  calendar: CalendarState;
+  /**
+   * The most significant places of the Place Registry (at most ~300), refreshed when the map
+   * data changes. Lets tools list places without the map tiles, and later anchors saved events.
+   */
+  places: PlaceSnapshotState;
 }

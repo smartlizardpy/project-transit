@@ -2,6 +2,7 @@
 // Built at runtime from OpenMapTiles vector tiles (see regionBuilder.ts).
 
 import type { LngLat, RoadGraph, SpatialIndex } from './graph.ts';
+import type { CityPlace } from './places.ts';
 
 export interface RegionSpec {
   /** stable id, e.g. "istanbul-galata" */
@@ -101,6 +102,8 @@ export interface RegionCoverage {
   pois: number;
   osmStops: number;
   places: number;
+  /** entries in the Place Registry (missing in older data) */
+  cityPlaces?: number;
   /** traffic data source; we only have a simulated model */
   traffic: 'simulated';
   /** tiles that failed to load */
@@ -112,7 +115,10 @@ export interface RegionData {
   graph: RoadGraph;
   bounds: { w: number; s: number; e: number; n: number };
   pois: Poi[];
+  /** OSM place labels (neighbourhoods, suburbs) */
   places: Place[];
+  /** the Place Registry: airports, stations and destinations (placeBuilder.ts) */
+  cityPlaces: CityPlace[];
   demand: DemandGrid;
   zones: Zone[];
   osmStops: OsmStop[];

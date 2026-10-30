@@ -3,6 +3,7 @@
 import { buildIndex, projector, type LngLat } from './graph.ts';
 import type { Poi, Region, RegionData, Zone } from './region.ts';
 import { tileAt, zoneTile } from './zoneTiles.ts';
+import { PlaceIndex } from './places.ts';
 
 export class Geo {
   readonly P: ReturnType<typeof projector>;
@@ -13,10 +14,13 @@ export class Geo {
   private poiXY: { p: Poi; x: number; y: number }[];
 
   readonly region: Region;
+  /** the Place Registry with a spatial index */
+  readonly places: PlaceIndex;
 
   constructor(region: Region) {
     this.region = region;
     this.P = projector(region.spec.centre);
+    this.places = new PlaceIndex(region.cityPlaces ?? [], this.P.toXY);
     for (const z of region.zones) {
       const t = zoneTile(z.id);
       if (t) this.zoneByTile.set(`${t[0]},${t[1]}`, z);

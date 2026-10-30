@@ -133,5 +133,5 @@ Tests: the full suite (102 tests in 16 files) takes about 90 s with Vitest cappe
 
 - See the per-area notes in `docs/route-diagnostics.md` (fix search changes one stop at a time; undo lasts while the check is open).
 - Flows are drawn as arcs between stops or the middle of an area's stops, not along roads.
-- Passenger choice is still the original bus-versus-walk-or-car model. A richer model (several modes, population groups, habit) is researched and proposed in `docs/passenger-choice-research.md`, not built.
+- Passenger choice is still the original bus-versus-walk-or-car model. A richer model (several modes, population groups, habit) is researched in `docs/passenger-choice-research.md` and planned in `docs/city-activity-engine-plan.md`, not built.
 - The Stops and per-line hourly charts ignore the time-of-day filter and say so.

@@ -28,6 +28,7 @@ button.link:hover { color: #b3dcf6; text-decoration: underline; }
 .stop-icon { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: rgba(95, 209, 142, 0.14); color: var(--mint); flex: none; }
 .stop-icon.depot { background: rgba(240, 193, 105, 0.14); color: var(--amber); }
 .stop-icon.locked { background: #26302a; color: var(--text-3); }
+.stop-icon.place { background: rgba(79, 163, 224, 0.14); color: #8cc6ef; }
 .mini-list { display: flex; flex-direction: column; gap: 2px; }
 .mini-row { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 4px; border-radius: 7px; }
 .mini-row:hover { background: rgba(255, 255, 255, 0.03); }

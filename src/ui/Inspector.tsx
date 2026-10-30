@@ -14,8 +14,9 @@ import { STATUS_LABEL } from '../game/vehicles.ts';
 import { routeWindow, routeMoney, licenceInfo } from '../game/progress.ts';
 import { describeTimetable } from '../game/timetable.ts';
 import { waitingAt } from '../game/passengers.ts';
-import { distanceM, type LngLat } from '../game/world/graph.ts';
-import { POI_LABEL } from '../game/world/region.ts';
+import type { LngLat } from '../game/world/graph.ts';
+import { PLACE_LABEL, placeSignificance, walkDistanceM } from '../game/world/places.ts';
+import { PlaceInspector } from './PlaceInspector.tsx';
 import { RouteCheck, DiagnosticButton } from './RouteCheck.tsx';
 import { lineDiagnostics } from '../game/diagnostics.ts';
 
@@ -58,6 +59,7 @@ export function Inspector() {
       {shown.kind === 'stop' && <StopInspector id={shown.id} />}
       {shown.kind === 'depot' && <DepotInspector id={shown.id} />}
       {shown.kind === 'zone' && <ZoneInspector id={shown.id} />}
+      {shown.kind === 'place' && <PlaceInspector id={shown.id} close={<Close />} />}
     </aside>
   );
 }
@@ -451,8 +453,14 @@ export function catchment(game: Game, at: LngLat) {
       residents += d.residents[j * d.w + i];
       jobs += d.jobs[j * d.w + i];
     }
-  const pois = game.region.pois.filter((p) => distanceM(p.lngLat, at) <= R && p.name).sort((a, b) => b.weight - a.weight).slice(0, 3);
-  return { residents: Math.round(residents / 50) * 50, jobs: Math.round(jobs / 50) * 50, pois };
+  // the most significant places within the walk (Place Registry), measured to their nearest way in
+  const places = game.geo.places
+    .near(at, R + 250)
+    .filter((q) => walkDistanceM(q.place, at) <= R)
+    .sort((a, b) => placeSignificance(b.place) - placeSignificance(a.place) || a.d - b.d)
+    .slice(0, 4)
+    .map((q) => q.place);
+  return { residents: Math.round(residents / 50) * 50, jobs: Math.round(jobs / 50) * 50, places };
 }
 
 function StopInspector({ id }: { id: string }) {
@@ -501,7 +509,17 @@ function StopInspector({ id }: { id: string }) {
             <Kpi value={c.jobs.toLocaleString()} label="Jobs" />
             <Kpi value={String(waitingAt(game.state, id))} label="Waiting now" />
           </div>
-          {c.pois.length > 0 && <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>Nearby: {c.pois.map((p) => `${p.name} (${POI_LABEL[p.kind].toLowerCase()})`).join(', ')}</div>}
+          {c.places.length > 0 && (
+            <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
+              Nearby:{' '}
+              {c.places.map((p, i) => (
+                <span key={p.id}>
+                  {i > 0 && ', '}
+                  <button className="link" onClick={() => useUI.getState().select({ kind: 'place', id: p.id })}>{p.name}</button> ({PLACE_LABEL[p.category].toLowerCase()})
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       <div className="p-foot">
