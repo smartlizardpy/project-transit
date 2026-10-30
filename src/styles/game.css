@@ -173,3 +173,6 @@ button.link:hover { color: #b3dcf6; text-decoration: underline; }
 /* segmented controls size to their labels */
 .seg button { padding: 0 12px; white-space: nowrap; }
 .rs-colours { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* never squash illustrations or KPI blocks when the panel is short; the body scrolls instead */
+.p-body > * { flex-shrink: 0; }

@@ -171,14 +171,15 @@ function viaNodes(region: Region, geo: Geo, pts: LngLat[] | undefined): number[]
 
 /**
  * Route every pattern of a line along the road network. Consecutive legs carry the arrival
- * direction forward, so buses do not make U-turns at stops, and at stops on divided roads the
+ * direction forward, so buses do not make U-turns at intermediate stops (they may turn at a
+ * terminus), and at stops on divided roads the
  * halt on the correct side of the road is chosen for the direction of travel.
  */
 export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Route): Pattern[] {
   const g = region.graph;
   const seqs = patternStops(r);
   const out: Pattern[] = [];
-  let prevEnd = -1, prevEdge = -1;
+  let prevEnd = -1;
   seqs.forEach((stops, pi) => {
     const nodes: number[] = [];
     const dedges: number[] = [];
@@ -226,15 +227,16 @@ export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Rou
       };
     };
     if (valid) {
-      // choose the starting halt that makes the first leg (plus any repositioning) cheapest
+      // Choose the starting halt that makes the first leg (plus any repositioning) cheapest.
+      // Buses turn round at a terminus during layover, so the first leg may leave in either direction.
       let start = -1, first: ReturnType<typeof leg> = null, bestCost = Infinity;
       for (const h of stopHalts(state, stops[0])) {
         let pre = 0;
         if (pi > 0 && prevEnd >= 0 && h !== prevEnd) {
-          const reposition = routeWithFallback(g, prevEnd, h, { prevEdge });
+          const reposition = routeWithFallback(g, prevEnd, h);
           pre = reposition ? reposition.seconds : Infinity;
         }
-        const l = leg(h, pi > 0 && h === prevEnd ? prevEdge : -1, 0);
+        const l = leg(h, -1, 0);
         if (!l) continue;
         const cost = pre + l.seconds + l.contra * 600;
         if (cost < bestCost) {
@@ -286,7 +288,6 @@ export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Rou
       }
       stopS[stopS.length - 1] = path.length;
       prevEnd = stopNodes[stopNodes.length - 1];
-      prevEdge = dedges.length ? dedges[dedges.length - 1] : -1;
     }
     const warnings: string[] = [];
     if (contraflowLegs.length) warnings.push('Part of this line runs against a one-way street (probably a gap in the map data).');

@@ -608,8 +608,10 @@ export class Game {
   }
 
   /** Validate a line definition without changing anything (used by the editor preview). */
-  previewRoute(def: RouteDef): { patterns: Pattern[]; profiles: RunProfile[]; problems: string[]; warnings: string[] } {
-    const r = this.routeFromDef('preview', def);
+  /** Validate and route a line without changing the game. Pass `editing` when previewing changes to an existing line. */
+  previewRoute(def: RouteDef, editing?: Id): { patterns: Pattern[]; profiles: RunProfile[]; problems: string[]; warnings: string[] } {
+    const base = editing ? this.state.routes[editing] : undefined;
+    const r = this.routeFromDef(base ? base.id : 'preview', def, base);
     const problems = this.routeProblems(r);
     const patterns = r.stops.length >= 2 ? buildPatterns(this.state, this.region, this.geo, r) : [];
     for (const p of patterns) problems.push(...p.problems);

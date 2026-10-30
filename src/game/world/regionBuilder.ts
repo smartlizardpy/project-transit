@@ -449,19 +449,23 @@ function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], _spec: Regio
   const [bx1, by1] = P.toXY(b.e, b.n);
   const span = Math.min(bx1 - bx0, by1 - by0);
   const spacing = Math.max(650, Math.min(1100, span / 4.2));
-  const density = (x: number, y: number) => {
-    let sum = 0;
-    const r = 3;
+  /** activity (people, jobs, streets) in a square window of ±r cells, and its centre of mass */
+  const activity = (x: number, y: number, r = 3) => {
+    let sum = 0, sx = 0, sy = 0;
     const cx = Math.floor((x - grid.x0) / grid.cell), cy = Math.floor((y - grid.y0) / grid.cell);
     for (let dy = -r; dy <= r; dy++)
       for (let dx = -r; dx <= r; dx++) {
         const X = cx + dx, Y = cy + dy;
         if (X < 0 || Y < 0 || X >= grid.w || Y >= grid.h) continue;
         const k = Y * grid.w + X;
-        sum += grid.residents[k] + grid.jobs[k] + grid.roads[k] * 0.2;
+        const a = grid.residents[k] + grid.jobs[k] + grid.roads[k] * 0.2;
+        sum += a;
+        sx += a * (grid.x0 + (X + 0.5) * grid.cell);
+        sy += a * (grid.y0 + (Y + 0.5) * grid.cell);
       }
-    return sum;
+    return { sum, x: sum ? sx / sum : x, y: sum ? sy / sum : y };
   };
+  const density = (x: number, y: number) => activity(x, y).sum;
   const cands = places
     .filter((p) => p.kind in PLACE_RANK)
     .map((p) => {
@@ -476,9 +480,13 @@ function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], _spec: Regio
   // fill gaps that have streets or buildings with generated areas
   const step = spacing * 0.9;
   let generated = 0;
-  for (let y = by0 + step / 2; y < by1; y += step)
-    for (let x = bx0 + step / 2; x < bx1; x += step) {
-      if (!far(x, y, spacing * 0.95) || density(x, y) < 400) continue;
+  for (let gy = by0 + step / 2; gy < by1; gy += step)
+    for (let gx = bx0 + step / 2; gx < bx1; gx += step) {
+      // centre generated areas on where the streets and buildings are, never on open water
+      const a = activity(gx, gy);
+      if (a.sum < 400) continue;
+      const { x, y } = a;
+      if (!far(x, y, spacing * 0.95) || activity(x, y, 1).sum < 120) continue;
       let near = '';
       let nd = Infinity;
       for (const c of cands) {
@@ -519,13 +527,19 @@ function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], _spec: Regio
   });
   // stats from demand cells (nearest seed = Voronoi membership)
   const res = new Float64Array(seeds.length), jobs = new Float64Array(seeds.length);
+  const wsum = new Float64Array(seeds.length), wx = new Float64Array(seeds.length), wy = new Float64Array(seeds.length);
   for (let cy = 0; cy < grid.h; cy++)
     for (let cx = 0; cx < grid.w; cx++) {
       const k = cy * grid.w + cx;
-      if (!grid.residents[k] && !grid.jobs[k]) continue;
-      const z = nearestSeed(seeds, grid.x0 + (cx + 0.5) * grid.cell, grid.y0 + (cy + 0.5) * grid.cell);
+      const w = grid.residents[k] + grid.jobs[k] + grid.roads[k] * 0.2;
+      if (!w) continue;
+      const x = grid.x0 + (cx + 0.5) * grid.cell, y = grid.y0 + (cy + 0.5) * grid.cell;
+      const z = nearestSeed(seeds, x, y);
       res[z] += grid.residents[k];
       jobs[z] += grid.jobs[k];
+      wsum[z] += w;
+      wx[z] += w * x;
+      wy[z] += w * y;
     }
   const ids = new Set<string>();
   const zones: Zone[] = seeds.map((s, i) => {
@@ -544,7 +558,9 @@ function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], _spec: Regio
       cy += (polys[i][j][1] + polys[i][k][1]) * cross;
     }
     area /= 2;
-    const centroid = area ? P.toLngLat(cx / (6 * area), cy / (6 * area)) : P.toLngLat(s.x, s.y);
+    // the centre of activity (inside the convex cell) labels the area better than its geometric
+    // centre, which on a coast can fall in the water
+    const centroid = wsum[i] > 0 ? P.toLngLat(wx[i] / wsum[i], wy[i] / wsum[i]) : area ? P.toLngLat(cx / (6 * area), cy / (6 * area)) : P.toLngLat(s.x, s.y);
     return {
       id,
       name: s.name,

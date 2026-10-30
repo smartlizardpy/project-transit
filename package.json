@@ -10,10 +10,10 @@
     "tauri": "tauri",
     "app": "tauri dev",
     "app:build": "tauri build",
-    "bake": "node scripts/bake-istanbul.ts",
     "shots": "node scripts/capture.mjs",
     "check:webkit": "node scripts/check-webkit.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "play": "node scripts/play.mjs"
   },
   "dependencies": {
     "@fontsource/figtree": "^5.3.0",

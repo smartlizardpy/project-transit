@@ -119,7 +119,7 @@ export function computePreview(d: RouteDraft | null) {
     useDraftPreview.setState({ preview: null });
     return null;
   }
-  const res = game.previewRoute(draftDef(d));
+  const res = game.previewRoute(draftDef(d), d.editing ?? undefined);
   const weekend = game.isWeekend(game.t) ? 1 : 0;
   const hour = Math.floor((game.t % 86400) / 3600);
   const preview: DraftPreview = {

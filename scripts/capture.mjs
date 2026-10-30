@@ -1,185 +1,146 @@
-// Screenshot every demo state at several desktop sizes, driving the UI with real
-// mouse clicks and key presses. Requires the dev server (pnpm dev) to be running.
+// QA screenshots of the real game at several desktop sizes. Requires the dev server (pnpm dev).
+// It plays through the menus, then builds a small working network through the game API
+// (depot, stops, a line, buses), runs the simulation for a day and captures the main screens.
 //
-//   node scripts/capture.mjs                 # all sizes, all states
-//   node scripts/capture.mjs 1920x1080       # one size
-//   SHOTS_DIR=out node scripts/capture.mjs   # custom output folder
+//   pnpm shots                       # 1920x1080, 2560x1440, 1366x768 → docs/screenshots
+//   node scripts/capture.mjs 1366x768 # one size
+//   SHOTS_DIR=out PRESET=1 node scripts/capture.mjs   # other folder / starting city (index in PRESETS)
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 
 const URL = process.env.URL || 'http://127.0.0.1:5173/';
 const OUT = process.env.SHOTS_DIR || 'docs/screenshots';
+const PRESET = Number(process.env.PRESET || 0);
 const SIZES = (process.argv[2] ? [process.argv[2]] : ['1920x1080', '2560x1440', '1366x768']).map((s) => s.split('x').map(Number));
-const ONLY = process.argv[3] ? process.argv[3].split(',') : null;
 mkdirSync(OUT, { recursive: true });
 
 const settle = async (page, extra = 900) => {
-  await page.waitForFunction(() => window.__map.areTilesLoaded() && !window.__city.busy, null, { timeout: 30000 }).catch(() => console.warn('  tiles timeout'));
+  await page.waitForFunction(() => window.__map?.areTilesLoaded() && !window.__city?.busy, null, { timeout: 30000 }).catch(() => console.warn('  tiles timeout'));
   await page.waitForTimeout(extra);
 };
-const project = (page, lngLat) => page.evaluate((ll) => { const p = window.__map.project(ll); return { x: p.x, y: p.y }; }, lngLat);
-const home = async (page) => {
-  await page.evaluate(() => {
-    const ui = window.__ui.getState();
-    ui.setTool('select');
-    window.__ui.setState({ selection: null, hover: null, panel: null, following: null, overlays: { traffic: false, demand: false, network: false }, toast: null });
-    window.__sim.setSpeed(1);
-    window.__map.jumpTo({ center: [28.9766, 41.0262], zoom: 16.45, pitch: 56, bearing: -28 });
-  });
-  await page.mouse.move(5, 540);
-};
 
-/** A bus that is on screen and clear of the HUD cards. */
-const visibleBus = (page, w, h, prefer) =>
-  page.evaluate(({ w, h, prefer }) => {
-    const ctl = window.__ctl, sim = window.__sim;
-    const cands = sim.vehicles.filter((v) => v.status !== 'depot').map((v) => ({ v, p: ctl.vehicles.screenPos(v.id) })).filter(({ p }) => p && p.x > 120 && p.x < w - 420 && p.y > 120 && p.y < h - 140);
-    const score = (c) => (c.v.lineId === prefer ? 2 : 0) + (sim.pose(c.v).at[0] > 28.981 ? 1 : 0);
-    cands.sort((a, b) => score(b) - score(a));
-    const c = cands[0];
-    return c ? { id: c.v.id, x: c.p.x, y: c.p.y } : null;
-  }, { w, h, prefer });
-
-const STATES = {
-  async overview() {},
-
-  async 'clean-map'(page) {
-    await page.keyboard.press('Shift+U'); // hide the HUD: the map alone must look good
-  },
-
-  async 'bus-selected'(page, w, h) {
-    await page.evaluate(() => window.__map.jumpTo({ center: [28.9845, 41.0268], zoom: 16.9, pitch: 56, bearing: -24 }));
-    await settle(page, 600);
-    await page.evaluate(() => window.__sim.setSpeed(0));
-    const bus = await visibleBus(page, w, h, 'L26');
-    if (!bus) throw new Error('no bus on screen');
-    await page.mouse.move(bus.x, bus.y);
-    await page.waitForTimeout(150);
-    await page.mouse.click(bus.x, bus.y);
-    await page.waitForTimeout(250);
-    await page.getByRole('button', { name: /Follow/ }).click();
-    await page.evaluate(() => window.__sim.setSpeed(1));
-    await page.waitForTimeout(2600);
-  },
-
-  async 'route-selected'(page) {
-    await page.getByRole('button', { name: 'Lines' }).first().click();
-    await page.waitForTimeout(350);
-    await page.locator('.panel .lrow', { hasText: 'Sirkeci' }).first().click();
-    await page.waitForTimeout(400);
-    await page.getByRole('button', { name: 'Lines' }).first().click(); // close the panel, keep the selection
-    await page.mouse.move(960, 700);
-    await page.waitForTimeout(1500);
-  },
-
-  async 'route-editing'(page, w, h) {
-    // click real (OSM) bus stops near three points on screen, then hover a fourth;
-    // zoom out step by step until enough stops are in view
-    const findPicks = () => page.evaluate(({ w, h }) => {
-      const on = window.__freeStops().map((o) => ({ o, p: window.__map.project(o.lngLat) })).filter(({ p }) => p.x > 140 && p.x < w - 140 && p.y > 140 && p.y < h - 170);
-      const used = new Set();
-      return [[0.62, 0.66], [0.66, 0.34], [0.38, 0.3], [0.3, 0.62]].map(([fx, fy]) => {
-        const c = on.filter(({ o }) => !used.has(o.id)).sort((a, b) => Math.hypot(a.p.x - fx * w, a.p.y - fy * h) - Math.hypot(b.p.x - fx * w, b.p.y - fy * h))[0];
-        if (!c) return null;
-        used.add(c.o.id);
-        return { x: c.p.x, y: c.p.y };
-      }).filter(Boolean);
-    }, { w, h });
-    let picks = [];
-    for (const zoom of [16.1, 15.7, 15.3]) {
-      await page.evaluate((zoom) => window.__map.jumpTo({ center: [28.9792, 41.0272], zoom, pitch: 50, bearing: -20 }), zoom);
-      await settle(page, 500);
-      picks = await findPicks();
-      if (picks.length >= 4) break;
+async function buildNetwork(page, preset) {
+  return page.evaluate(async (preset) => {
+    const { PRESETS, presetSpec } = await import('/src/app/presets.ts');
+    const { routeWithFallback } = await import('/src/game/world/graph.ts');
+    const reg = window.__session.region ?? (await window.__session.loadRegion(presetSpec(PRESETS[preset])));
+    void reg;
+    const g = window.__game;
+    const gr = g.region.graph;
+    // a few licensed neighbours so the line has room (dev convenience, not a game rule)
+    const home = g.geo.zone(g.state.territory.home);
+    for (const z of home.neighbours) if (!g.state.territory.owned.includes(z)) g.state.territory.owned.push(z);
+    const owned = new Set(g.state.territory.owned);
+    const [cx, cy] = g.geo.P.toXY(home.centroid[0], home.centroid[1]);
+    const inOwned = (v) => owned.has(g.geo.zoneAt([gr.lng[v], gr.lat[v]]).id);
+    const main = [];
+    for (let e = 0; e < gr.m; e++) {
+      if (gr.cls[e] < 2 || gr.cls[e] > 4 || (gr.flags[e] & 6)) continue;
+      if (inOwned(gr.ea[e])) main.push(gr.ea[e]);
     }
-    await page.keyboard.press('r');
-    await page.waitForTimeout(300);
-    if (picks.length < 4) throw new Error('not enough bus stops on screen');
-    for (const p of picks.slice(0, 3)) {
-      await page.mouse.move(p.x, p.y, { steps: 4 });
-      await page.mouse.click(p.x, p.y);
-      await page.waitForTimeout(250);
+    main.sort((a, b) => Math.hypot(gr.x[a] - cx, gr.y[a] - cy) - Math.hypot(gr.x[b] - cx, gr.y[b] - cy));
+    let depot = null;
+    for (const v of main.slice(0, 300)) { const r = g.buildDepot([gr.lng[v], gr.lat[v]]); if (r.ok) { depot = r.value; break; } }
+    let best = null;
+    for (const b of main) {
+      const d = Math.hypot(gr.x[b] - gr.x[main[0]], gr.y[b] - gr.y[main[0]]);
+      if (d < 1800 || d > 3200) continue;
+      const l = routeWithFallback(gr, main[0], b);
+      if (!l || l.contraflow.length) continue;
+      if (l.nodes.filter(inOwned).length < l.nodes.length * 0.95) continue;
+      const ratio = l.metres / d;
+      if (!best || ratio < best.ratio) best = { l, ratio };
+      if (ratio < 1.2) break;
     }
-    await page.mouse.move(picks[3].x, picks[3].y, { steps: 6 });
-    await page.waitForTimeout(700);
-  },
-
-  async 'fleet-panel'(page) {
-    await page.keyboard.press('g');
-    await page.waitForTimeout(700);
-  },
-
-  async 'fleet-buy'(page) {
-    await page.keyboard.press('g');
-    await page.waitForTimeout(300);
-    await page.locator('.panel .seg button', { hasText: 'Buy' }).click();
-    await page.waitForTimeout(600);
-  },
-
-  async 'finance-panel'(page) {
-    await page.keyboard.press('m');
-    await page.waitForTimeout(700);
-  },
-
-  async 'traffic-overlay'(page) {
-    await page.evaluate(() => { window.__sim.minutes = 8 * 60 + 15; window.__map.jumpTo({ center: [28.9772, 41.0262], zoom: 15.6, pitch: 48, bearing: -24 }); });
-    await settle(page, 300);
-    await page.keyboard.press('t');
-    await page.waitForTimeout(1200);
-  },
-
-  async 'demand-overlay'(page) {
-    await page.evaluate(() => window.__map.jumpTo({ center: [28.9772, 41.0262], zoom: 15.4, pitch: 45, bearing: -24 }));
-    await settle(page, 600);
-    await page.keyboard.press('p');
-    await page.waitForTimeout(1400);
-  },
-
-  async 'network-view'(page) {
-    await page.evaluate(() => window.__map.jumpTo({ center: [28.9772, 41.0262], zoom: 15.6, pitch: 40, bearing: -24 }));
-    await settle(page, 300);
-    await page.keyboard.press('n');
-    await page.waitForTimeout(1600);
-  },
-
-  async 'stop-selected'(page) {
-    const p = await page.evaluate(() => {
-      const s = [...window.__sim.stops.values()].find((x) => x.name.startsWith('Karaköy'));
-      window.__map.jumpTo({ center: [s.lngLat[0] + 0.0012, s.lngLat[1] + 0.0006], zoom: 17.3, pitch: 55, bearing: -28 });
-      return s.lngLat;
-    });
-    await settle(page, 600);
-    const at = await project(page, p);
-    await page.mouse.click(at.x, at.y - 26);
-    await page.waitForTimeout(1200);
-  },
-};
+    const stops = [];
+    let acc = 1e9;
+    for (let i = 1; i < best.l.nodes.length; i++) {
+      const p = best.l.nodes[i - 1], q = best.l.nodes[i];
+      acc += Math.hypot(gr.x[q] - gr.x[p], gr.y[q] - gr.y[p]);
+      if (acc >= 380) { const r = g.placeStop([gr.lng[q], gr.lat[q]]); if (r.ok) { stops.push(r.value); acc = 0; } }
+    }
+    const route = g.createRoute({ stops, kind: 'linear' });
+    for (let i = 0; i < 4; i++) { const r = g.buyVehicle('city12', depot); if (r.ok) g.assignVehicle(r.value, route.value); }
+    g.state.onboarding.active = false;
+    g.run(86400 + 8.25 * 3600 - (g.t % 86400)); // a full day of history, then Tuesday 08:15
+    g.emit('changed', 0);
+    g.setSpeed(1);
+    return { stops: stops.length, route: route.ok ? route.value : route.error, buses: Object.keys(g.state.vehicles).length, audit: g.audit() };
+  }, preset);
+}
 
 const browser = await chromium.launch({ args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist'] });
 for (const [w, h] of SIZES) {
-  const page = await browser.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: 1 });
+  const tag = `${w}x${h}`;
+  console.log('size', tag);
+  const page = await browser.newPage({ viewport: { width: w, height: h } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  const shot = async (name, extra) => { await settle(page, extra); await page.screenshot({ path: `${OUT}/${tag}-${name}.png` }); console.log('  shot', name); };
+  const ui = (fn, arg) => page.evaluate(fn, arg);
+
   await page.goto(URL);
-  await page.waitForFunction(() => window.__ctl && window.__map.loaded(), null, { timeout: 30000 });
-  await settle(page, 2200);
-  for (const [name, run] of Object.entries(STATES)) {
-    if (ONLY && !ONLY.includes(name)) continue;
-    await home(page);
-    await settle(page, 400);
-    try {
-      await run(page, w, h);
-      await page.waitForFunction(() => !window.__city.busy, null, { timeout: 15000 }).catch(() => {});
-      const file = `${OUT}/${w}x${h}-${name}.png`;
-      await page.screenshot({ path: file });
-      console.log('✓', file);
-    } catch (e) {
-      console.log('✗', name, e.message.split('\n')[0]);
-    }
-    if (name === 'clean-map') await page.keyboard.press('Shift+U');
-  }
-  if (errors.length) console.log('page errors:\n ', [...new Set(errors)].slice(0, 10).join('\n  '));
+  await page.waitForFunction(() => window.__session && window.__map?.loaded(), null, { timeout: 30000 });
+  await shot('start-menu', 1500);
+  await page.getByRole('button', { name: /New company/i }).first().click();
+  await shot('choose-place', 600);
+  await ui(async (preset) => { const { PRESETS, presetSpec } = await import('/src/app/presets.ts'); await window.__session.beginNew(presetSpec(PRESETS[preset])); }, PRESET);
+  await page.waitForFunction(() => window.__session && document.querySelector('.mn-panel.setup'), null, { timeout: 30000 }).catch(() => {});
+  await shot('company-setup', 1200);
+  await ui(() => {
+    const reg = window.__session.region;
+    const c = reg.spec.centre;
+    const score = (z) => (z.residents + z.jobs) / (1 + Math.hypot(z.centroid[0] - c[0], z.centroid[1] - c[1]) * 80);
+    const z = [...reg.zones].sort((a, b) => score(b) - score(a))[0];
+    window.__session.startNew({ name: 'Harbour Lines', colour: '#2f7fd6', logo: 1 }, z.id);
+  });
+  console.log('  network', await buildNetwork(page, PRESET));
+
+  const firstBus = () => {
+    const g = window.__game;
+    return Object.values(g.state.vehicles).find((x) => x.status === 'in_service') ?? Object.values(g.state.vehicles)[0];
+  };
+  await ui((fb) => {
+    const g = window.__game;
+    const v = eval(`(${fb})`)();
+    const p = g.pose(v);
+    window.__map.jumpTo({ center: p ? g.geo.P.toLngLat(p.x, p.y) : g.state.depots[v.depot].lngLat, zoom: 17.2, pitch: 58, bearing: -24 });
+  }, firstBus.toString());
+  await shot('overview', 1500);
+  await ui((fb) => { const v = eval(`(${fb})`)(); window.__ui.getState().select({ kind: 'vehicle', id: v.id }); }, firstBus.toString());
+  await shot('bus-selected');
+  await ui(() => {
+    const g = window.__game;
+    const r = Object.values(g.state.routes)[0];
+    window.__ui.getState().select({ kind: 'stop', id: r.stops[Math.floor(r.stops.length / 2)] });
+    const s = g.state.stops[r.stops[Math.floor(r.stops.length / 2)]];
+    window.__map.jumpTo({ center: s.lngLat, zoom: 16.8 });
+  });
+  await shot('stop-board');
+  await ui(() => { const g = window.__game; const r = Object.values(g.state.routes)[0]; window.__ui.getState().select({ kind: 'line', id: r.id }); window.__map.jumpTo({ zoom: 15.2, pitch: 48 }); });
+  await shot('line-selected');
+  await ui(() => { const r = Object.values(window.__game.state.routes)[0]; window.__ui.getState().openModal({ kind: 'timetable', route: r.id }); });
+  await shot('timetable', 600);
+  await ui(() => window.__ui.getState().openModal(null));
+  await ui(async () => { const { startDrafting } = await import('/src/ui/routeDraft.ts'); startDrafting(Object.keys(window.__game.state.routes)[0]); });
+  await shot('route-editing', 1200);
+  await ui(() => { window.__ui.getState().setTool('select'); window.__ui.getState().select(null); window.__ui.getState().openPanel('finance'); });
+  await shot('finance-panel');
+  await ui(() => window.__ui.getState().openPanel('fleet'));
+  await page.getByRole('button', { name: 'Buy', exact: true }).first().click().catch(() => {});
+  await shot('fleet-buy', 600);
+  await ui(() => window.__ui.getState().openPanel('company'));
+  await shot('company-panel', 600);
+  await ui(() => { window.__ui.getState().openPanel(null); window.__ui.getState().toggleOverlay('traffic'); window.__map.jumpTo({ zoom: 14.6, pitch: 45 }); });
+  await shot('traffic-overlay');
+  await ui(() => { window.__ui.getState().toggleOverlay('traffic'); window.__ui.getState().toggleOverlay('demand'); });
+  await shot('demand-overlay');
+  await ui(() => { window.__ui.getState().toggleOverlay('demand'); window.__ui.getState().toggleOverlay('areas'); window.__map.jumpTo({ zoom: 13.4, pitch: 30 }); });
+  await shot('operating-areas');
+  await ui(() => { window.__ui.getState().toggleOverlay('areas'); window.__ui.getState().openModal({ kind: 'menu' }); });
+  await shot('game-menu', 500);
+  if (errors.length) console.log('  page errors:\n   ', errors.slice(0, 10).join('\n    '));
   await page.close();
 }
 await browser.close();
