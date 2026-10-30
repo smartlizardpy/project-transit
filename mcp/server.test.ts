@@ -71,6 +71,109 @@ describe('MCP server', () => {
     expect((await call('query_save', { pointer: '/routes/r1/number' })).data.value).toBe(lines[0].number);
   });
 
+  describe('city activity tools', () => {
+    // a second save: the same company with a hand-made world, so the numbers are known
+    const id = 'mcp-city';
+    beforeAll(() => {
+      const st = JSON.parse(game.serialize());
+      const t: number = st.clock.t;
+      const stop = Object.values(st.stops)[0] as { lngLat: [number, number] };
+      const [lng, lat] = stop.lngLat;
+      st.world.places.significant = [
+        { id: 'p1', name: 'Test General Hospital', category: 'hospital', lngLat: [lng + 0.001, lat], tier: 2, value: 600, unit: 'beds' },
+        { id: 'p2', name: 'Far Airport', category: 'airport', lngLat: [lng + 1, lat + 1], tier: 1, value: 5_000_000, unit: 'pax_year', beyond: true },
+        { id: 'p3', name: 'Test University', category: 'university', lngLat: [lng + 0.05, lat], tier: 1, value: 20000, unit: 'students' },
+      ];
+      const day = Math.floor(t / 86400);
+      const mm = new Array(24).fill(0);
+      mm[8] = 2.5;
+      mm[9] = 0.6;
+      st.world.weather = {
+        station: 'test',
+        days: [
+          { day, actual: { v: 1, kind: 'rain', hi: 14, lo: 8, z: 0, mm } },
+          { day: day + 1, actual: { v: 1, kind: 'clear', hi: 16, lo: 7, z: 0, mm: new Array(24).fill(0) }, forecast: { kind: 'cloudy', hi: 15, lo: 7, pop: 20, t: t - 3600 } },
+        ],
+      };
+      st.stats.days.push({ ...st.stats.days.at(-1), day: day - 1, wx: { k: 'snow', hi: 1, lo: -4, mm: 3.2 } });
+      const ev = (o: object) => ({ id: 'e', kind: 'football', place: 'p1', venue: 'Test Ground', at: [lng, lat], title: 'Derby', start: t + 3 * 3600, end: t + 5 * 3600, people: 30000, ann: 0, ...o });
+      st.world.events = {
+        v: 1,
+        nextId: 9,
+        through: day + 10,
+        list: [
+          ev({ id: 'e1', title: 'Announced derby' }),
+          ev({ id: 'e2', title: 'Secret concert', kind: 'concert', ann: t + 1000 }),
+          ev({ id: 'e3', title: 'Open-air festival', kind: 'festival', start: t + 6 * 3600, end: t + 9 * 3600, cancelled: 'storm warning' }),
+          ev({ id: 'e4', title: 'Last week match', start: t - 6 * 3600, end: t - 4 * 3600, carried: 120, lost: 7 }),
+        ],
+      };
+      const hours = new Array(24).fill(0);
+      hours[8] = 30;
+      hours[17] = 10;
+      const k = new Array(10 * 5).fill(0);
+      k[0 * 5 + 1] = 30; // commuters in the morning peak
+      k[1 * 5 + 3] = 10; // students in the evening peak
+      st.analytics.days = [{ day: day - 1, net: {}, stops: {}, veh: {}, od: {}, routes: { r1: { b: hours, k, bp: { '0|a': hours }, p: { '0|a': { pat: 0, stops: Object.keys(st.stops).slice(0, 3), ls: [], ln: [], rs: [], rn: [], ss: [] } } } } }];
+      writeFileSync(join(dir, `${id}.json`), JSON.stringify(st));
+    });
+
+    it('places filters, sizes and finds the nearest stop', async () => {
+      const all = (await call('places', { save: id })).data;
+      expect(all.total).toBe(3);
+      const h = all.places.find((p: { id: string }) => p.id === 'p1');
+      expect(h.size).toBe('600 beds');
+      expect(h.reachable).toBe(true);
+      expect(h.nearestOwnStop.metres).toBeLessThanOrEqual(500);
+      const air = all.places.find((p: { id: string }) => p.id === 'p2');
+      expect(air.reachable).toBe(false);
+      expect(air.nearestOwnStop).toBeNull();
+      expect((await call('places', { save: id, category: 'university' })).data.places).toHaveLength(1);
+      expect((await call('places', { save: id, query: 'general' })).data.places[0].name).toBe('Test General Hospital');
+      expect((await call('places', { save: id, limit: 1 })).data.places).toHaveLength(1);
+    });
+
+    it('weather_calendar gives today, the forecast, history and 14 days', async () => {
+      const { data } = await call('weather_calendar', { save: id });
+      expect(data.today.season).toBe('Autumn');
+      expect(data.today.seasonWeek).toBe('Autumn, week 1');
+      expect(data.weatherToday.kind).toBe('Rain');
+      expect(data.weatherToday.highC).toBe(14);
+      expect(data.weatherToday.rainByHour.map((x: { hour: number }) => x.hour)).toEqual([8, 9]);
+      expect(data.tomorrowForecast.kind).toBe('Cloudy');
+      expect(data.tomorrowForecast.chanceOfRainPct).toBe(20);
+      expect(data.notes.join(' ')).toMatch(/8 forecasts in 10/);
+      expect(data.lastDays.at(-1).weather).toBe('Snow');
+      expect(data.next14Days).toHaveLength(14);
+      expect(data.next14Days[1].day).toBe(data.next14Days[0].day + 1);
+    });
+
+    it('events hides unannounced ones and reports results', async () => {
+      const { data } = await call('events', { save: id });
+      const titles = (list: { title: string }[]) => list.map((e) => e.title);
+      expect(titles(data.upcomingAndCurrent)).toEqual(['Announced derby', 'Open-air festival']);
+      expect(data.upcomingAndCurrent[1].cancelled).toBe(true);
+      expect(data.upcomingAndCurrent[1].cancelledBecause).toBe('storm warning');
+      expect(JSON.stringify(data)).not.toMatch(/Secret concert/);
+      expect(data.recent[0].journeysOnYourBuses).toBe(120);
+      expect(data.recent[0].gaveUpOrStranded).toBe(7);
+      expect(titles((await call('events', { save: id, kind: 'festival' })).data.upcomingAndCurrent)).toEqual(['Open-air festival']);
+    });
+
+    it('line_character shows who rides, and says so when nothing is recorded', async () => {
+      const { data } = await call('line_character', { save: id, line: '1' });
+      expect(data.daysRecorded).toBe(1);
+      expect(data.boardingsPerDay).toBe(40);
+      expect(data.whoRides[0]).toMatchObject({ type: 'Commuter', boardings: 30, sharePct: 75 });
+      expect(data.boardingsByTimeBand.find((b: { band: string }) => b.band === 'Morning peak').perDay).toBe(30);
+      expect(data.busiestHour.hour).toBe('08:00');
+      expect(data.busiestHourByDirection[0].hour).toBe('08:00');
+      const none = (await call('line_character', { line: '1' })).data;
+      expect(none.note).toMatch(/No detailed days recorded yet/);
+      expect((await call('line_character', { save: id, line: '99' })).error).toBe(true);
+    });
+  });
+
   it('explains what went wrong instead of failing', async () => {
     expect((await call('line_details', { line: '99' })).error).toBe(true);
     const bad = await call('company_overview', { save: '../../etc/passwd' });

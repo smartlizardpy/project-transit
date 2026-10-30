@@ -4,7 +4,9 @@
 import type { Game } from '../engine.ts';
 import type { Id } from '../types.ts';
 import { DAY } from '../content.ts';
-import { TRAVELLERS } from '../activity/params.ts';
+import { TRAVELLERS, TYPE } from '../activity/params.ts';
+import { dayKind, weatherGroup } from './labels.ts';
+import { EVENT_TEMPLATES, type EventKind } from '../events.ts';
 import { BANDS, bandOf, type DayRecord, type RouteDay } from './types.ts';
 import { odMatrix } from './query.ts';
 
@@ -152,4 +154,75 @@ export function lineWhere(game: Game, id: Id, top = 4): LineWhere {
   const pick = (a: { label: string; journeys: number }[], n: number) =>
     [...a].sort((x, y) => y.journeys - x.journeys).slice(0, n).filter((x) => x.journeys > 0).map((x) => ({ label: x.label, share: j ? x.journeys / j : 0 }));
   return { destinations: pick(r.destinations, top), origins: pick(r.origins, 3), journeys: j };
+}
+
+// ───────────────────────────────────────────── weather and events (plan section 13)
+
+/** Days compared for the weather section. */
+export const WEATHER_WINDOW = 35;
+
+export interface WeatherSide { days: number; riders: number; onTime: number | null; delay: number | null }
+
+export interface LineWeather {
+  /** the kind of day compared (rain and dry days of the same kind) */
+  kind: 'working' | 'weekend' | null;
+  dry: WeatherSide;
+  wet: WeatherSide;
+  /** what is still missing before a comparison can be shown (null when it is shown) */
+  missing: string | null;
+}
+
+/** Riders, punctuality and delay on rainy against dry days of the same kind, over the last 35 days. */
+export function lineWeather(game: Game, id: Id): LineWeather {
+  const recs = recordedDays(game, WEATHER_WINDOW);
+  const side = (): WeatherSide & { trips: number; ot: number; dl: number; dp: number } => ({ days: 0, riders: 0, onTime: null, delay: null, trips: 0, ot: 0, dl: 0, dp: 0 });
+  const by = new Map<string, { dry: ReturnType<typeof side>; wet: ReturnType<typeof side> }>();
+  for (const rec of recs) {
+    const r = rec.routes[id];
+    const k = dayKind(rec.lbl), w = weatherGroup(rec.lbl);
+    if (!r || !k || !w || (k !== 'working' && k !== 'weekend')) continue;
+    const g = by.get(k) ?? { dry: side(), wet: side() };
+    by.set(k, g);
+    const s = w === 'dry' ? g.dry : g.wet;
+    s.days++;
+    s.riders += sum(r.b);
+    s.trips += sum(r.d); s.ot += sum(r.o); s.dl += sum(r.dl); s.dp += sum(r.dp);
+  }
+  const done = (s: ReturnType<typeof side>): WeatherSide => ({ days: s.days, riders: s.days ? s.riders / s.days : 0, onTime: s.trips ? s.ot / s.trips : null, delay: s.dp ? s.dl / s.dp / 60 : null });
+  for (const k of ['working', 'weekend'] as const) {
+    const g = by.get(k);
+    if (g && g.dry.days >= 2 && g.wet.days >= 2) return { kind: k, dry: done(g.dry), wet: done(g.wet), missing: null };
+  }
+  const g = by.get('working') ?? by.get('weekend');
+  const dry = g?.dry.days ?? 0, wet = g?.wet.days ?? 0;
+  const need: string[] = [];
+  if (wet < 2) need.push(`${2 - wet} more rainy working day${2 - wet === 1 ? '' : 's'}`);
+  if (dry < 2) need.push(`${2 - dry} more dry working day${2 - dry === 1 ? '' : 's'}`);
+  return { kind: null, dry: done(g?.dry ?? side()), wet: done(g?.wet ?? side()), missing: `Shown once this line has at least two rainy and two dry days of the same kind recorded: ${need.join(' and ')} to go (of the last ${WEATHER_WINDOW} days).` };
+}
+
+export interface LineEvents {
+  /** event riders on this line over the window (boardings by event attendees) */
+  riders: number;
+  /** days the line carried event riders, newest first, with that day's events your network served */
+  days: { day: number; riders: number; events: string[] }[];
+}
+
+/** Riders from events on this line over the last 35 days. */
+export function lineEvents(game: Game, id: Id): LineEvents {
+  const recs = recordedDays(game, WEATHER_WINDOW);
+  const t = TYPE.event;
+  const out: LineEvents = { riders: 0, days: [] };
+  for (const rec of recs) {
+    const k = rec.routes[id]?.k;
+    if (!k) continue;
+    let n = 0;
+    for (let b = 0; b < BANDS.length; b++) n += k[t * BANDS.length + b] ?? 0;
+    if (!n) continue;
+    out.riders += n;
+    const events = (rec.lbl?.ev ?? []).filter((e) => e.carried > 0 && e.kind !== 'rail' && e.kind !== 'flight').map((e) => `${EVENT_TEMPLATES[e.kind as EventKind]?.label ?? e.kind} at ${e.venue}`);
+    out.days.push({ day: rec.day, riders: n, events });
+  }
+  out.days.sort((a, b) => b.day - a.day);
+  return out;
 }

@@ -9,11 +9,11 @@ import type { Command } from '../commands.ts';
 import type { Game } from '../engine.ts';
 import type { LiveData, Rec } from './live.ts';
 import { compile, truthy, type EValue } from '../expr.ts';
-import { aggregate, MEASURE, type GroupBy } from '../analytics/query.ts';
+import { aggregate, estimatedDemand, MEASURE, type GroupBy } from '../analytics/query.ts';
 import { extraOption } from '../vehicles.ts';
 import { DAY, HOUR } from '../content.ts';
 import { hhmm } from '../time.ts';
-import { DAY_FILTER, EVENT_FILTER, EVENT_FILTER_SHORT, FORECAST_FILTER, WEATHER_FILTER, calendarRec, eventRec, eventsAhead, linesNearEvent, weatherRecs } from './city.ts';
+import { DAY_FILTER, EVENT_FILTER, EVENT_FILTER_SHORT, FORECAST_FILTER, PLACE_FILTER, PLACE_SERVED_M, WEATHER_FILTER, calendarRec, demandForecast, eventRec, eventsAhead, linesNearEvent, placeRec, placesOf, weatherRecs } from './city.ts';
 
 /** Marker for "this branch is not active". Never stored in the save. */
 export const OFF: { readonly __off: true } = Object.freeze({ __off: true as const });
@@ -456,6 +456,74 @@ export const NODES: NodeDef[] = [
     },
   },
   {
+    type: 'data.place', category: 'data', label: 'Places', description: 'Airports, stations, hospitals, universities, stadiums and other places of a kind, largest first: your nearest stop, the lines there, and the model’s estimate of trips today and how busy the place is this hour.',
+    inputs: [afterIn],
+    outputs: [{ id: 'places', label: 'Places', type: 'list' }, { id: 'first', label: 'Largest', type: 'record' }, { id: 'lines', label: 'Lines at the largest', type: 'list' }, { id: 'unserved', label: 'Not served', type: 'list' }, { id: 'count', label: 'How many', type: 'number' }],
+    config: [
+      { id: 'category', label: 'Kind', kind: 'select', default: 'airport', options: PLACE_FILTER },
+      { id: 'line', label: 'Near line', kind: 'line', default: '', allowAny: true, help: 'Only places within a kilometre of this line’s stops. Leave empty for the whole map.' },
+      { id: 'limit', label: 'At most', kind: 'number', default: 10, min: 1, max: 20 },
+    ],
+    run: (ctx, _inp, cfg) => {
+      const list = placesOf(ctx.game, str(cfg.category) || 'any', str(cfg.line) || undefined, Math.max(1, Math.min(20, num(cfg.limit) || 10)));
+      ctx.spend(list.length * 20);
+      const recs = list.map((p) => placeRec(ctx.game, p));
+      const unserved = recs.filter((r) => !r.served);
+      const kind = PLACE_FILTER.find((x) => x.value === str(cfg.category))?.label.toLowerCase() ?? 'places';
+      const lines = recs[0] && Array.isArray(recs[0].lines) ? recs[0].lines : [];
+      return {
+        // with no line at the largest place, nothing connected to its lines runs
+        out: { places: recs, first: recs[0] ?? OFF, lines: lines.length ? lines : OFF, unserved, count: recs.length },
+        note: recs.length
+          ? `${recs.length} place${recs.length === 1 ? '' : 's'} (${kind}), ${unserved.length} without one of your stops within ${PLACE_SERVED_M} m.${lines.length ? '' : ` None of your lines stops at ${str(recs[0].name)}.`} Trips and busyness are the model’s estimate.`
+          : 'No places of that kind on this map.',
+      };
+    },
+  },
+  {
+    type: 'data.unserved', category: 'data', label: 'Unserved trips', description: 'The busiest connections between two of your areas that your network does not link today, from the demand model: trips a day by every mode and purpose, and whether a stop or a line is missing.',
+    inputs: [afterIn],
+    outputs: [{ id: 'flows', label: 'Connections', type: 'list' }, { id: 'first', label: 'Busiest', type: 'record' }, { id: 'count', label: 'How many', type: 'number' }, { id: 'trips', label: 'Trips', type: 'number' }],
+    config: [{ id: 'limit', label: 'Busiest (estimate)', kind: 'number', default: 5, min: 1, max: 20 }],
+    run: (ctx, _inp, cfg) => {
+      const n = Math.max(1, Math.min(20, num(cfg.limit) || 5));
+      ctx.spend(400);
+      // between two different areas: trips within one area are mostly short walks, not corridors
+      const between = estimatedDemand(ctx.game, { level: 'zone', view: 'unserved' }).flows.filter((f) => f.o !== f.d);
+      const unserved = between.reduce((a, f) => a + f.trips, 0);
+      const flows: Value[] = between.slice(0, n).map((f) => ({
+        kind: 'flow', from: f.oLabel, to: f.dLabel, label: `${f.oLabel} → ${f.dLabel}`, trips: Math.round(f.trips), value: Math.round(f.trips),
+        missing: f.noStop >= f.noLink ? 'stop' : 'line', estimate: true,
+      }));
+      const first = flows[0] as Rec | undefined;
+      return {
+        out: { flows, first: first ?? OFF, count: flows.length, trips: Math.round(unserved) },
+        note: first ? `Estimate: about ${Math.round(unserved).toLocaleString('en-GB')} trips a day between your areas that your network does not link; the busiest is ${str(first.label)} (about ${Number(first.trips).toLocaleString('en-GB')}).` : 'The model finds no unlinked trips between your areas today.',
+      };
+    },
+  },
+  {
+    type: 'data.demandForecast', category: 'data', label: 'Demand forecast', description: 'Expected riders per line for each of the next few hours, from the demand model: the lines running then, today’s weather, announced events and people due home. An estimate: riders also depend on how your buses perform.',
+    inputs: [afterIn],
+    outputs: [{ id: 'lines', label: 'Lines', type: 'list' }, { id: 'hours', label: 'By hour', type: 'list' }, { id: 'busiest', label: 'Busiest line', type: 'record' }, { id: 'total', label: 'Riders', type: 'number' }],
+    config: [
+      { id: 'hours', label: 'Estimate for', kind: 'select', default: '3', options: [{ value: '1', label: 'The next hour' }, { value: '3', label: 'The next 3 hours' }, { value: '6', label: 'The next 6 hours' }] },
+      lineCfg('Line', true),
+    ],
+    run: (ctx, _inp, cfg) => {
+      const hours = Math.max(1, Math.min(6, Number(cfg.hours) || 3));
+      ctx.spend(hours * 60);
+      const f = demandForecast(ctx.game, hours, str(cfg.line) || undefined);
+      if (!f) throw new Error('The demand model is not available in this game.');
+      const top = f.lines[0];
+      const scope = str(cfg.line) ? `on ${str(top?.label) || 'that line'}` : 'on your network';
+      return {
+        out: { lines: f.lines, hours: f.hours, busiest: top ?? OFF, total: f.total },
+        note: `Estimate: about ${f.total.toLocaleString('en-GB')} boarding${f.total === 1 ? '' : 's'} ${scope} in the next ${hours === 1 ? 'hour' : `${hours} hours`}${top && top.busiestHour ? `, busiest ${str(top.label)} at ${str(top.busiestHour)} (about ${str(top.busiest)})` : ''}.${f.clipped ? ' Stops at midnight.' : ''}`,
+      };
+    },
+  },
+  {
     type: 'data.analytics', category: 'data', label: 'Network Control figure', description: 'A measure from Network Control’s recorded history, e.g. average wait per stop over the last 7 days.',
     inputs: [afterIn], outputs: [{ id: 'rows', label: 'Rows', type: 'list' }, { id: 'value', label: 'Total', type: 'number' }],
     config: [
@@ -861,7 +929,8 @@ export function template(text: string, vars: Record<string, Value>): string {
       cur = cur[part];
     }
     if (cur === null || cur === undefined) return '';
-    if (typeof cur === 'number') return Number.isInteger(cur) ? String(cur) : cur.toFixed(1);
+    // large whole numbers get thousands separators; small ones (fleet and day numbers) stay plain
+    if (typeof cur === 'number') return Number.isInteger(cur) ? (Math.abs(cur) >= 10000 ? cur.toLocaleString('en-GB') : String(cur)) : cur.toFixed(1);
     if (typeof cur === 'object') return fmt(cur);
     return String(cur);
   });

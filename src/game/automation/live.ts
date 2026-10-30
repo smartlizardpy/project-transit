@@ -5,7 +5,7 @@ import type { Game } from '../engine.ts';
 import type { Id, Vehicle } from '../types.ts';
 import type { Value } from './types.ts';
 import { DAY, HOUR, MODEL } from '../content.ts';
-import { hhmm, weekdayOf } from '../time.ts';
+import { hhmm, serviceDayOf, weekdayOf } from '../time.ts';
 import { routeWindow } from '../progress.ts';
 import { STATUS_LABEL, extraOption } from '../vehicles.ts';
 import { companyLevel } from '../control.ts';
@@ -50,6 +50,7 @@ export class LiveData {
     const w = routeWindow(s, id, 3);
     const req = game.requirement(id);
     const today = s.analytics.today.routes[id];
+    const plan = game.dayPlan(id, serviceDayOf(game.t));
     return {
       kind: 'line', id, number: r.number, name: r.name ?? `Line ${r.number}`, colour: r.colour,
       buses: buses.length, needed: req?.peak ?? 0, running: running.length,
@@ -57,6 +58,8 @@ export class LiveData {
       headway: game.headwayAt(id, 0, game.t), suspended: r.suspended,
       onTime3h: w.ontime === null ? null : r1(w.ontime * 100), load3h: w.load === null ? null : r1(w.load * 100),
       boardingsToday: today ? sum(today.b) : 0, tripsToday: today ? sum(today.d) : 0, missedToday: today ? sum(today.m) : 0,
+      plan: plan.planId ? plan.name : null, plans: (r.timetable.plans ?? []).filter((p) => p.enabled).map((p) => p.name),
+      holidayPlan: (r.timetable.plans ?? []).some((p) => p.enabled && p.when.kind === 'school_holidays'),
       congestion: this.congestion(id),
     };
   }

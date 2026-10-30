@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-30 (phase 5).
+Last updated: 2026-10-30 (phase 6).
 
 ## Phase 0. Foundations ✅
 
@@ -267,8 +267,55 @@ Events add a handful of riders to the reference week (weekday 3,467 → 3,469, w
 - Visitors arriving through stations and piers walk from the gateway; they do not ride the background transit network to the venue.
 - Flight disruptions need an airport on the map: none in İstanbul, so Airport link is not offered there.
 - Football fixtures name no opponents (by design, plan section 9.3).
-- Event days are not yet labelled in Network Control's day records or compared in the line inspector (phase 6).
+- ~~Event days are not yet labelled in Network Control's day records or compared in the line inspector~~: done in phase 6.
 
-## Phase 6. Network Control and automation ⬜
+## Phase 6. Network Control and automation 🟡
+
+Built and tested. 🟡 until the owner has played it: every recorded day now keeps its season, kind of day, weather and events, so Network Control can filter, group and compare by them; weeks roll up for three game years; the line inspector compares rainy and dry days and shows event riders; automation gains a demand forecast, places and unserved trips.
+
+| Item | Status | Evidence |
+|---|---|---|
+| **Day labels** on each recorded day (and its 120-day summary): game year, season, week, weekend, public holiday, school day or holidays, university term, festive day, the day's weather (kind, rain in mm, high and low), and the events that started that day and touched your network, with their final results (crowds go home after midnight, so the label is brought up to date the next day). Flags are stored only when true; a day record grows by under 30% with everything the activity engine added | ✅ | `day-labels.test.ts` (7 tests): labels match the calendar and the weather row; event results updated after midnight; record size |
+| **Weekly roll-ups**: per game week, each line's boardings, fares and boardings by traveller type; the network's journeys, gave-ups, satisfaction and fares; journeys on dry, wet and stormy days. Kept for 36 weeks (three game years) | ✅ | `day-labels.test.ts` "weeks roll up whole game weeks" (sums checked against the day records) |
+| **New groupings and filters** in the query layer (Network Control, `data.analytics`, MCP): group by weather, kind of day, event day or traveller type; filter days by weather, kind of day or event day. Days recorded before labels were kept are left out of a filtered query and counted in its coverage, with a note | ✅ | `day-labels.test.ts`: groupings split the network's totals exactly; weather filters add up to the whole; boardings by type add up band by band to the line's day |
+| **"Days" filter** in every Network Control tab: grouped options for days of the week, kind of day (working days in term, school holidays, public holidays), weather (dry, showers or rain, heavy rain or snow) and event days. The coverage line says how many days match ("5 matching days of 7") | ✅ | screenshot `nc-filter-rain.png` |
+| **Weather and event marks** on the Overview's daily trend: a ring for showers or rain, a filled dot for heavy rain or snow, a triangle for an event your buses carried a crowd to; pointing at a mark gives the day's weather or event results | ✅ | screenshot `nc-trend-marks.png` |
+| **Journeys by traveller type**: a *Who travels* table (journeys, share, boardings, left behind by type) and a *Who* filter on the journeys table and map. Who gave up is not kept by type, so it shows a dash with that reason | ✅ | `day-labels.test.ts` (one type's journeys between stops add up to its total); screenshots `nc-who-travels.png`, `nc-journeys-by-type.png` |
+| **A line's riders by type and time of day** (Lines tab, under the selected line): boardings by traveller type in each of the five time bands | ✅ | screenshot `nc-line-types.png` |
+| **Seasons and weather** report (Reports tab): the same season year on year from the weekly roll-ups (it says what is missing until a season has been played twice), and the last 35 days by weather and by kind of day, per day | ✅ | screenshot `nc-seasons.png` |
+| Line inspector **Weather** section: riders a day, trips on time and average delay on rainy against dry days of the same kind (working days, or weekends), once there are two of each in the last 35 days; until then it says how many more are needed. **Events** section: event riders on the line in the last 35 days, by day, with the events | ✅ | screenshot `line-weather-events.png` (in that company rain barely changes Line 1's riders: 200 dry, 201 rain) |
+| **MCP tools** `places`, `weather_calendar`, `events`, `line_character` (read-only, from the save) | ✅ | `mcp/server.test.ts` (8 tests); README tool table |
+| Automation **Demand forecast**: expected boardings per line for each of the next 1, 3 or 6 hours (not past midnight), from the model's hourly rates for the lines running then, today's weather (which the player sees hour by hour), announced events only, people already out who are due home and the expected returns of trips starting in the window; with timetabled departures and boardings per departure. Labelled an estimate. Never changes the simulation | ✅ | `automation-forecast.test.ts` (8 tests): within a third of what follows, line by line, over a weekday's 09:00–12:00 (measured figures below); identical simulation with and without forecasts, through a rail closure; an unannounced match is not counted, an announced one is; stops at midnight |
+| Automation **Places**: places of a kind (airport, station, hospital, university, stadium…), largest first, with your nearest stop, the lines within 400 m, and the model's trips today and busyness this hour; a *Lines at the largest* output that stops the branch when no line stops there | ✅ | `automation-forecast.test.ts` "lists places of a kind…" |
+| Automation **Unserved trips**: the busiest connections between two of your areas that no line links (the model's trips a day, every mode and purpose), and whether a stop or a line is missing | ✅ | `automation-forecast.test.ts`; capture run: "Busiest: Laleli → Mahmutpaşa, about 43,853 a day; missing a stop" |
+| Ready-made workflows: **School holidays check** (on the first holiday day, how many lines run their term-time timetable), **Early-morning airport boost** (an extra departure at 05:15 on lines at the largest airport; suggest mode), **Busy hour ahead** (hourly from 06:00, warns of lines expecting more than 50 boardings per departure next hour), **Unserved corridors report** (weekdays at 06:00). Line records gain `plan`, `plans` and `holidayPlan` | ✅ | `automation-forecast.test.ts` (templates validate; the school-holidays check counts the right lines; the airport boost does nothing where no line stops at the airport); screenshots `automation-insight-templates.png`, `automation-forecast-flow.png` |
+| Report text groups thousands in large whole numbers ("30,000"), not in fleet or day numbers | ✅ | `automation-city.test.ts` |
+| Calibration unchanged (phase 6 reads; it does not change the simulation) | ✅ | same figures as phase 5 |
+
+Screenshots come from the company simulated by `scripts/capture-network.mjs sim`, played on 16 days by `scripts/capture-insights.mjs` until it had labelled rainy and dry working days (10 of 10 checks pass; nothing staged). That company's lines pass no venue, so it has no event days and its Events sections show the empty state.
+
+**How close the demand forecast comes** (two lines on the İstanbul test map, forecast then played; boardings per line):
+
+| Forecast made at | Window | Line 1 | Line 2 |
+|---|---|---|---|
+| Weekday 09:00 | 09–15 | 220 vs 254 (−13%) | 201 vs 221 (−9%) |
+| Weekday 15:15 | 15–21 | 214 vs 191 (+12%) | 211 vs 188 (+12%) |
+| Saturday 09:00 | 09–15 | 277 vs 284 (−2%) | 251 vs 248 (+1%) |
+| Weekday 06:30 | 06–12 | 251 vs 171 (+47%) | 207 vs 159 (+30%) |
+
+The early-morning forecast runs high because the model rates lines by their punctuality so far that day, and at 06:30 nothing has run late yet; once the morning's lateness is known, riders choose other ways and the forecast follows.
+
+**Changes from the plan, and why:**
+- **"Columns by type and time band" in Lines** became a table under the selected line (traveller types × the five bands): ten types × five bands as columns in the lines table would not fit the panel.
+- **A dedicated airport filter in Passengers** was not added: Estimated demand by *Places* and the airport's place card (phase 3) already show travel to and from it, and on the İstanbul map both airports are beyond the edge.
+- **The school-holiday timetable template checks rather than switches**: service plans for school holidays (phase 5) already switch by themselves, so the workflow tells you which lines lack one.
+- **Two blocks beyond the plan**: *Unserved trips* (needed by the unserved-corridors template) and a fourth template, *Busy hour ahead*, so the demand forecast has a ready-made use.
+
+**Known gaps:**
+- Who gave up is kept per day and pair, not by traveller type.
+- Year-on-year comparisons need a season played twice (a game year is 12 weeks).
+- The forecast does not yet carry tomorrow (it stops at midnight) and does not foresee the day's lateness.
+
+**Tests:** the full suite ran with 230 passed, 4 skipped and 4 timing tests failed while the game app was using the machine (the hourly-choice test took 67 ms against its 30 ms limit, and 74 ms on the phase 5 commit at the same time, so not a regression). Re-run one file at a time on a quiet machine, all four pass (activity 10/10, perf 1/1, network-control 21/21, progression 2/2). The files touched by the last fixes were re-run afterwards (automation, automation-city, automation-forecast, day-labels: 44 passed). Build OK.
 
 ## Phase 7. Depth and balancing ⬜

@@ -126,6 +126,18 @@ export function createServer(dir = savesDir()) {
 
   tool('territory', 'The map squares (about 2 km across) the company is licensed to operate in, with their centres, stops and depots.', {}, (s) => view.territory(s));
 
+  tool('places', 'Significant places on the map (airports, stations, hospitals, universities, stadiums, malls and more) with size, position and the nearest of your stops within 500 m.', { category: z.string().optional().describe('Category, e.g. airport, hospital, university, stadium'), query: z.string().optional().describe('Part of the name'), limit: z.number().int().min(1).max(300).optional().describe('Default 50') }, (s, a) => view.places(s, { category: a.category as string | undefined, query: a.query as string | undefined, limit: a.limit as number | undefined }));
+
+  tool('weather_calendar', "Today's season, week and day type, today's weather, tomorrow's forecast, the last 14 days' weather and the next 14 days' calendar.", {}, (s) => view.weatherCalendar(s));
+
+  tool('events', 'Announced events not yet over (soonest first) and recent ones with results: journeys on your buses and people who gave up or were stranded. Unannounced events are never shown.', { kind: z.enum(['football', 'concert', 'festival', 'gathering', 'rail', 'flight']).optional() }, (s, a) => view.events(s, a.kind as string | undefined));
+
+  tool('line_character', 'Who rides a line and when, from the last 7 recorded days: riders by type, boardings by time band and the busiest hour.', { line: z.string().describe('Line id (r1), number (1) or name') }, (s, a) => {
+    const r = view.findLine(s, String(a.line));
+    if (!r) throw new Error(`No line "${a.line}". Lines: ${Object.values(s.routes).map((x) => `${x.number} ${x.name}`.trim()).join('; ') || 'none'}.`);
+    return view.lineCharacter(s, r);
+  });
+
   tool('query_save', 'Raw save data (money in the game\'s base unit, about euros; times in game seconds) for anything the other tools leave out, by JSON pointer (e.g. /routes/r1/timetable, /company, /pax/waiting). Large objects return their keys.', { pointer: z.string().describe('JSON pointer, starting with /') }, (s, a) => view.query(s, String(a.pointer)));
 
   return server;

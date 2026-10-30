@@ -7,16 +7,17 @@ import { BANDS } from '../../game/analytics/types.ts';
 import { MEASURES, METRIC_VARIABLES, metricValue, type CustomMetric, type SavedReport, type Unit, type AnalyticsQuery } from '../../game/analytics/query.ts';
 import { Segmented } from '../primitives.tsx';
 import { SectionHead, SOURCE_TEXT, filtersFromQuery, fmt, useAgg, useNC } from './common.tsx';
+import { Seasons } from './Seasons.tsx';
 
 const UNITS: [Unit, string][] = [['count', 'Count'], ['money', 'Money'], ['percent', 'Percent'], ['minutes', 'Minutes'], ['hours', 'Hours'], ['km', 'Kilometres'], ['score', 'Score'], ['ratio', 'Ratio']];
 const warn = (t: string) => useUI.getState().notify(t, 'warn');
 
 export function Reports({ game }: { game: Game }) {
-  const [part, setPart] = useState<'metrics' | 'reports'>('metrics');
+  const [part, setPart] = useState<'metrics' | 'reports' | 'seasons'>('metrics');
   return (
     <>
-      <Segmented value={part} onChange={setPart} options={[{ value: 'metrics', label: 'Custom metrics' }, { value: 'reports', label: `Saved reports (${game.state.control.reports.length})` }]} />
-      {part === 'metrics' ? <Metrics game={game} /> : <Saved game={game} />}
+      <Segmented value={part} onChange={setPart} options={[{ value: 'metrics', label: 'Custom metrics' }, { value: 'reports', label: `Saved reports (${game.state.control.reports.length})` }, { value: 'seasons', label: 'Seasons and weather' }]} />
+      {part === 'metrics' ? <Metrics game={game} /> : part === 'reports' ? <Saved game={game} /> : <Seasons game={game} />}
     </>
   );
 }

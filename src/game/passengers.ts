@@ -15,7 +15,7 @@ import { accrueFare } from './finance.ts';
 import { recordTrip } from './progress.ts';
 import { recAlight, recBoard, recFare, recGaveUp, recLeftBehind } from './analytics/record.ts';
 import { hourOfDay } from './time.ts';
-import { ActivityModel, returnMinutes, type ChoiceContext, type DayEstimate } from './activity/model.ts';
+import { ActivityModel, returnMinutes, returnShareByHour, type ChoiceContext, type DayEstimate } from './activity/model.ts';
 import { KIND, KINDS, KIND_COUNT, TRAVELLERS } from './activity/params.ts';
 import { eventReturnMinutes } from './events.ts';
 import { hashString, unit } from './hash.ts';
@@ -82,6 +82,16 @@ const PROFILE = {
 };
 /** weekend volume relative to weekdays, per purpose */
 const WEEKEND_SCALE = [0.32, 0.05, 1.35, 1.4, 0.7];
+
+/** One hour of a line forecast: expected boardings per line, and journeys (`total`, of which `home` are on the way back). */
+export interface LineForecastHour {
+  t: number;
+  /** share of the hour still ahead (the current hour) */
+  part: number;
+  lines: Map<Id, number>;
+  total: number;
+  home: number;
+}
 
 export interface Itinerary {
   /** generalised time, minutes */
@@ -224,6 +234,77 @@ export class DemandModel {
       wx: game.weatherEffectAt(day0 + h * 3600),
     }));
     return this.activity.estimate(game, day0, hours, inScope);
+  }
+
+  /**
+   * Expected boardings per line for each whole hour from the one containing `t` up to `hours` hours
+   * (not past midnight): the model's rates for the lines running then, today's weather (which the
+   * player sees hour by hour) and announced events, plus people already out who are due home then
+   * and the expected returns of trips that set off inside the window. The current hour counts only
+   * what is left of it. An estimate for automation; reading it changes nothing the simulation uses.
+   */
+  forecastLines(game: Game, t: number, hours: number): LineForecastHour[] | null {
+    if (this.engine !== 'activity') return null;
+    if (this.dirty || this.activity.stale(game)) this.rebuild(game);
+    const S = this.stops.length;
+    const h0 = Math.floor(t / 3600) * 3600;
+    const end = Math.min(h0 + hours * 3600, (Math.floor(t / 86400) + 1) * 86400);
+    const quality = game.routeQuality();
+    const out: LineForecastHour[] = [];
+    const away = Object.entries(game.state.pax.away);
+    const H = Math.max(0, Math.ceil((end - h0) / 3600));
+    /** per hour, returns expected from trips that set off earlier in the window, by stop pair */
+    const back: Map<number, number>[] = Array.from({ length: H }, () => new Map());
+    const add = (lines: Map<Id, number>, legs: Leg[] | undefined, v: number) => {
+      if (!legs?.length || !(v > 0)) return false;
+      for (const leg of legs) lines.set(leg.r, (lines.get(leg.r) ?? 0) + v);
+      return true;
+    };
+    for (let i = 0; i < H; i++) {
+      const at = h0 + i * 3600;
+      const part = i === 0 ? 1 - (t - h0) / 3600 : 1;
+      const lines = new Map<Id, number>();
+      let started = 0, home = 0;
+      if (S) {
+        const itin = computeItineraries(S, game.patternServices(at, this.index));
+        // people out now who are due home this hour, from where they got off
+        const m0 = Math.floor(Math.max(t, at) / 60), m1 = Math.floor((at + 3600) / 60);
+        for (const [key, arr] of away) {
+          let n = 0;
+          for (let x = 0; x < arr.length && arr[x] < m1; x += 2) if (arr[x] >= m0) n += arr[x + 1];
+          if (!n) continue;
+          const [from, to] = key.split('>');
+          const o = this.index.get(from), d = this.index.get(to);
+          if (o !== undefined && d !== undefined && add(lines, itin.get(o * S + d)?.legs, n)) home += n;
+        }
+        const r = this.activity.forecastRates(game, at, {
+          S, itin, dist: this.dist,
+          fare: game.state.company.fare,
+          smax: networkCap(game.state.company.reputation),
+          traffic: game.traffic.profile(hourOfDay(at), game.isWeekend(at)) * (game.trafficIntensity ?? 1),
+          quality,
+          wx: game.weatherEffectAt(at),
+          announcedBy: t,
+        });
+        for (let n = 0; n < r.pairs.length; n++) {
+          const pair = r.pairs[n];
+          const v = r.rate[n] * 60 * part;
+          if (!add(lines, itin.get(pair)?.legs, v)) continue;
+          started += v;
+          // and their way home later in the window (the itinerary of that hour, the other way)
+          const rev = (pair % S) * S + Math.floor(pair / S);
+          for (let k = 0; k < KIND_COUNT; k++) {
+            const mk = r.mix[n * KIND_COUNT + k];
+            if (!(mk > 0) || KINDS[k].oneWay) continue;
+            const share = returnShareByHour(k);
+            for (let off = 0; i + off < H && off < share.length; off++) if (share[off] > 0) back[i + off].set(rev, (back[i + off].get(rev) ?? 0) + v * mk * share[off]);
+          }
+        }
+        for (const [pair, v] of back[i]) if (add(lines, itin.get(pair)?.legs, v)) home += v;
+      }
+      out.push({ t: at, part, lines, total: started + home, home });
+    }
+    return out;
   }
 
   /** The earlier model: catchments and a gravity matrix between served stops (development switch only). */

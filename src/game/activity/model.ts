@@ -60,6 +60,8 @@ export interface ChoiceContext {
   quality: Map<Id, { load: number; ontime: number }>;
   /** this hour's weather (none: a mild dry hour) */
   wx?: WeatherEffect;
+  /** forecasts only: count events announced by this time, not those the player cannot know of yet */
+  announcedBy?: number;
 }
 
 export interface RateOut {
@@ -110,6 +112,9 @@ const RETURN_SHARE: number[][] = KINDS.map((k) => {
   const sum = out.reduce((a, b) => a + b, 0) || 1;
   return out.map((v) => v / sum);
 });
+
+/** Share of a round trip's returns falling 0, 1, 2… hours after the hour it set off, by tour kind (empty for one-way kinds). */
+export const returnShareByHour = (k: number): readonly number[] => RETURN_SHARE[k];
 
 /** Share of a tour's returns that fall while existing transit runs, by kind and starting hour. */
 const TRANSIT_HOME: Float64Array[] = KINDS.map((k, ki) => {
@@ -452,6 +457,17 @@ export class ActivityModel {
     };
   }
 
+  /** `rates` for a forecast: afterwards the rail closures the simulation is using are put back. */
+  forecastRates(game: Game, t0: number, ctx: ChoiceContext): RateOut {
+    this.ensureZones(game);
+    const keep = this.transit;
+    try {
+      return this.rates(game, t0, ctx);
+    } finally {
+      this.transit = keep;
+    }
+  }
+
   /** Per-minute rates on your network for the hour starting at `t0`. */
   rates(game: Game, t0: number, ctx: ChoiceContext): RateOut {
     const zs = this.ensureZones(game);
@@ -542,6 +558,7 @@ export class ActivityModel {
     const ty = TRAVELLERS[kind.type];
     const lam = 2 * CHOICE.scale;
     for (const ev of game.crowdEventsSettingOff(t0, t0 + 3600)) {
+      if (ctx.announcedBy !== undefined && ev.ann > ctx.announcedBy) continue;
       const share = arriveShare(ev, t0, t0 + 3600);
       if (!(share > 1e-4)) continue;
       const set = this.eventSetup(game, ev);

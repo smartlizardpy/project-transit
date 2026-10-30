@@ -4,9 +4,10 @@ import { useUI, type FlowOverlay } from '../../state/store.ts';
 import { fitPoints } from '../camera.ts';
 import { Segmented } from '../primitives.tsx';
 import { BANDS } from '../../game/analytics/types.ts';
-import { odMatrix, estimatedDemand, type OdFlow, type OdQuery, type DemandEstimate } from '../../game/analytics/query.ts';
+import { odMatrix, estimatedDemand, type OdFlow, type OdQuery, type DemandEstimate, type QueryResult } from '../../game/analytics/query.ts';
+import { TRAVELLERS } from '../../game/activity/params.ts';
 import type { LngLat } from '../../game/world/graph.ts';
-import { FilterBar, SectionHead, approx, coverageText, hoursOf, periodDays, share, todayNo, useNC, fmt } from './common.tsx';
+import { FilterBar, SectionHead, approx, coverageText, dayFilterOf, hoursOf, periodDays, share, toQuery, todayNo, useAgg, useNC, fmt } from './common.tsx';
 import { SaveReport } from './SaveReport.tsx';
 
 type Mode = 'observed' | 'estimated' | 'unserved';
@@ -27,13 +28,15 @@ export function Passengers({ game }: { game: Game }) {
   const [dest, setDest] = useState(init?.destination ?? '');
   useEffect(() => { if (init) useNC.getState().setOdInit(null); }, [init]);
   const [showMap, setShowMap] = useState(true);
+  const [who, setWho] = useState('');
   const selected = useUI((s) => s.flowOverlay?.selected ?? null);
 
   const baseQ: OdQuery = useMemo(() => {
     const { days, includeToday } = periodDays(f, todayNo(game));
-    const dt = f.dayType.startsWith('wd') ? { dayType: 'all' as const, weekday: Number(f.dayType.slice(2)) } : { dayType: f.dayType as 'all' | 'weekday' | 'weekend', weekday: null };
-    return { days, includeToday, ...dt, bands: bandsOf(hoursOf(f)), level: level === 'stop' ? 'stop' : 'zone', lines: f.line ? [f.line] : undefined };
-  }, [f, level, game]);
+    const dt = dayFilterOf(f.dayType);
+    return { days, includeToday, ...dt, bands: bandsOf(hoursOf(f)), level: level === 'stop' ? 'stop' : 'zone', lines: f.line ? [f.line] : undefined, type: who === '' ? null : Number(who) };
+  }, [f, level, game, who]);
+  const byType = useAgg(game, mode === 'observed' ? toQuery(f, game, 'type') : null);
 
   const rev = game.state.analytics.days.length;
   const tick = Math.floor(game.t / 1800);
@@ -141,6 +144,14 @@ export function Passengers({ game }: { game: Game }) {
               {opts(mode === 'observed' ? base.destinations : estOpts('d')).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </label>
+          {mode === 'observed' && (
+            <label>Who
+              <select className="pn-select" value={who} onChange={(e) => setWho(e.target.value)} style={{ maxWidth: 170 }}>
+                <option value="">Everyone</option>
+                {TRAVELLERS.map((t, i) => <option key={t.id} value={i}>{t.label}</option>)}
+              </select>
+            </label>
+          )}
           <span className="grow" style={{ flex: 1 }} />
           <label style={{ flexDirection: 'row', alignItems: 'center', gap: 6, textTransform: 'none', letterSpacing: 0, fontSize: 12.5, color: 'var(--text-2)' }}>
             <input type="checkbox" checked={showMap} onChange={(e) => setShowMap(e.target.checked)} /> Show on map
@@ -153,9 +164,10 @@ export function Passengers({ game }: { game: Game }) {
         <>
           <div className="nc-kpis" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
             <div className="nc-kpi"><b>{fmt(game, 'count', res.total.journeys)}</b><span>Journeys completed</span></div>
-            <div className="nc-kpi"><b>{fmt(game, 'count', res.total.abandoned)}</b><span>Gave up</span></div>
+            <div className="nc-kpi" title={who !== '' ? 'Who gave up is not kept by traveller type' : undefined}><b>{who !== '' ? '—' : fmt(game, 'count', res.total.abandoned)}</b><span>Gave up</span></div>
             <div className="nc-kpi"><b>{res.total.pairs}</b><span>{level === 'zone' ? 'Area pairs' : 'Stop pairs'}</span></div>
           </div>
+          <WhoTravels game={game} res={byType} />
           {!hasData ? (
             <div className="pn-empty">No journeys are recorded for this selection yet. Try a longer period or clear the filters.</div>
           ) : (
@@ -186,11 +198,40 @@ export function Passengers({ game }: { game: Game }) {
   );
 }
 
+/** Who travels on your network: boardings, journeys and people left behind by traveller type. */
+function WhoTravels({ game, res }: { game: Game; res: QueryResult | null }) {
+  const rows = (res?.rows ?? []).filter((r) => (r.values.boardings ?? 0) > 0 || (r.values.journeys ?? 0) > 0);
+  if (!rows.length) return null;
+  const tot = rows.reduce((a, r) => a + (r.values.journeys ?? 0), 0);
+  return (
+    <div className="section">
+      <SectionHead title="Who travels" right={<span className="faint" style={{ fontSize: 12, fontWeight: 600 }}>by traveller type</span>} />
+      <div className="nc-scroll">
+        <table className="pn-table nc-table">
+          <thead><tr><th>Travellers</th><th>Journeys</th><th>Share</th><th title="A change of bus counts again">Boardings</th><th title="Could not board a full bus">Left behind</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key}>
+                <td className="name">{r.label}</td>
+                <td>{fmt(game, 'count', r.values.journeys)}</td>
+                <td>{tot > 0 && r.values.journeys !== null ? `${Math.round(((r.values.journeys ?? 0) / tot) * 100)}%` : '—'}</td>
+                <td>{fmt(game, 'count', r.values.boardings)}</td>
+                <td>{fmt(game, 'count', r.values.leftBehind)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {res!.notes.length > 0 && <div className="nc-hint" style={{ marginTop: 6 }}>{res!.notes.join(' ')}</div>}
+    </div>
+  );
+}
+
 function ObsRow({ x, on, onPick, map }: { x: OdFlow; on: boolean; onPick: () => void; map: boolean }) {
   return (
     <tr className={`click ${on ? 'on' : ''}`} onClick={onPick} title={map ? 'Click to highlight on the map' : 'Not drawn on the map (outside the top 24)'}>
       <td className="name" style={{ maxWidth: 170, whiteSpace: 'normal' }}><b style={{ fontWeight: 700 }}>{x.oLabel}</b><br /><span className="faint">→ {x.dLabel}</span></td>
-      <td>{x.journeys}</td>
+      <td>{Math.round(x.journeys)}</td>
       <td className={x.abandoned ? 'nc-up-bad' : ''}>{x.abandoned || '—'}</td>
       <td>{x.journeyMin === null ? '—' : `${x.journeyMin.toFixed(0)} min`}</td>
       <td>{x.waitMin === null ? '—' : `${x.waitMin.toFixed(1)} min`}</td>

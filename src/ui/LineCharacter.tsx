@@ -3,7 +3,7 @@ import { CaretDown, CaretRight } from '@phosphor-icons/react';
 import type { Game } from '../game/engine.ts';
 import { TRAVELLERS } from '../game/activity/params.ts';
 import { BANDS } from '../game/analytics/types.ts';
-import { CHARACTER_DAYS, lineCharacter, lineWhere, type DirectionCurve } from '../game/analytics/character.ts';
+import { CHARACTER_DAYS, WEATHER_WINDOW, lineCharacter, lineEvents, lineWeather, lineWhere, type DirectionCurve } from '../game/analytics/character.ts';
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const hh = (h: number) => String(h).padStart(2, '0');
@@ -140,6 +140,44 @@ export function LineCharacter({ game, id }: { game: Game; id: string }) {
           </div>
         ) : none('On-time performance')}
       </Fold>
+      <WeatherFold game={game} id={id} />
+      <EventsFold game={game} id={id} />
     </>
+  );
+}
+
+function WeatherFold({ game, id }: { game: Game; id: string }) {
+  const w = lineWeather(game, id);
+  const change = (a: number, b: number) => (a > 0 ? `${b >= a ? '+' : '−'}${Math.round((Math.abs(b - a) / a) * 100)}%` : '');
+  return (
+    <Fold title="Weather" hint={`last ${WEATHER_WINDOW} days`}>
+      {w.missing ? <div className="pn-note">{w.missing}</div> : (
+        <>
+          <ul className="lc-list">
+            <li><span>Riders a day, dry</span><b className="num">{Math.round(w.dry.riders).toLocaleString()} <span className="faint">({w.dry.days} days)</span></b></li>
+            <li><span>Riders a day, rain</span><b className="num">{Math.round(w.wet.riders).toLocaleString()} <span className="faint">({w.wet.days} days) {change(w.dry.riders, w.wet.riders)}</span></b></li>
+            {w.dry.onTime !== null && w.wet.onTime !== null && <li><span>Trips on time, dry · rain</span><b className="num">{pct(w.dry.onTime)} · {pct(w.wet.onTime)}</b></li>}
+            {w.dry.delay !== null && w.wet.delay !== null && <li><span>Average delay, dry · rain</span><b className="num">{w.dry.delay.toFixed(1)} · {w.wet.delay.toFixed(1)} min</b></li>}
+          </ul>
+          <div className="faint lc-foot">{w.kind === 'working' ? 'Working days' : 'Weekends'} only, so the kind of day does not hide the weather. Rain keeps some people at home and puts others off walking and cycling; roads are slower, so buses run later.</div>
+        </>
+      )}
+    </Fold>
+  );
+}
+
+function EventsFold({ game, id }: { game: Game; id: string }) {
+  const e = lineEvents(game, id);
+  return (
+    <Fold title="Events" hint={`last ${WEATHER_WINDOW} days`}>
+      {!e.riders ? <div className="pn-note">No event crowds on this line in the last {WEATHER_WINDOW} days. Matches, concerts, festivals and gatherings near its stops bring riders before the start and after the end; announcements come days ahead.</div> : (
+        <>
+          <div className="row" style={{ minHeight: 0 }}><span className="k">Event riders</span><span className="v num">{Math.round(e.riders).toLocaleString()} on {e.days.length} day{e.days.length === 1 ? '' : 's'}</span></div>
+          <ul className="lc-list">
+            {e.days.slice(0, 5).map((d) => <li key={d.day}><span>Day {d.day + 1}{d.events.length ? ` · ${d.events.join(', ')}` : ''}</span><b className="num">{Math.round(d.riders)}</b></li>)}
+          </ul>
+        </>
+      )}
+    </Fold>
   );
 }

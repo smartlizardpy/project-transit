@@ -4,9 +4,11 @@ import { useUI } from '../../state/store.ts';
 import { focusLine } from '../camera.ts';
 import { LineBadge, LoadBar } from '../primitives.tsx';
 import { BANDS } from '../../game/analytics/types.ts';
-import { MEASURE, weekdayName, type Coverage } from '../../game/analytics/query.ts';
+import { MEASURE, aggregate, type Coverage } from '../../game/analytics/query.ts';
+import { TRAVELLERS } from '../../game/activity/params.ts';
 import {
   FilterBar, LineChart, Notes, SectionHead, SrcMark, Val, change, columns, lineLabel, stopName, toQuery, useAgg, useNC, type Filters, type Pt,
+  DayOptions, dayFilterLabel, fmt,
 } from './common.tsx';
 import { DataTable } from './table.tsx';
 import { SaveReport } from './SaveReport.tsx';
@@ -102,6 +104,40 @@ function LineDetail({ game, id, cov }: { game: Game; id: string; cov?: Coverage 
           <div className="nc-hint" style={{ marginTop: 4 }}>{s.n} runs recorded. Segments with no runs show a dash.</div>
         </div>
       ))}
+      <RidersByType game={game} id={id} />
+    </div>
+  );
+}
+
+/** Boardings on the line by traveller type and time of day, for the days selected above. */
+function RidersByType({ game, id }: { game: Game; id: string }) {
+  const f = useNC((s) => s.f);
+  const rev = game.state.analytics.days.length;
+  const key = JSON.stringify(f);
+  const grid = useMemo(() => BANDS.map((b) => aggregate(game, toQuery({ ...f, line: id, time: b.id }, game, 'type'))), [game, id, key, rev]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cell = (band: number, type: number) => grid[band].rows.find((r) => r.key === String(type))?.values.boardings ?? 0;
+  const rows = TRAVELLERS.map((t, i) => ({ t, i, total: BANDS.reduce((a, _b, bi) => a + cell(bi, i), 0) })).filter((r) => r.total > 0).sort((a, b) => b.total - a.total);
+  const note = grid.find((g) => g.notes.length)?.notes[0];
+  return (
+    <div>
+      <div className="nc-sub" style={{ fontSize: 13, marginBottom: 6 }}>Who rides, by time of day · boardings</div>
+      {!rows.length ? <div className="pn-note">No boardings by traveller type recorded for this line in the selected days.</div> : (
+        <div className="nc-scroll">
+          <table className="pn-table nc-table">
+            <thead><tr><th>Travellers</th>{BANDS.map((b) => <th key={b.id} title={b.short}>{b.label}</th>)}<th>All day</th></tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.t.id}>
+                  <td className="name">{r.t.label}</td>
+                  {BANDS.map((b, bi) => <td key={b.id}>{fmt(game, 'count', cell(bi, r.i)) === '0' ? '—' : fmt(game, 'count', cell(bi, r.i))}</td>)}
+                  <td>{fmt(game, 'count', r.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="nc-hint" style={{ marginTop: 4 }}>For the days selected above; the time-of-day filter does not apply. A change of bus counts again.{note ? ` ${note}` : ''}</div>
     </div>
   );
 }
@@ -156,7 +192,7 @@ function Compare({ game, line }: { game: Game; line: string | null }) {
   const qb = toQuery({ ...b, line: line ?? '' }, game, 'line');
   const ra = useAgg(game, qa);
   const rb = useAgg(game, qb);
-  const label = (f: Filters) => `${f.dayType === 'all' ? 'All days' : f.dayType === 'weekday' ? 'Weekdays' : f.dayType === 'weekend' ? 'Weekends' : `${weekdayName(Number(f.dayType.slice(2)))}s`}, ${f.time === 'all' ? 'all day' : f.time === 'custom' ? `${f.h0}–${f.h1}h` : BANDS.find((x) => x.id === f.time)!.short}`;
+  const label = (f: Filters) => `${dayFilterLabel(f.dayType)}, ${f.time === 'all' ? 'all day' : f.time === 'custom' ? `${f.h0}–${f.h1}h` : BANDS.find((x) => x.id === f.time)!.short}`;
   return (
     <div className="section" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <SectionHead title="Compare two periods" right={<span className="faint" style={{ fontSize: 12, fontWeight: 600 }}>{line ? lineLabel(game, line) : 'Whole network'}</span>} />
@@ -198,10 +234,7 @@ function PeriodPick({ title, f, set }: { title: string; f: Filters; set: (f: Fil
         <option value="yesterday">Yesterday</option>
       </select>
       <select className="pn-select" value={f.dayType} onChange={(e) => set({ ...f, dayType: e.target.value })}>
-        <option value="all">All days</option>
-        <option value="weekday">Weekdays</option>
-        <option value="weekend">Weekend</option>
-        {Array.from({ length: 7 }, (_, i) => <option key={i} value={`wd${i}`}>{weekdayName(i)}s</option>)}
+        <DayOptions />
       </select>
       <select className="pn-select" value={f.time} onChange={(e) => set({ ...f, time: e.target.value })}>
         <option value="all">All day</option>

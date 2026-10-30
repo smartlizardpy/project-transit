@@ -143,7 +143,7 @@ describe('event triggers', () => {
     const runs = runsOf(game, wf.id);
     const at = (node: string) => runs.filter((r) => r.trigger === node).map((r) => r.t);
     expect(at(a)).toEqual([ev.ann, away.ann]);
-    expect(runs.find((r) => r.trigger === a)!.report).toEqual([`${ev.title}: 30000`]);
+    expect(runs.find((r) => r.trigger === a)!.report).toEqual([`${ev.title}: 30,000`]);
     // the start trigger is set to the line near the stadium; the end trigger hears both matches
     expect(at(s)).toEqual([ev.start - HOUR]);
     expect(at(e)).toEqual([ev.end - 10 * 60, away.end - 10 * 60]);

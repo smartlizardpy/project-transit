@@ -215,6 +215,88 @@ export const TEMPLATES: Template[] = [
       return g;
     },
   },
+  {
+    id: 'school-holidays',
+    name: 'School holidays check',
+    description: 'On the first day of the school holidays at 05:00, tell me how many lines still run their term-time timetable. Pupils are off, so the school-run peaks fade. A “School holidays” service plan in a line’s timetable switches by itself.',
+    mode: 'automatic',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.calendar', 0, 0, { day: 'school_holidays', time: '05:00', first: true });
+      const lines = g.add('data.lines', 1, 0);
+      const f = g.add('logic.filter', 2, 0, { expr: 'not item.holidayPlan' });
+      const any = g.add('logic.compare', 3, 0, { op: '>', b: 0 });
+      const n = g.add('action.notify', 4, 0, {
+        title: 'School holidays from today',
+        body: '{value} of your lines run their term-time timetable. Add a School holidays plan in a line’s timetable to change it.',
+        tone: 'info',
+      });
+      g.link(t, 'event', lines, 'after');
+      g.link(lines, 'lines', f, 'list');
+      g.link(f, 'count', any, 'a');
+      g.link(any, 'result', n, 'when');
+      g.link(f, 'count', n, 'value');
+      return g;
+    },
+  },
+  {
+    id: 'airport-early',
+    name: 'Early-morning airport boost',
+    description: 'At 05:15, run an extra departure on each of your lines that stop at the largest airport: the first flights leave from about 06:00. Nothing runs when no line stops there.',
+    mode: 'suggest',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.time', 0, 0, { time: '05:15', days: 'all' });
+      const p = g.add('data.place', 1, 0, { category: 'airport', limit: 1 });
+      const go = g.add('action.dispatch', 2, 0);
+      g.link(t, 'event', p, 'after');
+      g.link(p, 'lines', go, 'line');
+      return g;
+    },
+  },
+  {
+    id: 'busy-hour-ahead',
+    name: 'Busy hour ahead',
+    description: 'Every hour from 06:00 to 20:00, ask the demand model about the next hour and tell me which lines expect more than 50 boardings per timetabled departure. An estimate: add a bus or shorten the headway before the crowd arrives.',
+    mode: 'automatic',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.every', 0, 0, { minutes: 60, from: 6, to: 20 });
+      const f = g.add('data.demandForecast', 1, 0, { hours: '1' });
+      const busy = g.add('logic.filter', 2, 0, { expr: 'item.hours[0].perDeparture > 50' });
+      const any = g.add('logic.compare', 3, 0, { op: '>', b: 0 });
+      const first = g.add('logic.first', 3, 1);
+      const n = g.add('action.notify', 4, 0, {
+        title: 'Line {value.number} looks busy next hour',
+        body: 'About {value.riders} boardings expected (estimate), more than 50 per timetabled departure.',
+        tone: 'warn',
+      });
+      g.link(t, 'event', f, 'after');
+      g.link(f, 'lines', busy, 'list');
+      g.link(busy, 'count', any, 'a');
+      g.link(busy, 'list', first, 'list');
+      g.link(any, 'result', n, 'when');
+      g.link(first, 'item', n, 'value');
+      return g;
+    },
+  },
+  {
+    id: 'unserved-corridors',
+    name: 'Unserved corridors report',
+    description: 'Every weekday at 06:00, write the busiest connections between your areas that no line links to this workflow’s report: the demand model’s estimate of trips a day, by every mode and purpose.',
+    mode: 'automatic',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.time', 0, 0, { time: '06:00', days: 'weekdays' });
+      const u = g.add('data.unserved', 1, 0, { limit: 3 });
+      const total = g.add('action.report', 2, 0, { text: 'About {value} trips a day between your areas have no line (estimate)' });
+      const top = g.add('action.report', 2, 1, { text: 'Busiest: {value.label}, about {value.trips} a day; missing a {value.missing}' });
+      g.link(t, 'event', u, 'after');
+      g.link(u, 'trips', total, 'value');
+      g.link(u, 'first', top, 'value');
+      return g;
+    },
+  },
 ];
 
 /** Create a workflow from a template. */

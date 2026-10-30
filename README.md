@@ -80,6 +80,8 @@ The game includes a small [Model Context Protocol](https://modelcontextprotocol.
 | `list_lines`, `line_details` | Each line's buses, frequency, riders, punctuality, crowding and profit; one line's stops, timetable and trips |
 | `list_buses`, `list_stops` | The fleet with status and condition; stops with waiting passengers |
 | `finances`, `daily_history` | Income and costs by day and category, the ledger, and one row per game day |
+| `places`, `weather_calendar` | Significant places with size and nearest stop; season, day type, weather, forecast and the next 14 days |
+| `events`, `line_character` | Announced events and their results; who rides a line and when |
 | `objectives`, `notifications`, `territory` | Goals and progress, recent messages, and the licensed map squares |
 | `query_save` | Raw save data by JSON pointer, for anything else |
 

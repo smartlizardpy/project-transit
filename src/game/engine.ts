@@ -27,6 +27,7 @@ import { SAVE_VERSION, TripState, type GameState, type DayPlan, type Id, type Ro
 import { hhmm, serviceDayOf, serviceDayWeekend, weekdayOf } from './time.ts';
 import { emptyAnalytics } from './analytics/types.ts';
 import { closeAnalyticsDay, recAssignment, sampleWaiting } from './analytics/record.ts';
+import { labelClosingDay } from './analytics/labels.ts';
 import { checkUnlock, closeControlDay, emptyControl } from './control.ts';
 import { emptyAutomation } from './automation/types.ts';
 import { upgradeState } from './upgrade.ts';
@@ -315,6 +316,7 @@ export class Game {
     const wx = this.weatherDay(ended)?.actual;
     const row = this.state.stats.days.at(-1);
     if (wx && row?.day === ended) row.wx = { k: wx.kind, hi: wx.hi, lo: wx.lo, mm: Math.round(wx.mm.reduce((a, b) => a + b, 0) * 10) / 10 };
+    labelClosingDay(this, ended); // before the weather moves on to the next day
     this.ensureWeather();
     this.ensureEvents();
     this.demand.slot = -1; // reputation moved: re-rate demand

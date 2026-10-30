@@ -1,6 +1,6 @@
 # City Activity Engine: revised plan
 
-Status: **approved plan, being implemented.** Phases 0 to 5 are built (0 to 2 done; 3 to 5 await the owner's play-test); progress, evidence and the changes made during implementation are in [`city-activity-engine-progress.md`](city-activity-engine-progress.md). Written 2026-10-30. The owner's decisions are recorded at the end. It revises the place, weather, calendar and event proposal from the same day, and keeps the research in [`passenger-choice-research.md`](passenger-choice-research.md). That research still supplies the time weights, crowding multipliers and transfer penalties used here.
+Status: **approved plan, being implemented.** Phases 0 to 6 are built (0 to 2 done; 3 to 6 await the owner's play-test); progress, evidence and the changes made during implementation are in [`city-activity-engine-progress.md`](city-activity-engine-progress.md). Written 2026-10-30. The owner's decisions are recorded at the end. It revises the place, weather, calendar and event proposal from the same day, and keeps the research in [`passenger-choice-research.md`](passenger-choice-research.md). That research still supplies the time weights, crowding multipliers and transfer penalties used here.
 
 Labels used in this document:
 - **Confirmed**: read in the code or decoded from map data, with the file and line.

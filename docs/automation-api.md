@@ -2,7 +2,7 @@
 
 How Automation Studio workflows run, what they can read and do, and the rules that keep them safe. The node and function tables at the end are generated from the code (`node scripts/dev/automation-reference.mjs`).
 
-Engine code: `src/game/automation/` (types, registry, validate, executor, manage, templates, lab, live, events, city) and `src/game/expr.ts`. Commands: `src/game/commands.ts`. Tests: `src/game/test/automation.test.ts`, `src/game/test/automation-city.test.ts`, `src/game/test/commands.test.ts`.
+Engine code: `src/game/automation/` (types, registry, validate, executor, manage, templates, lab, live, events, city) and `src/game/expr.ts`. Commands: `src/game/commands.ts`. Tests: `src/game/test/automation.test.ts`, `src/game/test/automation-city.test.ts`, `src/game/test/automation-forecast.test.ts`, `src/game/test/commands.test.ts`.
 
 ## How a workflow runs
 
@@ -18,7 +18,7 @@ Values are numbers, yes/no, text, records and lists. Records are plain objects w
 
 | Record | Fields |
 |---|---|
-| line | `id`, `number`, `name`, `colour`, `buses`, `needed` (peak requirement), `running`, `occupancy` (% average of buses on a trip now), `waiting`, `delay` (min, average), `headway` (min, now), `suspended`, `onTime3h` (%), `load3h` (%), `boardingsToday`, `tripsToday`, `missedToday`, `congestion` (% simulated traffic along the line) |
+| line | `id`, `number`, `name`, `colour`, `buses`, `needed` (peak requirement), `running`, `occupancy` (% average of buses on a trip now), `waiting`, `delay` (min, average), `headway` (min, now), `suspended`, `onTime3h` (%), `load3h` (%), `boardingsToday`, `tripsToday`, `missedToday`, `plan` (the service plan running today, or `null` for the normal timetable), `plans` (names of the enabled plans), `holidayPlan` (has an enabled school-holidays plan), `congestion` (% simulated traffic along the line) |
 | stop | `id`, `name`, `waiting`, `longestWait` (min), `lines` (numbers), `boardingsToday`, `gaveUpToday`, `avgWaitToday` (min) |
 | bus (`vehicle`) | `id`, `fleetNo`, `model`, `capacity`, `line`, `lineNumber`, `status`, `statusLabel`, `load`, `occupancy` (%), `condition` (%), `delay` (min), `depot`, `depotName`, `spare`, `free` (could start an extra trip now), `carrying` |
 | company | `balance`, `reputation`, `level`, `fare`, `resultToday`, `buses`, `lines` |
@@ -29,8 +29,11 @@ Values are numbers, yes/no, text, records and lists. Records are plain objects w
 | weather today | `type`, `label`, `high`, `low`, `rain` (mm in the day), `wet` |
 | forecast (tomorrow, from 18:00) | `type`, `label`, `high`, `low`, `chanceOfRain` (%), `wet`, `storm` (heavy rain or snow), `hot` (32 °C or more). About 8 forecasts in 10 are right. |
 | calendar | `season`, `week` (of the 12-week year), `seasonWeek`, `year`, `weekend`, `publicHoliday`, `schoolDay`, `schoolHolidays`, `university` (teaching, exams, break), `festive`, `label`. The calendar is a typical pattern, not real dates. |
+| place (`data.place`) | `id`, `name`, `category`, `size` (with its source's wording, e.g. "about 1,200 beds"), `tier` (1 largest … 5), `nearestStop`, `nearestStopId`, `walk` (m to your nearest stop), `served` (a stop within 400 m), `lines` (ids of your lines stopping within 400 m), `tripsToday` and `byYourNetwork` (the model's estimate of trips to and from it today), `thisHour` (modelled arrivals and departures this hour), `busyNow` (% of its busiest hour), `estimate` (true) |
+| forecast line (`data.demandForecast`) | `id`, `number`, `name`, `label`, `riders` (expected boardings in the window), `busiestHour`, `busiest`, `hours` (per hour: `time`, `riders`, `departures` timetabled, `perDeparture`), `estimate` (true). The network output `hours` has `time`, `boardings`, `journeys`, `goingHome` |
+| unserved connection (`data.unserved`) | `from`, `to`, `label`, `trips` (a day, every mode and purpose), `missing` (`stop`: no stop within a walk of one end; `line`: stops at both ends but no line between them), `estimate` (true) |
 
-All figures are read from the live simulation or from Network Control's recorded analytics; none are invented. When a figure is unavailable it is `null`, and comparisons with `null` are false.
+All figures are read from the live simulation or from Network Control's recorded analytics; none are invented. The three estimate blocks (`data.place`'s trips and busyness, `data.demandForecast`, `data.unserved`) come from the demand model and say so: the forecast uses the lines running in each hour, today's weather (which the player sees hour by hour), events already announced, people already out who are due home and the expected returns of trips starting in the window. It stops at midnight and never changes the simulation (tested). Measured against what then happened on a two-line network: within about 15% over three hours once the day's punctuality is known, high by up to a half on a weekday morning forecast before 07:00 (the model does not yet know the buses will run late). When a figure is unavailable it is `null`, and comparisons with `null` are false.
 
 ## Actions and the shared command layer
 
@@ -127,6 +130,9 @@ Read live lines, stops, buses, the company and Network Control analytics.
 | Weather `data.weather` | The weather now (rain, temperature), today’s weather and tomorrow’s forecast once it is out at 18:00. | After (anything, optional) | Now (record), Today (record), Tomorrow (forecast) (record), Raining now (yes/no), Temperature (number) | – |
 | Calendar `data.calendar` | Today’s season and week, and the kind of day: weekend, public holiday, school day or holidays, university teaching, exams or break (a typical pattern). | After (anything, optional) | Calendar (record), School holidays (yes/no), Public holiday (yes/no) | – |
 | Events `data.events` | Announced events under way or coming up, soonest first: matches, concerts, festivals, gatherings and disruptions. | After (anything, optional) | Events (list), Next event (record), How many (number) | Within, Events, Near line |
+| Places `data.place` | Airports, stations, hospitals, universities, stadiums and other places of a kind, largest first: your nearest stop, the lines there, and the model’s estimate of trips today and how busy the place is this hour. | After (anything, optional) | Places (list), Largest (record), Lines at the largest (list), Not served (list), How many (number) | Kind, Near line, At most |
+| Unserved trips (estimate) `data.unserved` | The busiest connections between areas that your network does not link today, from the demand model: trips a day by every mode and purpose, and whether a stop or a line is missing. | After (anything, optional) | Connections (list), Busiest (record), How many (number), Trips (number) | At most |
+| Demand forecast (estimate) `data.demandForecast` | Expected riders per line for each of the next few hours, from the demand model: the lines running then, today’s weather, announced events and people due home. An estimate: riders also depend on how your buses perform. | After (anything, optional) | Lines (list), Network by hour (list), Busiest line (record), Riders (number) | Line, Next |
 | Network Control figure `data.analytics` | A measure from Network Control’s recorded history, e.g. average wait per stop over the last 7 days. | After (anything, optional) | Rows (list), Total (number) | Measure, For each, Days |
 
 #### Logic

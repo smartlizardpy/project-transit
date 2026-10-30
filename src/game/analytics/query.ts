@@ -17,9 +17,20 @@ import type { LngLat } from '../world/graph.ts';
 import type { TransitMode } from '../world/places.ts';
 import { KINDS, KIND_COUNT } from '../activity/params.ts';
 import { MIN_FERRY_M, TRANSIT_SERVICE } from '../activity/transit.ts';
-import { BANDS, type DayRecord, type DaySummary } from './types.ts';
+import { BANDS, TYPE_COUNT, type DayLabel, type DayRecord, type DaySummary } from './types.ts';
+import { DAY_KINDS, EVENT_DAYS, WEATHER_GROUPS, dayKind, eventDay, makeDayLabel, weatherGroup, type DayKind, type EventDay, type WeatherGroup } from './labels.ts';
+import { TRAVELLERS } from '../activity/params.ts';
 
-export type GroupBy = 'network' | 'line' | 'stop' | 'vehicle' | 'zone' | 'day' | 'hour' | 'weekday';
+export type GroupBy = 'network' | 'line' | 'stop' | 'vehicle' | 'zone' | 'day' | 'hour' | 'weekday' | 'weather' | 'daykind' | 'eventday' | 'type';
+/** Groupings with one row per kind of day: they mean what a weekday grouping means. */
+export const DAY_LEVEL = new Set<GroupBy>(['day', 'weekday', 'weather', 'daykind', 'eventday']);
+
+/** Filters on the recorded days' labels (days recorded before labels were kept never match one). */
+export interface LabelFilter {
+  weather?: 'all' | WeatherGroup;
+  dayKind?: 'all' | DayKind;
+  eventDay?: 'all' | EventDay;
+}
 export type DaySel = { last: number } | { from: number; to: number };
 
 export interface AnalyticsQuery {
@@ -37,6 +48,9 @@ export interface AnalyticsQuery {
   stops?: Id[];
   zones?: string[];
   vehicles?: Id[];
+  weather?: 'all' | WeatherGroup;
+  dayKind?: 'all' | DayKind;
+  eventDay?: 'all' | EventDay;
 }
 
 export type Unit = 'count' | 'money' | 'percent' | 'minutes' | 'hours' | 'km' | 'score' | 'ratio';
@@ -93,11 +107,11 @@ const STOPS: GroupBy[] = ['network', 'stop', 'zone', 'day', 'hour', 'weekday'];
 const VEH: GroupBy[] = ['network', 'vehicle', 'day', 'weekday'];
 
 export const MEASURES: MeasureDef[] = [
-  { id: 'boardings', label: 'Boardings', unit: 'count', source: 'measured', hourly: true, groups: ALL, better: 'higher', describe: 'Passengers who got on a bus (a transfer counts again).', calc: (a) => a.boardings },
+  { id: 'boardings', label: 'Boardings', unit: 'count', source: 'measured', hourly: true, groups: [...ALL, 'type'], better: 'higher', describe: 'Passengers who got on a bus (a transfer counts again).', calc: (a) => a.boardings },
   { id: 'alightings', label: 'Alightings', unit: 'count', source: 'measured', hourly: true, groups: STOPS, better: 'none', describe: 'Passengers who got off at the stop.', calc: (a) => a.alightings },
-  { id: 'journeys', label: 'Journeys', unit: 'count', source: 'measured', hourly: true, groups: ['network', 'line', 'stop', 'zone', 'day', 'hour', 'weekday'], better: 'higher', describe: 'Completed journeys (for a line: journeys that started on it; for a stop: journeys that started there).', calc: (a) => a.journeys },
+  { id: 'journeys', label: 'Journeys', unit: 'count', source: 'measured', hourly: true, groups: ['network', 'line', 'stop', 'zone', 'day', 'hour', 'weekday', 'type'], better: 'higher', describe: 'Completed journeys (for a line: journeys that started on it; for a stop: journeys that started there).', calc: (a) => a.journeys },
   { id: 'abandoned', label: 'Gave up', unit: 'count', source: 'measured', hourly: true, groups: ['network', 'line', 'stop', 'zone', 'day', 'hour', 'weekday'], better: 'lower', describe: 'Passengers who gave up their journey (waited too long or no way to continue).', calc: (a) => a.abandoned },
-  { id: 'leftBehind', label: 'Left behind', unit: 'count', source: 'measured', hourly: false, groups: ['network', 'line', 'stop', 'zone', 'day', 'weekday'], better: 'lower', describe: 'Passengers who could not board because the bus was full.', calc: (a) => a.leftBehind },
+  { id: 'leftBehind', label: 'Left behind', unit: 'count', source: 'measured', hourly: false, groups: ['network', 'line', 'stop', 'zone', 'day', 'weekday', 'type'], better: 'lower', describe: 'Passengers who could not board because the bus was full.', calc: (a) => a.leftBehind },
   { id: 'avgWait', label: 'Average wait', unit: 'minutes', source: 'measured', hourly: false, groups: ['network', 'line', 'stop', 'zone', 'day', 'weekday'], better: 'lower', describe: 'Average minutes waited at the stop before boarding.', calc: (a) => ratio(a.waitSum, a.waitN) },
   { id: 'maxWait', label: 'Longest wait', unit: 'minutes', source: 'measured', hourly: false, groups: ['network', 'stop', 'zone', 'day', 'weekday'], better: 'lower', describe: 'Longest wait before boarding.', calc: (a) => (a.waitN > 0 ? a.waitMax : null) },
   { id: 'transfers', label: 'Transfers', unit: 'count', source: 'measured', hourly: false, groups: ['network', 'line', 'stop', 'zone', 'day', 'weekday'], better: 'none', describe: 'Boardings that were a change from another bus.', calc: (a) => a.transfers },
@@ -128,7 +142,18 @@ export const MEASURES: MeasureDef[] = [
 export const MEASURE: Record<string, MeasureDef> = Object.fromEntries(MEASURES.map((m) => [m.id, m]));
 
 export function measuresFor(g: GroupBy): MeasureDef[] {
-  return MEASURES.filter((m) => m.groups.includes(g));
+  return MEASURES.filter((m) => m.groups.includes(g) || (DAY_LEVEL.has(g) && m.groups.includes('weekday')));
+}
+
+/** Whether a recorded day's label passes the filters; null when a filter is set and the day has no label. */
+export function labelMatches(l: DayLabel | undefined, f: LabelFilter): boolean | null {
+  const any = (f.weather && f.weather !== 'all') || (f.dayKind && f.dayKind !== 'all') || (f.eventDay && f.eventDay !== 'all');
+  if (!any) return true;
+  if (!l) return null;
+  if (f.weather && f.weather !== 'all' && weatherGroup(l) !== f.weather) return false;
+  if (f.dayKind && f.dayKind !== 'all' && dayKind(l) !== f.dayKind) return false;
+  if (f.eventDay && f.eventDay !== 'all' && eventDay(l) !== f.eventDay) return false;
+  return true;
 }
 
 // ───────────────────────────────────────────── day selection and coverage
@@ -146,6 +171,10 @@ export interface Coverage {
   today: boolean;
   /** first day recorded in full */
   since: number;
+  /** selected days left out because they were recorded before day labels were kept (weather, kind of day, events) */
+  unlabelled?: number[];
+  /** recorded days left out because their weather, kind of day or events do not match the filter */
+  other?: number[];
 }
 
 function selectDays(game: Game, q: { days?: DaySel; dayType?: string; weekday?: number | null }): number[] {
@@ -171,7 +200,7 @@ function selectDays(game: Game, q: { days?: DaySel; dayType?: string; weekday?: 
   return out;
 }
 
-function gather(game: Game, q: { days?: DaySel; dayType?: string; weekday?: number | null; includeToday?: boolean }) {
+function gather(game: Game, q: { days?: DaySel; dayType?: string; weekday?: number | null; includeToday?: boolean } & LabelFilter) {
   const a = game.state.analytics;
   const days = selectDays(game, q);
   const byDay = new Map<number, DayRecord>();
@@ -180,15 +209,23 @@ function gather(game: Game, q: { days?: DaySel; dayType?: string; weekday?: numb
   for (const s of a.summary) sumByDay.set(s.day, s);
   const detail: DayRecord[] = [], summary: DaySummary[] = [];
   const cov: Coverage = { requested: days, detailed: [], summary: [], missing: [], today: false, since: a.since };
+  const keep = (d: number, l: DayLabel | undefined) => {
+    const m = labelMatches(l, q);
+    if (m === null) (cov.unlabelled ??= []).push(d);
+    else if (!m) (cov.other ??= []).push(d);
+    return m === true;
+  };
   for (const d of days) {
     const r = byDay.get(d);
     if (r) {
+      if (!keep(d, r.lbl)) continue;
       detail.push(r);
       cov.detailed.push(d);
       continue;
     }
     const s = sumByDay.get(d);
     if (s) {
+      if (!keep(d, s.l)) continue;
       summary.push(s);
       cov.summary.push(d);
     } else cov.missing.push(d);
@@ -197,7 +234,7 @@ function gather(game: Game, q: { days?: DaySel; dayType?: string; weekday?: numb
   if (q.includeToday && a.today.day === today) {
     const wd = weekdayOf(game.state.clock.startWeekday, today * DAY);
     const okDay = (q.weekday === undefined || q.weekday === null || wd === q.weekday) && !(q.dayType === 'weekday' && wd >= 5) && !(q.dayType === 'weekend' && wd < 5);
-    if (okDay) {
+    if (okDay && labelMatches(makeDayLabel(game, today), q) === true) {
       detail.push(a.today);
       cov.today = true;
     }
@@ -260,6 +297,22 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
   const lineOk = (r: Id) => !lineSet || lineSet.has(r);
   const sw = st.clock.startWeekday;
   const g = q.groupBy;
+  const dayLevel = DAY_LEVEL.has(g);
+  const todayNo = Math.floor(game.t / DAY);
+  const labels = new Map<number, DayLabel | undefined>();
+  for (const r of detail) labels.set(r.day, r.day === todayNo && r === st.analytics.today ? makeDayLabel(game, todayNo) : r.lbl);
+  for (const s of summary) labels.set(s.day, s.l);
+  const dayKeyOf = (day: number): string => {
+    const l = labels.get(day);
+    switch (g) {
+      case 'day': return String(day);
+      case 'weekday': return String(weekdayOf(sw, day * DAY));
+      case 'weather': return weatherGroup(l) ?? 'unknown';
+      case 'daykind': return dayKind(l) ?? 'unknown';
+      case 'eventday': return eventDay(l) ?? 'unknown';
+      default: return 'all';
+    }
+  };
   const groups = new Map<string, Acc>();
   const acc = (key: string) => {
     let a = groups.get(key);
@@ -268,12 +321,43 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
   };
   const hourAccs = g === 'hour' ? Array.from({ length: 24 }, (_, h) => (hs[h] ? acc(String(h)) : emptyAcc())) : null;
   const notes: string[] = [];
-  const useStops = g === 'stop' || g === 'zone' || ((g === 'network' || g === 'day' || g === 'weekday' || g === 'hour') && (!!stopSet || !!zoneSet));
-  const useLines = !useStops || g === 'network' || g === 'day' || g === 'weekday' || g === 'hour';
+  const useStops = g === 'stop' || g === 'zone' || ((g === 'network' || dayLevel || g === 'hour') && (!!stopSet || !!zoneSet));
+  const useLines = !useStops || g === 'network' || dayLevel || g === 'hour';
   const finance = st.finance;
+  // by traveller type: boardings (by time band), journeys and people left behind (whole days)
+  let typeNoData = 0;
+  const typeRows = (rec: DayRecord) => {
+    let seen = false;
+    const byBand = (k: number[] | undefined, mul = 1) => {
+      if (!k) return;
+      seen = true;
+      for (let i = 0; i < k.length; i++) if (!hourly || bandInHours(i % BANDS.length, hs)) acc(String(Math.floor(i / BANDS.length))).boardings += k[i] * mul;
+    };
+    if (stopSet || zoneSet) for (const [sid, sd] of Object.entries(rec.stops)) {
+      if (!stopOk(sid) || !sd.k) continue;
+      seen = true;
+      for (let t = 0; t < sd.k.length; t++) acc(String(t)).boardings += sd.k[t];
+    }
+    else for (const [rid, r] of Object.entries(rec.routes)) if (lineOk(rid)) byBand(r.k);
+    if (!hourly) {
+      if (!lineSet && !stopSet && !zoneSet) {
+        rec.net.jk?.forEach((n, t) => (acc(String(t)).journeys += n));
+        rec.net.lk?.forEach((n, t) => (acc(String(t)).leftBehind += n));
+      } else if (rec.odk) {
+        for (const [k, arr] of Object.entries(rec.odk)) {
+          const [o, , sig] = k.split('>');
+          if (!lineOk(firstLine(sig)) || !stopOk(o)) continue;
+          for (let i = 0; i < arr.length; i += 2) acc(String(arr[i])).journeys += arr[i + 1];
+        }
+      }
+    }
+    if (seen) for (let t = 0; t < TYPE_COUNT; t++) acc(String(t)).seen++;
+    else typeNoData++;
+  };
 
   for (const rec of detail) {
-    const dayKey = g === 'day' ? String(rec.day) : g === 'weekday' ? String(weekdayOf(sw, rec.day * DAY)) : 'all';
+    const dayKey = dayKeyOf(rec.day);
+    if (g === 'type') { typeRows(rec); continue; }
     // lines
     if (useLines && !useStops) {
       for (const [rid, r] of Object.entries(rec.routes)) {
@@ -289,7 +373,7 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
           continue;
         }
         const key = g === 'line' ? rid : dayKey;
-        if (g !== 'line' && g !== 'network' && g !== 'day' && g !== 'weekday') continue;
+        if (g !== 'line' && g !== 'network' && !dayLevel) continue;
         const a = acc(key);
         a.boardings += hsum(r.b, hs); a.trips += hsum(r.d, hs); a.onTime += hsum(r.o, hs); a.missed += hsum(r.m, hs);
         a.deps += hsum(r.dp, hs); a.loadSum += hsum(r.lf, hs); a.delaySum += hsum(r.dl, hs);
@@ -322,7 +406,7 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
       }
     }
     // vehicles
-    if (g === 'vehicle' || ((g === 'network' || g === 'day' || g === 'weekday') && !useStops && !lineSet)) {
+    if (g === 'vehicle' || ((g === 'network' || dayLevel) && !useStops && !lineSet)) {
       for (const [vid, v] of Object.entries(rec.veh)) {
         if (vehSet && !vehSet.has(vid)) continue;
         if (g !== 'vehicle' && vehSet) continue;
@@ -340,7 +424,7 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
       }
     }
     // journeys and satisfaction
-    if (g === 'network' || g === 'day' || g === 'weekday' || g === 'hour') {
+    if (g === 'network' || dayLevel || g === 'hour') {
       if (!lineSet && !stopSet && !zoneSet) {
         if (g === 'hour') {
           for (let h = 0; h < 24; h++) if (hs[h]) { hourAccs![h].journeys += rec.net.j[h]; if (!useStops) hourAccs![h].abandoned += rec.net.ab[h]; }
@@ -372,9 +456,9 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
   }
 
   // older days: compact totals (counts only)
-  if (summary.length && !hourly && (g === 'network' || g === 'line' || g === 'stop' || g === 'zone' || g === 'day' || g === 'weekday')) {
+  if (summary.length && !hourly && (g === 'network' || g === 'line' || g === 'stop' || g === 'zone' || dayLevel)) {
     for (const s of summary) {
-      const dayKey = g === 'day' ? String(s.day) : g === 'weekday' ? String(weekdayOf(sw, s.day * DAY)) : 'all';
+      const dayKey = dayKeyOf(s.day);
       if (!useStops) {
         for (const [rid, r] of Object.entries(s.r)) {
           if (!lineOk(rid)) continue;
@@ -397,10 +481,10 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
   }
 
   // money from the ledger (whole days only)
-  if (!hourly && (g === 'line' || g === 'network' || g === 'day' || g === 'weekday') && !useStops) {
+  if (!hourly && (g === 'line' || g === 'network' || dayLevel) && !useStops) {
     const ledgerDays = [...cov.detailed, ...cov.summary, ...(cov.today ? [Math.floor(game.t / DAY)] : [])];
     for (const d of ledgerDays) {
-      const dayKey = g === 'day' ? String(d) : g === 'weekday' ? String(weekdayOf(sw, d * DAY)) : 'all';
+      const dayKey = dayKeyOf(d);
       if (g === 'line' || lineSet) {
         const rd = finance.routeDaily[d];
         if (!rd) continue;
@@ -420,13 +504,20 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
     }
     // fares on summary days come from the ledger too
     for (const d of cov.summary) {
-      const dayKey = g === 'day' ? String(d) : g === 'weekday' ? String(weekdayOf(sw, d * DAY)) : 'all';
+      const dayKey = dayKeyOf(d);
       if (g === 'line' || lineSet) {
         for (const [rid, x] of Object.entries(finance.routeDaily[d] ?? {})) if (lineOk(rid)) acc(g === 'line' ? rid : dayKey).fares += x.rev;
       } else acc(dayKey).fares += finance.daily[d]?.fares ?? 0;
     }
   }
-  if (hourly) notes.push('Costs, waits, satisfaction, crowding and bus activity are recorded per day, so they are left out when you pick hours.');
+  if (hourly && g !== 'type') notes.push('Costs, waits, satisfaction, crowding and bus activity are recorded per day, so they are left out when you pick hours.');
+  if (g === 'type') {
+    if (hourly) notes.push('By traveller type, boardings are recorded by time band (the bands that overlap the hours you picked count in full); journeys and people left behind are whole-day figures and are left out.');
+    if (summary.length) notes.push(`${summary.length} older day${summary.length > 1 ? 's have' : ' has'} no traveller types (only the last ${cov.detailed.length} days keep them).`);
+    if (typeNoData) notes.push(`${typeNoData} day${typeNoData > 1 ? 's were' : ' was'} recorded before traveller types were kept.`);
+    if (stopSet || zoneSet) notes.push('At stops, boardings by type are whole-day figures.');
+  }
+  if (cov.unlabelled?.length) notes.push(`${cov.unlabelled.length} selected day${cov.unlabelled.length > 1 ? 's were' : ' was'} recorded before the weather, kind of day and events were kept with each day, so ${cov.unlabelled.length > 1 ? 'they are' : 'it is'} left out.`);
   if (lineSet && (g === 'stop' || g === 'zone')) notes.push('With a line selected, stop boardings count that line only; alightings and waits include every line.');
 
   // rows
@@ -460,10 +551,18 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
       case 'hour': label = `${String(key).padStart(2, '0')}:00`; break;
       case 'weekday': label = weekdayName(+key); break;
       case 'network': label = 'Network'; id = null; break;
+      case 'weather': label = WEATHER_GROUPS.find((x) => x.id === key)?.label ?? 'Weather not recorded'; break;
+      case 'daykind': label = DAY_KINDS.find((x) => x.id === key)?.label ?? 'Not recorded'; break;
+      case 'eventday': label = EVENT_DAYS.find((x) => x.id === key)?.label ?? 'Not recorded'; break;
+      case 'type': label = TRAVELLERS[+key]?.label ?? key; break;
     }
     rows.push({ key, id, label, colour, values: values(a) });
   }
+  const ORDER: Partial<Record<GroupBy, string[]>> = { weather: WEATHER_GROUPS.map((x) => x.id), daykind: DAY_KINDS.map((x) => x.id), eventday: EVENT_DAYS.map((x) => x.id) };
+  const order = ORDER[g];
   if (g === 'day' || g === 'hour' || g === 'weekday') rows.sort((a, b) => +a.key - +b.key);
+  else if (order) rows.sort((a, b) => (order.indexOf(a.key) + 1 || 99) - (order.indexOf(b.key) + 1 || 99));
+  else if (g === 'type') rows.sort((a, b) => (b.values.boardings ?? 0) - (a.values.boardings ?? 0) || +a.key - +b.key);
   else rows.sort((a, b) => (b.values.boardings ?? 0) - (a.values.boardings ?? 0) || a.label.localeCompare(b.label));
   const tot = emptyAcc();
   for (const a of groups.values()) merge(tot, a);
@@ -521,11 +620,13 @@ export const METRIC_VARIABLES = MEASURES.map((m) => m.id);
 
 // ───────────────────────────────────────────── origin–destination
 
-export interface OdQuery {
+export interface OdQuery extends LabelFilter {
   days?: DaySel;
   includeToday?: boolean;
   dayType?: 'all' | 'weekday' | 'weekend';
   weekday?: number | null;
+  /** only journeys of one traveller type (index into TRAVELLERS); counts completed journeys only */
+  type?: number | null;
   /** time bands (see BANDS) of the journey start; empty = all */
   bands?: number[];
   /** stop-to-stop, or area-to-area */
@@ -586,6 +687,7 @@ export function odMatrix(game: Game, q: OdQuery): OdResult {
   const bands = q.bands?.length ? new Set(q.bands) : null;
   const lineSet = q.lines?.length ? new Set(q.lines) : null;
   const stopSet = q.stops?.length ? new Set(q.stops) : null;
+  const typeOn = q.type !== undefined && q.type !== null;
   const zoneOf = (s: Id) => st.stops[s]?.zone ?? 'unknown';
   const keyOf = (s: Id) => (q.level === 'zone' ? zoneOf(s) : s);
   const flows = new Map<string, OdFlow & { jt: number; wt: number; its: Map<string, number> }>();
@@ -606,6 +708,14 @@ export function odMatrix(game: Game, q: OdQuery): OdResult {
       for (let i = 0; i < arr.length; i += 5) {
         if (bands && !bands.has(arr[i])) continue;
         jn += arr[i + 1]; ab += arr[i + 2]; jt += arr[i + 3]; wt += arr[i + 4];
+      }
+      if (typeOn) {
+        // the type's share of the pair's completed journeys (types are kept per pair, not per band)
+        const tk = rec.odk?.[k];
+        let all = 0, mine = 0;
+        if (tk) for (let i = 0; i < tk.length; i += 2) { all += tk[i + 1]; if (tk[i] === q.type) mine += tk[i + 1]; }
+        const share = all > 0 ? mine / all : 0;
+        jn *= share; jt *= share; wt *= share; ab = 0;
       }
       if (!jn && !ab) continue;
       const fk = `${ko}>${kd}`;
@@ -633,6 +743,8 @@ export function odMatrix(game: Game, q: OdQuery): OdResult {
   const notes: string[] = [];
   if (summary.length) notes.push(`Journey detail is kept for ${cov.detailed.length} days; ${summary.length} older selected day${summary.length > 1 ? 's are' : ' is'} not included.`);
   if (!detail.length) notes.push('No recorded journeys match this selection yet.');
+  if (typeOn) notes.push(`Only ${TRAVELLERS[q.type!]?.label.toLowerCase() ?? 'that type'}: completed journeys, rounded; who gave up is not kept by type.`);
+  if (cov.unlabelled?.length) notes.push(`${cov.unlabelled.length} selected day${cov.unlabelled.length > 1 ? 's were' : ' was'} recorded before the weather, kind of day and events were kept with each day, so ${cov.unlabelled.length > 1 ? 'they are' : 'it is'} left out.`);
   const top = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1]).map(([id, journeys]) => ({ id, label: label(id), journeys }));
   return {
     flows: q.limit ? out.slice(0, q.limit) : out,

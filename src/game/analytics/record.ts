@@ -4,6 +4,7 @@
 // simulation, never reconstructions. All functions are cheap: a few lookups and additions.
 
 import type { GameState, Id, PaxGroup, Vehicle } from '../types.ts';
+import { rollWeek } from './labels.ts';
 import type { Pattern } from '../network.ts';
 import { DAY, HOUR } from '../content.ts';
 import { ASSIGNMENT_LOG, BANDS, DETAIL_DAYS, SUMMARY_DAYS, TYPE_COUNT, bandOf, emptyDay, hours0, types0, type DayRecord, type DaySummary, type PatDay, type RouteDay, type StopDay, type VehicleDay } from './types.ts';
@@ -299,6 +300,7 @@ const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 
 export function summarise(rec: DayRecord): DaySummary {
   const out: DaySummary = { day: rec.day, r: {}, s: {}, n: [sum(rec.net.j), sum(rec.net.ab), r1(rec.net.ss), rec.net.sn] };
+  if (rec.lbl) out.l = rec.lbl;
   for (const [id, r] of Object.entries(rec.routes)) out.r[id] = [sum(r.b), sum(r.d), sum(r.o), sum(r.m), r1(sum(r.pk)), r1(sum(r.ck))];
   for (const [id, s] of Object.entries(rec.stops)) out.s[id] = [sum(s.b), sum(s.a), sum(s.g)];
   return out;
@@ -316,6 +318,7 @@ export function closeAnalyticsDay(state: GameState, day: number): DayRecord {
   for (const r of Object.values(state.routes)) a.names.r[r.id] = { n: r.number, c: r.colour };
   for (const v of Object.values(state.vehicles)) a.names.v[v.id] = v.fleetNo;
   a.days.push(rec);
+  rollWeek(state, rec);
   a.today = emptyDay(day + 1);
   while (a.days.length > DETAIL_DAYS) a.summary.push(summarise(a.days.shift()!));
   while (a.summary.length && a.summary[0].day < day - SUMMARY_DAYS) a.summary.shift();

@@ -176,6 +176,32 @@ export interface DayRecord {
   od: Record<string, number[]>;
   /** completed journeys by traveller type per `od` key: [type, people, type, people, …] */
   odk?: Record<string, number[]>;
+  /** what kind of day it was (recorded when the day closes; missing on older days) */
+  lbl?: DayLabel;
+}
+
+/** A recorded day's calendar, weather and events, for grouping and comparing days. */
+export interface DayLabel {
+  /** game year (1-based), season, week of the year (1-based) */
+  y: number;
+  season: string;
+  week: number;
+  /** flags are stored only when true */
+  weekend?: boolean;
+  /** public holiday */
+  holiday?: boolean;
+  /** pupils at school, or a weekday of the school holidays */
+  school?: boolean;
+  schoolHolidays?: boolean;
+  uni: string;
+  festive?: boolean;
+  /** the day's weather: kind, rain in mm, high and low in °C */
+  wx?: { k: string; mm: number; hi: number; lo: number };
+  /**
+   * events that started that day and touched your network (people carried, or who gave up or
+   * were stranded), and rail disruptions; results are final by the next day
+   */
+  ev?: { id: string; kind: string; venue: string; people: number; carried: number; lost: number; cancelled?: boolean }[];
 }
 
 /** Compact totals for days older than the detail window. */
@@ -187,7 +213,28 @@ export interface DaySummary {
   s: Record<Id, [number, number, number]>;
   /** network: journeys, abandoned, satisfaction sum, satisfaction count */
   n: [number, number, number, number];
+  /** the day's label, kept from the detailed record */
+  l?: DayLabel;
 }
+
+/** One game week: totals per line and for the network, kept for three game years (seasonal comparisons). */
+export interface WeekRecord {
+  /** game year (1-based), week of the year (1-based), season, first game day, and days recorded */
+  y: number;
+  w: number;
+  season: string;
+  from: number;
+  n: number;
+  /** per line: boardings, fares, then boardings by traveller type */
+  r: Record<Id, number[]>;
+  /** network: journeys, gave up or stranded, satisfaction sum, satisfaction count, fares */
+  net: [number, number, number, number, number];
+  /** by weather: days, journeys (dry, wet, storm) */
+  wx: [number, number, number, number, number, number];
+}
+
+/** Game weeks kept (three years of twelve weeks). */
+export const WEEKS_KEPT = 36;
 
 export interface AssignmentEvent {
   t: number;
@@ -206,6 +253,8 @@ export interface AnalyticsState {
   days: DayRecord[];
   summary: DaySummary[];
   assignments: AssignmentEvent[];
+  /** weekly roll-ups for seasonal comparisons (missing on older saves until the first week closes) */
+  weeks?: WeekRecord[];
   /** display names for ids that may later be removed */
   names: { s: Record<Id, string>; r: Record<Id, { n: string; c: string }>; v: Record<Id, string> };
 }
