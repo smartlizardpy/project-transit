@@ -19,6 +19,9 @@ import { currencyFor, formatMoney, type Currency } from './currency.ts';
 import { DAY, DT, ECON, HOUR, LINE_COLOURS, MODEL, SERVICE, SPEEDS, STARTING_REPUTATION } from './content.ts';
 import { calendarDay, calendarPattern, dayType, newCalendar, type CalendarDay, type DayType } from './calendar.ts';
 import { mix } from './hash.ts';
+import { climateFor } from './climate.ts';
+import { advanceWeather, climateAt, forecastFor, weatherSeed, WEATHER_LABEL, type Climate, type WeatherDay } from './weather.ts';
+import { weatherEffect, type WeatherEffect } from './activity/conditions.ts';
 import { SAVE_VERSION, TripState, type GameState, type Id, type Route, type RouteKind, type Stop, type Timetable, type Trip, type Vehicle } from './types.ts';
 import { hhmm, serviceDayOf, serviceDayWeekend, weekdayOf } from './time.ts';
 import { emptyAnalytics } from './analytics/types.ts';
@@ -125,6 +128,8 @@ export class Game {
   readonly geo: Geo;
   readonly traffic: SimulatedTraffic;
   readonly trafficIntensity: number;
+  /** the climate the weather is generated from (station statistics) */
+  readonly climate: Climate;
   readonly demand = new DemandModel();
   readonly currency: Currency;
   /** derived per-route data */
@@ -165,6 +170,9 @@ export class Game {
     this.geo = new Geo(region);
     this.traffic = new SimulatedTraffic(region.graph, region.demand, state.clock.startWeekday);
     this.trafficIntensity = this.traffic.intensity;
+    this.climate = climateFor(region.spec, this.state.world.weather?.station);
+    this.ensureWeather();
+    this.traffic.conditions = (t) => this.weatherEffectAt(t).road;
     this.currency = currencyFor(state.region.country);
     if (state.region.fingerprint !== region.fingerprint) this.resnap();
     // the save keeps a snapshot of the significant places; refresh it when the map data changed
@@ -287,6 +295,7 @@ export class Game {
 
   private hour() {
     const t = this.t;
+    if (Math.floor((t % DAY) / HOUR) === 18) this.issueForecast(true);
     flushHour(this.state, t - 1, `${hhmm(t - HOUR)}–${hhmm(t)}`);
     sampleWaiting(this.state);
     if (Math.floor((t % DAY) / HOUR) === 4) compactLedger(this.state);
@@ -297,6 +306,10 @@ export class Game {
     const t = this.t;
     const ended = t / DAY - 1;
     closeDay(this, ended);
+    const wx = this.weatherDay(ended)?.actual;
+    const row = this.state.stats.days.at(-1);
+    if (wx && row?.day === ended) row.wx = { k: wx.kind, hi: wx.hi, lo: wx.lo, mm: Math.round(wx.mm.reduce((a, b) => a + b, 0) * 10) / 10 };
+    this.ensureWeather();
     this.demand.slot = -1; // reputation moved: re-rate demand
     closeAnalyticsDay(this.state, ended);
     closeControlDay(this, ended);
@@ -355,6 +368,44 @@ export class Game {
   /** The kind of day at time `t`: weekend, public holiday, school day, teaching or exam week (typical pattern for the country). */
   dayTypeAt(t = this.state.clock.t): DayType {
     return dayType(this.calendarAt(t), calendarPattern(this.region.spec.country));
+  }
+
+  // ───────────────────────────────────────── weather
+
+  private get weatherSeed(): number {
+    return weatherSeed(this.state.world.seed, this.climate.station);
+  }
+
+  /** Saved weather for today and the next two days (generated from the climate when missing). */
+  private ensureWeather() {
+    const w = (this.state.world.weather ??= { station: this.climate.station, days: [] });
+    w.station = this.climate.station;
+    const today = Math.floor(this.state.clock.t / DAY);
+    advanceWeather(w, this.weatherSeed, today, (d) => climateAt(this.climate, this.calendarAt(d * DAY + DAY / 2).phase));
+    // a game loaded or started after 18:00 gets tomorrow's forecast straight away
+    if ((this.state.clock.t % DAY) / HOUR >= 18) this.issueForecast(false);
+  }
+
+  /** The saved weather of a game day (today and the next two days; null otherwise). */
+  weatherDay(day: number): WeatherDay | null {
+    return this.state.world.weather?.days.find((d) => d.day === day) ?? null;
+  }
+
+  /** How the weather changes travel in the hour containing t. */
+  weatherEffectAt(t = this.state.clock.t): WeatherEffect {
+    const day = Math.floor(t / DAY);
+    return weatherEffect(this.weatherDay(day)?.actual, Math.floor((t - day * DAY) / HOUR));
+  }
+
+  /** Issues tomorrow's forecast (at 18:00), with a warning for heavy rain, snow or heat. */
+  private issueForecast(announce: boolean) {
+    const tomorrow = this.weatherDay(Math.floor(this.state.clock.t / DAY) + 1);
+    if (!tomorrow || tomorrow.forecast) return;
+    const f = (tomorrow.forecast = forecastFor(this.weatherSeed, tomorrow.day, tomorrow.actual, this.state.clock.t));
+    if (!announce) return;
+    if (f.kind === 'heavy' || f.kind === 'snow')
+      notify(this, 'warn', `${WEATHER_LABEL[f.kind]} forecast for tomorrow`, `Roads will be slower, so buses may run late. Fewer people will walk or cycle${f.kind === 'snow' ? ', and some will not travel at all' : ''}.`);
+    else if (f.hi >= 32) notify(this, 'info', `Hot day tomorrow, ${f.hi} °C`, 'More people head for beaches and the waterfront; long walks and waits in the sun put people off.');
   }
 
   vehicleList(): Vehicle[] {

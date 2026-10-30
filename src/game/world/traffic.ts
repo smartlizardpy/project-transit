@@ -49,6 +49,12 @@ function hash(n: number): number {
 export class SimulatedTraffic implements TrafficProvider {
   readonly label = 'Simulated typical traffic';
   readonly measured = false;
+  /**
+   * Live road conditions at game time t (the weather): a speed multiplier for moving buses and
+   * their ETAs. Timetables keep typical traffic without it, so buses run late in bad weather
+   * unless the player plans for it.
+   */
+  conditions: (t: number) => number = () => 1;
   /** per-edge static weight (class × density × bottleneck) */
   private weight: Float32Array;
   /** per-edge direction bias -1..1 (which way the morning peak flows) */

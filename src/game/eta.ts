@@ -42,13 +42,14 @@ export function driveSeconds(game: Game, p: Pattern, v: Vehicle | null, s0: numb
   if (s1 <= s0) return 0;
   const speedK = v ? MODEL[v.model].speed : 1;
   const now = game.t;
+  const road = game.traffic.conditions(now);
   let t = 0;
   let i = segmentAt(path, s0);
   let s = s0;
   while (s < s1 && i < path.dedges.length) {
     const end = Math.min(s1, path.cum[i + 1]);
     const de = path.dedges[i];
-    const sf = game.traffic.speedFactor(game.traffic.congestion(de, now));
+    const sf = game.traffic.speedFactor(game.traffic.congestion(de, now)) * road;
     const vmax = Math.max(2, Math.min(freeSpeed(g, de >> 1) * speedK * sf, path.vmax[i + 1] < 99 ? path.vmax[i + 1] * 1.6 : 99));
     t += (end - s) / vmax;
     s = end;

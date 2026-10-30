@@ -194,6 +194,7 @@ export class DemandModel {
       smax: networkCap(game.state.company.reputation),
       traffic: game.traffic.profile(hourOfDay(t), game.isWeekend(t)) * (game.trafficIntensity ?? 1),
       quality: game.routeQuality(),
+      wx: game.weatherEffectAt(t),
     });
     this.pairs = out.pairs;
     this.rate = out.rate;
@@ -219,6 +220,7 @@ export class DemandModel {
       smax: networkCap(game.state.company.reputation),
       traffic: game.traffic.profile(h, weekend) * (game.trafficIntensity ?? 1),
       quality,
+      wx: game.weatherEffectAt(day0 + h * 3600),
     }));
     return this.activity.estimate(game, day0, hours, inScope);
   }

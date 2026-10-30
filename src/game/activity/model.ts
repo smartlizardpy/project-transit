@@ -18,8 +18,9 @@ import { Grid } from '../world/places.ts';
 import { buildActivityZones, zonesKey, type ActivityZones } from './zones.ts';
 import { distributeTours, type TourMatrix } from './od.ts';
 import { CHOICE, KINDS, KIND_COUNT, STAY_HOME, TRAVELLERS, crowding, type Curve, type TravellerType } from './params.ts';
-import { dayTiming, type DayTiming } from './profiles.ts';
+import { dayTiming, PROFILE, type DayTiming } from './profiles.ts';
 import { buildTransitSkim, transitLeg, transitWaitFactor, type TransitSkim } from './transit.ts';
+import { NO_WEATHER, tripFactor, type WeatherEffect } from './conditions.ts';
 
 /** a zone's walk to one of your stops */
 export interface AccessGroup {
@@ -56,6 +57,8 @@ export interface ChoiceContext {
   smax: number;
   traffic: number;
   quality: Map<Id, { load: number; ontime: number }>;
+  /** this hour's weather (none: a mild dry hour) */
+  wx?: WeatherEffect;
 }
 
 export interface RateOut {
@@ -120,18 +123,18 @@ function transitTour(leg: number, k: number, hour: number, strandedLeg: number):
 
 const expWait = (h: number) => (h <= 12 ? h / 2 : 4 + h / 8);
 
-/** Car time in minutes: the city formula used for timetables, with faster roads beyond 5 km. */
-export function carMinutes(d: number, traffic: number): number {
-  return 9 + Math.min(d, 5000) / 330 + Math.max(0, d - 5000) / 700 + traffic * (Math.min(d, 8000) / 450);
+/** Car time in minutes: the city formula used for timetables, with faster roads beyond 5 km (`road`: weather's speed factor). */
+export function carMinutes(d: number, traffic: number, road = 1): number {
+  return 9 + (Math.min(d, 5000) / 330 + Math.max(0, d - 5000) / 700 + traffic * (Math.min(d, 8000) / 450)) / road;
 }
 
 /** Generalised minutes of the modes other than your network for one journey leg. */
-export function otherModes(d: number, ty: TravellerType, traffic: number, parking: number) {
-  const walk = d <= CHOICE.walkMaxM ? ((d * CHOICE.detour) / CHOICE.walkSpeed) * ty.walkMode : Infinity;
-  const bike = ty.bike > 0 && d <= CHOICE.bikeMaxM ? (d * CHOICE.detour) / CHOICE.bikeSpeed + CHOICE.bikeConst * ty.bike : Infinity;
-  const carT = carMinutes(d, traffic);
+export function otherModes(d: number, ty: TravellerType, traffic: number, parking: number, wx: WeatherEffect = NO_WEATHER) {
+  const walk = d <= CHOICE.walkMaxM ? ((d * CHOICE.detour) / CHOICE.walkSpeed) * ty.walkMode * wx.walk : Infinity;
+  const bike = ty.bike > 0 && d <= CHOICE.bikeMaxM ? ((d * CHOICE.detour) / CHOICE.bikeSpeed) * wx.bikeRide + CHOICE.bikeConst * ty.bike + wx.bike : Infinity;
+  const carT = carMinutes(d, traffic, wx.road);
   const car = ty.car > 0 ? carT + parking : Infinity;
-  const taxi = carT - 4 + CHOICE.taxiWait + ((CHOICE.taxiBase + (CHOICE.taxiPerKm * d) / 1000) * ty.taxi) / CHOICE.valueOfTime;
+  const taxi = carT - 4 + CHOICE.taxiWait + wx.taxiWait + ((CHOICE.taxiBase + (CHOICE.taxiPerKm * d) / 1000) * ty.taxi) / CHOICE.valueOfTime;
   return { walk, bike, car, taxi };
 }
 
@@ -404,16 +407,18 @@ export class ActivityModel {
       return v;
     };
     const fareMin = (ctx.fare - ECON.referenceFare) / 0.15;
+    // the weather: walking to the stop and waiting weigh more (the way home is taken to be the same)
+    const wx = ctx.wx ?? NO_WEATHER;
     /** null: no itinerary between the two stops (or their neighbours) this hour */
     return (sa: number, sb: number, k: number, ty: TravellerType, wa: number, wb: number, strandedLeg: number) => {
       const sk = skim(sa, sb);
       if (!sk) return null;
       const it = sk.it;
-      const base = ty.walk * (wa + wb + sk.extra) + sk.ivt + ty.change * it.transfers + ty.fare * fareMin + ty.rel * sk.rel + CHOICE.networkConst;
-      const out = base + ty.wait * it.wait;
+      const base = ty.walk * wx.walk * (wa + wb + sk.extra) + sk.ivt + ty.change * it.transfers + ty.fare * fareMin + ty.rel * sk.rel + CHOICE.networkConst;
+      const out = base + ty.wait * wx.wait * it.wait;
       if (KINDS[k].oneWay) return { pair: sk.pair, out, tour: out, avail: 1 };
       const h = wayHome(sk, k);
-      return { pair: sk.pair, out, tour: out + h.avail * (base + ty.wait * h.wait) + (1 - h.avail) * strandedLeg, avail: h.avail };
+      return { pair: sk.pair, out, tour: out + h.avail * (base + ty.wait * wx.wait * h.wait) + (1 - h.avail) * strandedLeg, avail: h.avail };
     };
   }
 
@@ -425,6 +430,7 @@ export class ActivityModel {
     const hour = Math.floor(((t0 % 86400) + 86400) % 86400 / 3600);
     const wf = transitWaitFactor(hour);
     const K = KIND_COUNT;
+    const wx = ctx.wx ?? NO_WEATHER;
     const cost = this.networkCost(game, t0, ctx);
     const out = new Map<number, { r: number; mix: Float64Array }>();
     for (const i of this.reach) {
@@ -436,19 +442,20 @@ export class ActivityModel {
         const k = m.k[e];
         const kind = KINDS[k];
         // timing and volume follow the profile of the activity end (the airport for arrivals)
-        const pk = zs.profile[kind.toHome ? i : j] * K + k;
-        const th = m.tours[e] * day.factor[pk] * day.share[pk * 24 + hour];
+        const act = kind.toHome ? i : j;
+        const pk = zs.profile[act] * K + k;
+        const th = m.tours[e] * day.factor[pk] * day.share[pk * 24 + hour] * tripFactor(wx, k, zs.park[act], zs.beach[act], zs.profile[act] === PROFILE.mall);
         if (!(th > 1e-4)) continue;
         const ty = TRAVELLERS[kind.type];
         const d = m.dist[e];
         const zi = zs.list[i], zj = zs.list[j];
-        const others = otherModes(d, ty, ctx.traffic, zj.parking);
+        const others = otherModes(d, ty, ctx.traffic, zj.parking, wx);
         const carShare = Math.min(1, (kind.toHome ? zj.car : zi.car) * ty.car);
         const hs = zs.homeShare[i * K + k];
         const lam = kind.oneWay ? CHOICE.scale : 2 * CHOICE.scale;
         const mult = kind.oneWay ? 1 : 2;
         const strandedLeg = others.taxi + CHOICE.stranded;
-        const tr = transitTour(transitLeg(this.transit!, e, ty, wf), k, hour, strandedLeg);
+        const tr = transitTour(transitLeg(this.transit!, e, ty, wf, wx), k, hour, strandedLeg);
         for (const a of gi) {
           // origin side: homes for tours from home, activity for tours from work, hotels or stations
           const sa = hs * a.sp + (1 - hs) * a.sa;
@@ -515,42 +522,96 @@ export class ActivityModel {
       for (let h = 1; h < 24; h++) if (day.share[pk * 24 + h] > day.share[pk * 24 + best]) best = h;
       peak[pk] = best;
     }
-    const q = new Float64Array(MODES.length), qh = new Float64Array(MODES.length), s = new Float64Array(MODES.length);
+    // the weather: hours with the same effect on walking, cycling, roads and waiting form a group;
+    // per group, profile-kind and mall flag, the day's share of tours (with the weather's trip
+    // making), split into the part for every zone and the parts that scale with its parks and beaches
+    const wxH = hours.map((c) => c?.wx ?? NO_WEATHER);
+    while (wxH.length < 24) wxH.push(NO_WEATHER);
+    const groups: { wx: WeatherEffect; hours: number[] }[] = [];
+    const groupOf = new Int8Array(24);
+    {
+      const byKey = new Map<string, number>();
+      for (let h = 0; h < 24; h++) {
+        const e = wxH[h];
+        const key = `${e.walk}|${e.wait}|${e.bikeRide}|${e.bike}|${e.road}|${e.taxiWait}`;
+        let g = byKey.get(key);
+        if (g === undefined) byKey.set(key, (g = groups.push({ wx: e, hours: [] }) - 1));
+        groups[g].hours.push(h);
+        groupOf[h] = g;
+      }
+    }
+    const G = groups.length, PK = day.factor.length;
+    const gA = new Float64Array(G * PK * 2), gP = new Float64Array(G * PK * 2), gB = new Float64Array(G * PK * 2);
+    for (let g = 0; g < G; g++)
+      for (let pk = 0; pk < PK; pk++) {
+        const attr = KINDS[pk % K].attr;
+        const outdoor = attr === 'visit' || attr === 'leisure', indoor = attr === 'shopping' || attr === 'leisure';
+        for (const h of groups[g].hours) {
+          const sh = day.share[pk * 24 + h];
+          if (!sh) continue;
+          const e = wxH[h];
+          for (let mall = 0; mall < 2; mall++) {
+            const v = sh * e.trips[pk % K] * (mall && indoor ? e.mall : 1);
+            const x = (g * PK + pk) * 2 + mall;
+            gA[x] += v;
+            if (outdoor) {
+              gP[x] += v * (e.park - 1);
+              gB[x] += v * (e.beach - 1);
+            }
+          }
+        }
+      }
+    const qg = Array.from({ length: G }, () => new Float64Array(MODES.length));
+    const tg: TourModes[] = Array.from({ length: G }, () => ({ walk: 0, bike: 0, car: 0, taxi: 0, transit: 0 }));
+    const qh = new Float64Array(MODES.length), s = new Float64Array(MODES.length);
     for (let i = 0; i < Z; i++) {
       for (let e = m.start[i]; e < m.start[i + 1]; e++) {
         const j = m.d[e];
         if (!inScope(i) && !inScope(j)) continue;
         const k = m.k[e];
         const kind = KINDS[k];
-        const pk = zs.profile[kind.toHome ? i : j] * K + k;
-        const daily = m.tours[e] * day.factor[pk];
-        if (!(daily > 1e-4)) continue;
+        const act = kind.toHome ? i : j;
+        const pk = zs.profile[act] * K + k;
+        const base = m.tours[e] * day.factor[pk];
+        if (!(base > 1e-4)) continue;
+        const mall = zs.profile[act] === PROFILE.mall ? 1 : 0;
+        const park = zs.park[act], beach = zs.beach[act];
         const ty = TRAVELLERS[kind.type];
         const zi = zs.list[i], zj = zs.list[j];
         const ph = peak[pk];
-        const o = otherModes(m.dist[e], ty, hours[ph]?.traffic ?? 0, zj.parking);
         const mult = kind.oneWay ? 1 : 2;
-        const strandedLeg = o.taxi + CHOICE.stranded;
-        const trLeg = transitLeg(this.transit!, e, ty, 1);
-        const trAt = (h: number) => transitTour(trLeg + (transitWaitFactor(h) > 0 ? ty.wait * this.transit!.wait[e] * (transitWaitFactor(h) - 1) : Infinity), k, h, strandedLeg);
-        const tourO: TourModes = { walk: mult * o.walk, bike: mult * o.bike, car: mult * o.car, taxi: mult * o.taxi, transit: trAt(ph) };
         const carShare = Math.min(1, (kind.toHome ? zj.car : zi.car) * ty.car);
         const lam = kind.oneWay ? CHOICE.scale : 2 * CHOICE.scale;
-        sharesInto(q, Infinity, tourO, carShare, lam);
-        // everyone, as if your network did not exist
-        for (const x of OTHER) {
-          add(i, j, x, daily * q[x]);
-          if (!kind.oneWay) add(j, i, x, daily * q[x]);
+        const strandedLeg = otherModes(m.dist[e], ty, hours[ph]?.traffic ?? 0, zj.parking).taxi + CHOICE.stranded;
+        const trAt = (h: number, wx: WeatherEffect) => transitTour(transitLeg(this.transit!, e, ty, transitWaitFactor(h), wx), k, h, strandedLeg);
+        // everyone, as if your network did not exist: each weather group at the kind's busiest hour's traffic
+        for (let g = 0; g < G; g++) {
+          const o = otherModes(m.dist[e], ty, hours[ph]?.traffic ?? 0, zj.parking, groups[g].wx);
+          const t = tg[g];
+          t.walk = mult * o.walk;
+          t.bike = mult * o.bike;
+          t.car = mult * o.car;
+          t.taxi = mult * o.taxi;
+          t.transit = trAt(ph, groups[g].wx);
+          sharesInto(qg[g], Infinity, t, carShare, lam);
+          const x = (g * PK + pk) * 2 + mall;
+          const daily = base * (gA[x] + park * gP[x] + beach * gB[x]);
+          if (!(daily > 1e-6)) continue;
+          for (const y of OTHER) {
+            add(i, j, y, daily * qg[g][y]);
+            if (!kind.oneWay) add(j, i, y, daily * qg[g][y]);
+          }
         }
         if (!reach[i] || !reach[j]) continue;
         // then, hour by hour, the people who live or go near your stops reconsider
         const hs = zs.homeShare[i * K + k];
         for (let h = 0; h < 24; h++) {
           const cost = costs[h];
-          const th = daily * day.share[pk * 24 + h];
+          const th = base * day.share[pk * 24 + h] * tripFactor(wxH[h], k, park, beach, mall === 1);
           if (!cost || !(th > 1e-5)) continue;
+          const g = groupOf[h];
           // the baseline's transit time is at the busiest hour; this hour's may differ
-          const tourH: TourModes = { ...tourO, transit: trAt(h) };
+          const tourH: TourModes = { ...tg[g], transit: trAt(h, wxH[h]) };
           sharesInto(qh, Infinity, tourH, carShare, lam);
           for (const a of this.access[i]) {
             const sa = hs * a.sp + (1 - hs) * a.sa;
@@ -569,7 +630,7 @@ export class ActivityModel {
               const n = w * (kind.optional ? (1 - STAY_HOME * (1 - p)) / (1 - STAY_HOME) : 1);
               for (const x of OTHER) {
                 // the network's capped-off share goes back to the other modes (as they would be this hour)
-                const v = n * (s[x] + (1 - smax) * s[4] * qh[x]) - w * q[x];
+                const v = n * (s[x] + (1 - smax) * s[4] * qh[x]) - w * qg[g][x];
                 add(i, j, x, v);
                 // a stranded traveller comes home by taxi
                 if (!kind.oneWay) add(j, i, x, x === 3 ? v + n * p * (1 - c.avail) : v);

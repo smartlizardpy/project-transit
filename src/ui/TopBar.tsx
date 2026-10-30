@@ -12,6 +12,7 @@ import { session, useSession } from '../app/session.ts';
 import { focusDepot, focusLine, focusStop, focusVehicle, focusZone } from './camera.ts';
 import type { Game } from '../game/engine.ts';
 import { companyLevel } from '../game/control.ts';
+import { WeatherChip } from './WeatherChip.tsx';
 import type { Notification } from '../game/types.ts';
 
 export function useOutside(ref: React.RefObject<HTMLElement | null>, onClose: () => void, active: boolean) {
@@ -199,6 +200,7 @@ export function TimeControls() {
         </div>
       </div>
       <DayBar game={game} />
+      <WeatherChip game={game} />
     </div>
   );
 }

@@ -412,7 +412,8 @@ export function startMaintenance(game: Game, v: Vehicle) {
 function speedFor(game: Game, p: Path, v: Vehicle) {
   const traffic = game.traffic;
   const now = game.state.clock.t;
-  return edgeSpeedFn(game.region.graph, p, (de) => traffic.speedFactor(traffic.congestion(de, now)), kinematics(v));
+  const road = traffic.conditions(now);
+  return edgeSpeedFn(game.region.graph, p, (de) => traffic.speedFactor(traffic.congestion(de, now)) * road, kinematics(v));
 }
 
 function move(game: Game, v: Vehicle, p: Path, stopAt: number, dt: number): boolean {

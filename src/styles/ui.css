@@ -144,6 +144,24 @@ button:disabled { cursor: default; }
 .daybar-now { position: absolute; top: -2px; bottom: -2px; width: 2px; border-radius: 1px; background: var(--text); box-shadow: 0 0 0 2px var(--card); }
 .daybar-legend { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-3); font-weight: 700; letter-spacing: 0.04em; }
 
+/* weather chip (in the time card) and its popover */
+.wx { position: relative; display: flex; align-self: stretch; margin: -8px -12px -8px 0; padding-left: 4px; border-left: 1px solid var(--hairline); }
+.wx-chip { margin: 4px 0; }
+.wx-pop { position: absolute; top: calc(100% + 16px); right: -4px; width: 320px; padding: 14px; z-index: 30; transform-origin: top right; animation: pop-in 180ms var(--ease-out); cursor: default; }
+.wx-hours { display: flex; align-items: flex-end; gap: 2px; height: 34px; }
+.wx-hours i { flex: 1; height: 2px; border-radius: 2px 2px 0 0; background: var(--track); }
+.wx-hours i[style] { background: color-mix(in srgb, var(--accent) 60%, transparent); }
+.wx-hours i.snow[style] { background: color-mix(in srgb, #dfe9f1 70%, transparent); }
+.wx-hours i.now { box-shadow: 0 0 0 1.5px var(--text); }
+.wx-effect { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin-top: 10px; line-height: 1.4; }
+.wx-tomorrow { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 6px; }
+.wx-fc { display: flex; align-items: center; gap: 10px; }
+.wx-fc b { display: block; font-size: 14px; font-weight: 800; }
+.wx-fc span { display: block; font-size: 12px; font-weight: 600; margin-top: 1px; }
+.wx-note { font-size: 11.5px; line-height: 1.4; }
+.wx-credit { font-size: 11px; margin-top: 10px; line-height: 1.4; }
+@media (max-width: 1280px) { .wx-chip span { display: none; } }
+
 /* ───────────────────────────── top-right stats */
 .stats { position: absolute; top: var(--edge); right: var(--edge); display: flex; gap: 8px; align-items: stretch; }
 .stats-card { display: flex; align-items: stretch; height: 60px; padding: 0 4px; }

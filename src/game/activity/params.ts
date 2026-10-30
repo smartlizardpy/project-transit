@@ -186,6 +186,56 @@ export const CHOICE = {
   transitConst: 6,
 };
 
+// ───────────────────────────────────────────── weather (plan 9.2)
+//
+// Effects of the weather in each hour, by condition: dry, light rain, rain, heavy rain, snow.
+// Game settings. Where published values exist they are the anchor: rain deters 8–25% of
+// cyclists; bus ridership moves by single-digit percentages with weather (Eugene, Oregon:
+// −5.7% on cold weekdays). Rain does not simply raise bus demand: people also walk to the stop
+// and wait in it, roads are slower, and some trips are not made at all.
+
+export const WEATHER = {
+  /** walking time weighs more, per minute outdoors (whole walks, and walks to stops and stations) */
+  walk: [1, 1.04, 1.12, 1.25, 1.3],
+  /** cycling: riding time weighs more, plus minutes added to each journey (more put off by rain than walking) */
+  bikeRide: [1, 1.08, 1.2, 1.5, 2],
+  bike: [0, 1, 3, 7, 18],
+  /** waiting time weighs more, but less than walking: many stops have a shelter */
+  wait: [1, 1.04, 1.1, 1.2, 1.3],
+  /** road speed (plan: about −8% in rain, −18% in heavy rain, −30% in snow) */
+  road: [1, 0.97, 0.92, 0.82, 0.7],
+  /** extra minutes to find a taxi */
+  taxiWait: [0, 1, 3, 6, 8],
+  /** trip making by what the tour is for (snow cancels some work trips rather than moving them to buses) */
+  trips: {
+    leisure: [1, 0.95, 0.88, 0.75, 0.65],
+    night: [1, 0.97, 0.92, 0.82, 0.7],
+    visit: [1, 0.95, 0.9, 0.8, 0.7],
+    shopping: [1, 0.99, 0.96, 0.9, 0.75],
+    errand: [1, 1, 0.97, 0.92, 0.8],
+    health: [1, 1, 1, 0.97, 0.9],
+    university: [1, 1, 0.98, 0.95, 0.85],
+    school: [1, 1, 1, 1, 0.9],
+    work: [1, 1, 1, 0.99, 0.94],
+    shift: [1, 1, 1, 1, 0.96],
+    business: [1, 1, 0.98, 0.95, 0.85],
+    airport: [1, 1, 1, 1, 0.97],
+  } as Record<Attraction, number[]>,
+  /** visitors and leisure at parks and beaches, and shoppers at malls (people move indoors) */
+  park: [1, 0.8, 0.55, 0.3, 0.4],
+  beach: [1, 0.6, 0.35, 0.15, 0.1],
+  mall: [1, 1.03, 1.08, 1.12, 1.05],
+  /** heat (hour at or above `hotC`): long walks and waiting weigh more, beaches fill, parks empty at midday */
+  hotC: 30,
+  hot: { walk: 1.1, wait: 1.1, bike: 2, beach: 1.5, park: 0.85 },
+  /** pleasant (dry, daytime, between these temperatures): more people out in parks and on bikes */
+  pleasantC: [18, 27],
+  pleasant: { leisure: 1.05, park: 1.15, beach: 1.1, bike: -0.5 },
+  /** cold (hour at or below `coldC`) */
+  coldC: 2,
+  cold: { walk: 1.06, wait: 1.15, bike: 3, park: 0.8 },
+};
+
 /** Bus run times are scheduled with this crowding multiplier on in-vehicle time (1.0 seated, ≈1.6 at crush). */
 export function crowding(load: number): number {
   return 1 + Math.max(0, Math.min(1.1, load) - 0.75) * 2.4;

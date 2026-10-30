@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-30 (phase 3).
+Last updated: 2026-10-30 (phase 4).
 
 ## Phase 0. Foundations ✅
 
@@ -171,9 +171,52 @@ Before retuning, the city's transit and the new weekday patterns took the refere
 - Your passengers cannot change between your buses and the city's transit yet (phase 7).
 
 
-## Phase 4. Weather ⬜
+## Phase 4. Weather 🟡
 
-Before this phase: ERA5 downloads need a free Copernicus account and API key, which the developer must create. The alternative is NOAA GHCN-Daily station data (public domain, no key).
+Built and tested. 🟡 until the owner has played it: each day has its own weather from the city's climate, a forecast at 18:00, and rain or snow changes how people travel and how fast buses run.
+
+| Item | Status | Evidence |
+|---|---|---|
+| Climate data baked at build time (`scripts/data/build-climate.mjs` → `src/data/climate.json`, 152 KB): monthly statistics (wet days, wet-day persistence, heavy-rain share, mean rain, snow days, daily high and low with their spread, hot and cold days, day-to-day persistence of the high) for the five presets at their centres and 204 cities for searched places, 1995–2024. Source: **NASA POWER** daily data (CC BY 4.0, "no restrictions on use"); never fetched at runtime | ✅ | `climate-data.test.ts` (3 tests); `weather.test.ts` "climate data and the game year" |
+| The game year follows the climate year: autumn week 1 is early September north of the equator and early March south of it; months are never shown | ✅ | `weather.test.ts`: İstanbul's winter weeks are wetter and over 8 °C colder than its summer weeks; Sydney's autumn is warmer than its winter |
+| Generator (`weather.ts`): a wet/dry Markov chain from the month's statistics; heavy rain and snow in their shares, snow only on the coldest wet days; showers mostly in the afternoon, rain as a front of 4–16 hours; highs and lows with persistent anomalies. Every draw is a hash of (seed, day); today and two days ahead are saved, so a running game is never rewritten | ✅ | `weather.test.ts` (5 tests over 20,000 generated days): wet share, persistence, heavy and snow shares, mean, spread and persistence of the high, afternoon showers, purity |
+| Forecast at 18:00 for tomorrow: right in about 82% of days, otherwise a near miss (showers for rain); temperatures within a couple of degrees; chance of rain shown. Warnings for heavy rain and snow, and a notice for heat (32 °C and above) | ✅ | `weather.test.ts`: accuracy between 79% and 86%, misses only to neighbouring kinds; forecast issued at 18:00; screenshot `weather-warning.png` (a real forecast on day 40) |
+| Effects per hour (`activity/conditions.ts`, settings in `params.ts` `WEATHER`): walking and cycling put people off more in rain (cycling more than walking), waiting less than walking (stops have shelters), taxis harder to find, outings cancelled (leisure, nights out, sightseeing, some shopping; snow cancels some work trips rather than sending them to buses), parks and beaches empty and malls fill, heat fills beaches and empties parks at midday, pleasant days bring people out | ✅ | `weather.test.ts` "rain against clear weather" (4 tests, plan section 17): walking and cycling shares fall; your share rises on walkable trips of 1–3 km; park and sight areas lose more trips than the city; buses run later and at least one traveller type rides less |
+| Roads slower in bad weather (−8% rain, −18% heavy rain, −30% snow) for moving buses and their arrival estimates, not for timetables: buses run late unless the player plans for it | ✅ | `weather.test.ts`: road conditions below 1 only in rain; more lateness per departure over a rainy day |
+| No new draws from the shared random stream; reload carries on identically; older saves get weather from the day they are loaded | ✅ | `weather.test.ts` "weather in the game" (3 tests) |
+| Top bar: weather chip (icon, temperature now, "Tomorrow: showers" once the forecast is out) and a popover with today's rain by hour, what it does to travel, tomorrow's forecast and its accuracy, yesterday's forecast for today, and the source ("generated from the city's climate, not live weather") | ✅ | screenshots `weather-chip.png`, `weather-popover.png`, `weather-popover-rain.png` |
+| Each day's weather (kind, high, low, rain) kept with the day's figures, for comparisons later | ✅ | `weather.test.ts`; `DayStats.wx` |
+| Calibration within the limits | ✅ | table below |
+
+Screenshots come from the company simulated for phase 3, played on by `scripts/capture-weather.mjs` until the generated weather gave each case (nothing staged).
+
+**Calibration** (`pnpm calibrate`; the reference week is autumn week 1 in İstanbul: six dry days around 25–30 °C and one rainy day):
+
+| Figure | Now | Baseline | Change | Limit |
+|---|---|---|---|---|
+| Reference riders, weekday | 3,467 | 3,611 | −4.0% | ±10% |
+| Reference riders, weekend | 2,889 | 3,076 | −6.1% | ±15% |
+| Reference boardings a day | 3,274 | 3,432 | −4.6% | ±10% |
+| Reference result a day | 3,747 | 4,032 | −7.1% | ±20% |
+| Reference satisfaction | 0.74 | 0.77 | | above 0.6 |
+| Thin line result, day 2 | −2,112 | −2,190 | | below 0 |
+| Crowded line peak load | 0.97 | 0.97 | | above 0.8 |
+
+**Changes from the plan, and why:**
+- **Climate source: NASA POWER instead of ERA5** (owner's decision, 2026-10-30). ERA5 needs a Copernicus account and key. NOAA GHCN-Daily was built first and rejected: NCEI's documentation says that for non-US locations "the data or any derived product shall not be provided to other users or be used for the re-export of commercial services" (WMO Resolution 40). Nothing derived from it ships.
+- **"Your share up on short trips"** holds on walkable trips of 1–3 km (in a day of steady rain: 4.5% → 4.6% at 1–2 km, 11.1% → 11.9% at 2–3 km). Under 1 km people still walk, because the walk to the stop is nearly as long. The test checks the 1–3 km band.
+- **Rain weighs on cycling more than on walking**, and on walking more than on waiting. The first settings made cycling rise in rain (walking lost more); in a day of steady rain cycling now falls 21% (published: 8–25% of cyclists deterred) and walking 5%.
+- **Road conditions are a speed factor on moving buses**, not a rise in the congestion figure: the effect the plan asks for (buses late against typical-traffic timetables) without changing the traffic overlay.
+- **The day's weather is saved with its figures now** (part of phase 6's day labels), so rainy and dry days can be compared once phase 6 shows them.
+
+**Effect on play (measured on the reference company, a day of steady rain against a dry day):** about 5% fewer trips in the city, walking −5%, cycling −21%, taxis −3%, the city's transit −7% (walk to the station and the wait). Your buses gain on 1–3 km trips and lose slightly under 1 km; parks and sights lose more than the city as a whole; buses run later. In İstanbul's autumn weeks most days are dry; the winter weeks bring rain on about two days in five.
+
+**Known gaps:**
+- NASA POWER is gridded (about 50 km): it has more light-rain days and fewer downpours than a rain gauge. Durham is wet on about half its days against about a third at a station; the heavy-rain share is roughly half a station's. Light rain changes little in the model, so the effect on play is small. North of about 45° the rain is mostly the model's own.
+- Weather is the same across the city (no local showers).
+- The forecast is for tomorrow only.
+- There is no credits screen yet; the climate credit is in the weather popover.
+- Network Control's weather markers and the line inspector's rainy-against-dry comparison come in phase 6. Air-conditioned buses are a later option.
 
 ## Phase 5. Events ⬜
 

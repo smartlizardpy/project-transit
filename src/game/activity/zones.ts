@@ -57,6 +57,9 @@ export interface ActivityZones {
   attr: Float64Array;
   /** per zone: the activity profile its tours keep to (profiles.ts; the city's own for squares and areas) */
   profile: Uint8Array;
+  /** per zone: share of its sightseeing and leisure attraction that is parks (and open-air sights), and beaches (weather) */
+  park: Float32Array;
+  beach: Float32Array;
 }
 
 /** Categories that get their own zone, with the largest tier that qualifies. */
@@ -304,6 +307,7 @@ export function buildActivityZones(inp: ZoneInputs): ActivityZones {
     }
   }
   // sights, parks, beaches, venues and nightlife districts add visitors where they are
+  const parkV = new Float64Array(Z), beachV = new Float64Array(Z);
   for (const p of region.cityPlaces ?? []) {
     if (!p.reachable) continue;
     const [x, y] = toXY(p.lngLat[0], p.lngLat[1]);
@@ -315,6 +319,10 @@ export function buildActivityZones(inp: ZoneInputs): ActivityZones {
       const v = (tiers[p.scale.tier - 1] ?? 0) * (OUTDOOR_SEASON[p.category]?.[season] ?? 1);
       attr[z * K + KIND.visit] += v;
       attr[z * K + KIND.leisure] += v * 0.5;
+      // outdoors: parks, beaches, and half of the sights (many are indoors)
+      if (p.category === 'beach') beachV[z] += 1.5 * v;
+      else if (p.category === 'park') parkV[z] += 1.5 * v;
+      else if (p.category === 'attraction') parkV[z] += 0.75 * v;
     }
     if (p.category === 'nightlife') attr[z * K + KIND.night] += p.scale.value * 80;
   }
@@ -345,7 +353,15 @@ export function buildActivityZones(inp: ZoneInputs): ActivityZones {
   for (let i = 0; i < Z * K; i++) homeShare[i] = prod[i] > 0 ? homeProd[i] / prod[i] : 0;
   const profile = new Uint8Array(Z).fill(PROFILE.city);
   for (const [zi, p] of placeZone) profile[zi] = profileOf(p);
-  return { key: zonesKey(inp), list, homeOf, actOf, homeW, actW, prod, homeShare, attr, profile };
+  const park = new Float32Array(Z), beach = new Float32Array(Z);
+  for (let z = 0; z < Z; z++) {
+    const all = attr[z * K + KIND.visit] + attr[z * K + KIND.leisure];
+    if (all > 0) {
+      park[z] = Math.min(1, parkV[z] / all);
+      beach[z] = Math.min(1 - park[z], beachV[z] / all);
+    }
+  }
+  return { key: zonesKey(inp), list, homeOf, actOf, homeW, actW, prod, homeShare, attr, profile, park, beach };
 }
 
 /** Which gateway mix a station's arriving travellers follow. */

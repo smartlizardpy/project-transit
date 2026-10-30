@@ -1,6 +1,6 @@
 # City Activity Engine: revised plan
 
-Status: **approved plan, being implemented.** Phases 0 and 1 are done; progress, evidence and the changes made during implementation are in [`city-activity-engine-progress.md`](city-activity-engine-progress.md). Written 2026-10-30. The owner's decisions are recorded at the end. It revises the place, weather, calendar and event proposal from the same day, and keeps the research in [`passenger-choice-research.md`](passenger-choice-research.md). That research still supplies the time weights, crowding multipliers and transfer penalties used here.
+Status: **approved plan, being implemented.** Phases 0 to 4 are built (0 to 2 done; 3 and 4 await the owner's play-test); progress, evidence and the changes made during implementation are in [`city-activity-engine-progress.md`](city-activity-engine-progress.md). Written 2026-10-30. The owner's decisions are recorded at the end. It revises the place, weather, calendar and event proposal from the same day, and keeps the research in [`passenger-choice-research.md`](passenger-choice-research.md). That research still supplies the time weights, crowding multipliers and transfer penalties used here.
 
 Labels used in this document:
 - **Confirmed**: read in the code or decoded from map data, with the file and line.
@@ -493,9 +493,9 @@ The game **never shows real dates, months or years** (owner's decision, 2026-10-
 - **Climate data, baked at build time and never fetched at runtime:**
   - Monthly statistics per preset city (used internally and mapped onto the game year, so each game week matches a point in the real climate year; months are never shown): wet-day probability, wet-to-wet persistence, heavy-rain share, snow-day probability, mean and spread of daily high and low, and hot-day frequency.
   - For searched places, the same statistics on a coarse global grid (2°), a few hundred KB.
-  - **Source: ERA5 (decided).** The Copernicus dataset page lists "CC-BY licence (rev. 1)", SPDX `CC-BY-4.0` (checked 2026-10-30), which allows commercial use with attribution.
+  - **Source: NASA POWER (decided by the owner on 2026-10-30, replacing ERA5, which needs an account and API key).** The AWS Open Data Registry lists POWER as "Creative Commons BY 4.0" and says "There are no restrictions on the use, access, and/or download of data from the NASA POWER Project" (checked 2026-10-30). No key is needed. Temperatures come from MERRA-2 at about 0.5°, so every place has data.
   - The credits cite the dataset (DOI 10.24381/cds.adbb2d47) and say the game "contains modified Copernicus Climate Change Service information".
-  - NOAA GHCN-Daily is the station-based alternative if needed.
+  - NOAA GHCN-Daily was tried and rejected. NCEI's GHCN documentation says data exchanged under WMO Resolution 40 is "intended for free and unrestricted use in research, education, and other noncommercial activities. For non-U.S. locations data, the data or any derived product shall not be provided to other users or be used for the re-export of commercial services." That rules out shipping statistics for non-US cities in a paid game.
 - **Live weather is not proposed.** Open-Meteo's free tier is non-commercial; a paid plan or self-hosting (AGPL) needs the owner's approval. The base game never depends on it.
 - **Generator:**
   - A daily state (clear, cloudy, showers, rain, heavy rain, snow; hot or cold flags) from a Markov chain conditioned on the point in the climate year.
@@ -785,7 +785,7 @@ Fixtures: the existing synthetic grid city (`test/fixtures.ts`) extended with co
 | Airport landside anchor wrong | Medium | Quality flag; Barcelona anchor test; the player can still place stops anywhere |
 | Background transit graph broken (yards, gaps, no line identities) | Medium | `service` filter, connectivity checks, per-mode switch-off with an explanation; service levels labelled as assumptions |
 | Map version drift changes places | Low–medium | Saved snapshot, version recorded, events cancelled with a reason |
-| Licences | — | ODbL: tiles (existing attribution). Public domain: OurAirports. CC0: Wikidata. CC BY 4.0: ERA5 (confirmed). No holiday datasets, because the calendar is a game calendar. No fixture data. A credits screen lists them all |
+| Licences | — | ODbL: tiles (existing attribution). Public domain: OurAirports. CC0: Wikidata. CC BY 4.0: NASA POWER (climate; confirmed). No holiday datasets, because the calendar is a game calendar. No fixture data. A credits screen lists them all |
 | Save size growth | Medium | Sparse away pool and accumulators; size test |
 | Too much complexity for the gain | Medium | Profiles are data; each phase is shippable on its own; stop after phase 3 if playtests show no gain |
 | Explaining the model | — | Every estimate is labelled; no hard-coded illustrative percentages; the "why" comes from recorded or modelled values only |
@@ -794,6 +794,6 @@ Fixtures: the existing synthetic grid city (`test/fixtures.ts`) extended with co
 
 1. **No real dates (revised):** the game shows seasons and weeks, never real dates, months or years. A game year is 12 weeks: four seasons of 3 weeks. New games and upgraded saves start in week 1 of autumn.
 2. **Calendar data (revised):** none needed. Holidays, terms and seasons are typical patterns written as game settings per country. The earlier choice of `date-holidays` and OpenHolidays is withdrawn.
-3. **Climate data:** ERA5 statistics baked at build time (CC BY 4.0, confirmed on the dataset page), with attribution in the credits.
+3. **Climate data:** NASA POWER statistics baked at build time (CC BY 4.0, "no restrictions on use"), with attribution in the credits. Changed from ERA5 on 2026-10-30, after NOAA GHCN-Daily turned out to restrict commercial use of non-US data.
 4. **Bundled data:** the OurAirports subset (public domain) and a Wikidata extract (CC0) for the preset cities are approved.
 5. **Balance:** ±10% on the reference scenarios, averaged over term-time weeks with typical weather. Days and seasons may vary realistically with weather, seasons and events.

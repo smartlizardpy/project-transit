@@ -4,6 +4,7 @@
 import type { LngLat } from './world/graph.ts';
 import type { RegionSpec } from './world/region.ts';
 import type { PlaceSnapshotState } from './world/places.ts';
+import type { WeatherKind, WeatherState } from './weather.ts';
 
 import type { AnalyticsState } from './analytics/types.ts';
 import type { ControlState } from './control.ts';
@@ -309,6 +310,8 @@ export interface DayStats {
   costs: number;
   reputation: number;
   balance: number;
+  /** the day's weather: kind, high and low (°C) and rain (mm); absent before weather existed */
+  wx?: { k: WeatherKind; hi: number; lo: number; mm: number };
 }
 
 export interface StatsState {
@@ -384,4 +387,6 @@ export interface WorldState {
    * data changes. Lets tools list places without the map tiles, and later anchors saved events.
    */
   places: PlaceSnapshotState;
+  /** today's weather and the next two days', with tomorrow's forecast once issued (filled on load when missing) */
+  weather?: WeatherState;
 }

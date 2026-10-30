@@ -6,6 +6,7 @@
 // Service levels are game settings, labelled "assumed": nothing here comes from a timetable.
 // The network does not combine with your buses yet (phase 7); here it competes with them.
 
+import { NO_WEATHER, type WeatherEffect } from './conditions.ts';
 import type { TransitNet } from '../world/region.ts';
 import type { TransitMode } from '../world/places.ts';
 import type { ActivityZones } from './zones.ts';
@@ -246,8 +247,8 @@ export function buildTransitSkim(net: TransitNet | undefined, zs: ActivityZones,
 }
 
 /** Generalised minutes of one leg by existing transit for entry `e` at an hour's wait factor (Infinity: none). */
-export function transitLeg(skim: TransitSkim, e: number, ty: TravellerType, waitFactor: number): number {
+export function transitLeg(skim: TransitSkim, e: number, ty: TravellerType, waitFactor: number, wx: WeatherEffect = NO_WEATHER): number {
   const ivt = skim.ivt[e];
   if (!(waitFactor > 0) || !Number.isFinite(ivt)) return Infinity;
-  return ty.walk * skim.walk[e] + ivt + ty.wait * skim.wait[e] * waitFactor + ty.change * skim.changes[e] + CHOICE.transitConst;
+  return ty.walk * skim.walk[e] * wx.walk + ivt + ty.wait * skim.wait[e] * waitFactor * wx.wait + ty.change * skim.changes[e] + CHOICE.transitConst;
 }
