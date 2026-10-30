@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['src/**/*.test.ts', 'mcp/**/*.test.ts'],
-    testTimeout: 180_000,
+    // the 40-day progression run takes ~2 min on a desktop and several on shared CI runners
+    testTimeout: process.env.CI ? 900_000 : 180_000,
   },
 });

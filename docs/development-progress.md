@@ -184,3 +184,4 @@ Fallbacks:
       - Tagging `v*` tests, builds macOS (both chips), Windows and Linux, and publishes the release with `latest.json`.
       - The speed test's budget is tripled on CI only, because shared runners are slower.
       - Verified locally: a signed release build produces the `.app.tar.gz` update and its signature.
+      - First release: v0.2.1. The v0.2.0 tag's run stopped in tests (the 40-day test hit its 180 s limit on the slower CI runner; CI now allows 900 s), so v0.2.0 has no release.

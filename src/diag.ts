@@ -2,12 +2,15 @@
 // Reports in stages so a failure shows how far start-up got.
 import { invoke } from '@tauri-apps/api/core';
 import { mapRuntime } from './map/runtime.ts';
+import { APP_VERSION, useUpdates } from './app/updates.ts';
 
 const errors: string[] = [];
 const stages: string[] = [];
 
 function send(extra: Record<string, unknown>, png?: string) {
-  const report = { stages, errors, userAgent: navigator.userAgent, location: location.href, ...extra };
+  const u = useUpdates.getState();
+  const update = { appVersion: APP_VERSION, status: u.status, version: u.version, progress: u.progress, error: u.error };
+  const report = { stages, errors, userAgent: navigator.userAgent, location: location.href, update, ...extra };
   return invoke('diag_report', { report: JSON.stringify(report, null, 2), pngBase64: png ?? null }).catch(() => {});
 }
 
