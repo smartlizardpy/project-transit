@@ -53,6 +53,10 @@ function SessionNotices() {
     useUI.getState().notify(notice, 'warn');
     useSession.setState({ notice: null });
   }, [notice]);
+  const growing = useSession((s) => s.growing);
+  useEffect(() => {
+    if (growing) useUI.getState().notify('Loading more of the map around your areas…', 'info');
+  }, [growing]);
   return null;
 }
 

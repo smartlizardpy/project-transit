@@ -34,8 +34,9 @@ export function installController(map: MlMap, city: CityLayer): Controller {
   let game: Game | null = session.game;
 
   // ───────────────────────── session → map
-  const onGame = (g: Game | null) => {
+  const onGame = (g: Game | null, info?: { grown?: boolean }) => {
     game = g;
+    if (info?.grown) return; // the same game on a bigger map: keep the camera and the open panels
     useUI.getState().reset();
     if (!g) return;
     city.setDynamicOrigin(g.region.spec.centre);
@@ -372,7 +373,7 @@ export function installController(map: MlMap, city: CityLayer): Controller {
         const z = game.geo.zoneAt(at);
         const owned = game.state.territory.owned;
         // an area offered for licence (under the light veil) opens its licence card
-        const offered = !owned.includes(z.id) && z.neighbours.some((n) => owned.includes(n));
+        const offered = !z.water && !owned.includes(z.id) && z.neighbours.some((n) => owned.includes(n));
         if (offered || ui.overlays.areas || ui.selection?.kind === 'zone') return ui.select({ kind: 'zone', id: z.id });
       }
       if (ui.selection) ui.select(null);

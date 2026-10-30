@@ -48,7 +48,7 @@ Last updated: 2026-10-30.
 | Traffic conditions (simulated and labelled as such) | ✅ | `core.test.ts` (peak slower than night; journeys longer at 08:00); legend says "a model, not live data" |
 | Service quality (waiting, journey time, crowding, reliability, price) | ✅ | satisfaction popover shows the worst component and advice |
 | Reputation | ✅ | daily drift towards satisfaction; penalties for missed departures |
-| Territory expansion (adjacent areas, cost, reputation gate) | ✅ | starts with ~15 km² of land (`startingZones`); `core.test.ts`; `progression.test.ts` (a scripted player licenses a new area and serves it). Only the operable area and the areas for sale are shown. |
+| Territory expansion (adjacent areas, cost, reputation gate) | ✅ | map squares; starts with ~15 km² of land (`startingZones`); the map grows as you expand (`growth.test.ts`); `core.test.ts`; `progression.test.ts` (a scripted player licenses a new area and serves it). Only the operable area and the areas for sale are shown. |
 | Objectives with grants | ✅ | 12 objectives; grants are not counted as operating income |
 | Meaningful decisions (fare, stop spacing, vehicle choice, timetable, loans) | ✅ | fare elasticity in the demand model; vehicle trade-offs in `docs/economy.md` |
 
@@ -108,7 +108,8 @@ Fallbacks:
 1. **Native window visuals:** saving, closing, quitting and reopening are verified in the real app. Still to do: look at the HUD in the native window, and press ⌘Q by hand once (the test sends the same event as the menu item). Both need an unlocked screen.
 2. **Human playtest of pacing:** how quickly a new player reaches a second and third area.
 3. **Trip history:** finished trips are pruned at the end of each service day. Per-bus history is kept in daily stats only.
-4. **Selected line behind tall buildings:** in dense grids (Barcelona) a selected line can be hidden by buildings at a steep pitch. The line still shows in the network view (N).
+4. **Growing beyond the bundled İstanbul tiles needs a connection.** Downloaded tiles go into the browser's tile cache, so a grown game should reopen offline. Not yet checked in the desktop app.
+5. **Selected line behind tall buildings:** in dense grids (Barcelona) a selected line can be hidden by buildings at a steep pitch. The line still shows in the network view (N).
 
 ## Log
 
@@ -159,3 +160,11 @@ Fallbacks:
       - Everything else is blank paper: map, 3D buildings (masked in the city shader), labels, stop spots and landmarks.
       - Panning far into the paper eases the camera back.
     - **Economy check after the bigger maps.** Destinations now compete across a larger city, so the reference Taksim → Karaköy line carries about 3,000 riders a day (was 4,300) and makes about +3,800 a day (was +6,000). The 40-day progression bot does better than before, about +7,000 a day with 2 lines and 7 buses, because the bigger start gives it better corridors. See `docs/economy.md`.
+  - From the player's feedback ("still small, allow me to expand the map"):
+    - **The map grows with the company.** Areas are now z14 map squares (about 2 km across, 3–4 km²), named after the main place inside. Squares are fixed worldwide, so an area keeps its id and outline when more map loads.
+    - The region always covers the territory plus 2 squares all round (`src/game/world/zoneTiles.ts`). Licensing a square near the edge rebuilds the region with more tiles in the background. The running game then moves onto it (`src/game/growth.ts`): stops, depots and buses on the road are re-attached to the same street points, and the camera and open panels stay put.
+    - Open water squares are never for sale. They are shown beside your areas, and land across one of them counts as a neighbour (Selimiye across the Bosphorus).
+    - Starting area: a compact block of about 5 squares (about 15 km² of land).
+    - `growth.test.ts`: a company running buses on the old 12-tile map moves onto the 30-tile map mid-service. No bus returns to its depot, every stop keeps its street point, money and statuses are unchanged, and trips keep completing with clean books.
+    - Browser: founding grew İstanbul from 30 to 49 tiles in 0.7 s; licensing Bademlik at the edge grew it to 56 tiles in 1.2 s with buses running and a clean audit. Offline, the map waits and grows when the connection is back.
+    - Older saves: their areas are redrawn as squares on load. The game keeps every square with a stop or depot, and says so.

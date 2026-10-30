@@ -70,6 +70,8 @@ export interface Zone {
   areaKm2: number;
   /** built-up land: the part with streets or buildings (not water); missing in older data */
   landKm2?: number;
+  /** open water (hardly any land): never licensed, shown beside the areas you operate */
+  water?: boolean;
   residents: number;
   jobs: number;
   /** named after an OSM place (true) or an unnamed generated area (false) */

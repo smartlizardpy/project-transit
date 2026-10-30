@@ -2,16 +2,22 @@
 
 import { buildIndex, projector, type LngLat } from './graph.ts';
 import type { Poi, Region, RegionData, Zone } from './region.ts';
+import { tileAt, zoneTile } from './zoneTiles.ts';
 
 export class Geo {
   readonly P: ReturnType<typeof projector>;
   private zoneSeeds: { z: Zone; x: number; y: number }[];
+  private zoneByTile = new Map<string, Zone>();
   private streetGrid = new Map<number, number[]>();
   private stopXY: { name: string; x: number; y: number }[];
   private poiXY: { p: Poi; x: number; y: number }[];
 
   constructor(readonly region: Region) {
     this.P = projector(region.spec.centre);
+    for (const z of region.zones) {
+      const t = zoneTile(z.id);
+      if (t) this.zoneByTile.set(`${t[0]},${t[1]}`, z);
+    }
     this.zoneSeeds = region.zones.map((z) => {
       const [x, y] = this.P.toXY(z.seed[0], z.seed[1]);
       return { z, x, y };
@@ -43,8 +49,11 @@ export class Geo {
     return this.P.toXY(ll[0], ll[1]);
   }
 
-  /** Operating zone containing a point (Voronoi membership). */
+  /** Operating area containing a point (its map tile; the nearest area outside the map). */
   zoneAt(ll: LngLat): Zone {
+    const [tx, ty] = tileAt(ll);
+    const hit = this.zoneByTile.get(`${tx},${ty}`);
+    if (hit) return hit;
     const [x, y] = this.xy(ll);
     let best = this.zoneSeeds[0], bd = Infinity;
     for (const s of this.zoneSeeds) {

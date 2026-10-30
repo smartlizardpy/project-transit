@@ -3,7 +3,8 @@
 
 import { VectorTile } from '@mapbox/vector-tile';
 import { PbfReader } from 'pbf';
-import { classifyRings, clipLine, clipRing, mercXToLng, mercYToLat, tileUnitMeters, hash01 } from '../../geo/tiles.ts';
+import { classifyRings, clipLine, clipRing, latToMercY, lngToMercX, mercXToLng, mercYToLat, tileUnitMeters, hash01 } from '../../geo/tiles.ts';
+import { zoneId } from './zoneTiles.ts';
 import { buildGraph, projector, RoadClass, EDGE_BRIDGE, EDGE_ONEWAY, EDGE_TUNNEL, distanceM, type LngLat, type Segment, buildIndex, nearestNode, STOP_CLASSES, nodeHasClass } from './graph.ts';
 import type { DemandGrid, OsmStop, Place, Poi, PoiKind, RegionData, RegionSpec, StreetName, Zone } from './region.ts';
 
@@ -107,16 +108,6 @@ function inferFloors(area: number, h: number): number {
   if (area < 380) return 3 + Math.floor(h * 4);
   if (area < 1400) return 3 + Math.floor(h * 3);
   return 2 + Math.floor(h * 3);
-}
-
-function slug(s: string) {
-  return s
-    .toLocaleLowerCase('en')
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/ı/g, 'i')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
 }
 
 function pointInPoly(x: number, y: number, ring: number[]): boolean {
@@ -389,7 +380,7 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
 
   // ---------------- zones
   progress?.('Mapping operating areas', 0, 1);
-  const zones = buildZones(places, grid, pois, spec, P, { w, s, e, n });
+  const zones = buildZones(places, grid, pois, spec, P);
 
   // ---------------- coverage
   let roadM = 0, oneway = 0, bridges = 0, tunnels = 0;
@@ -439,186 +430,157 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
 
 const PLACE_RANK: Record<string, number> = { quarter: 0, suburb: 1, neighbourhood: 2, village: 1, town: 3, hamlet: 3, isolated_dwelling: 5, city: 6 };
 
-/**
- * Operating zones: Voronoi cells around OSM place names (quarters, suburbs, villages),
- * thinned to a playable spacing, with generated cells filling gaps. These are game areas,
- * not official administrative boundaries.
- */
-function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], _spec: RegionSpec, P: ReturnType<typeof projector>, b: { w: number; s: number; e: number; n: number }): Zone[] {
-  const [bx0, by0] = P.toXY(b.w, b.s);
-  const [bx1, by1] = P.toXY(b.e, b.n);
-  const span = Math.min(bx1 - bx0, by1 - by0);
-  const spacing = Math.max(650, Math.min(1100, span / 4.2));
-  /** activity (people, jobs, streets) in a square window of ±r cells, and its centre of mass */
-  const activity = (x: number, y: number, r = 3) => {
-    let sum = 0, sx = 0, sy = 0;
-    const cx = Math.floor((x - grid.x0) / grid.cell), cy = Math.floor((y - grid.y0) / grid.cell);
-    for (let dy = -r; dy <= r; dy++)
-      for (let dx = -r; dx <= r; dx++) {
-        const X = cx + dx, Y = cy + dy;
-        if (X < 0 || Y < 0 || X >= grid.w || Y >= grid.h) continue;
-        const k = Y * grid.w + X;
-        const a = grid.residents[k] + grid.jobs[k] + grid.roads[k] * 0.2;
-        sum += a;
-        sx += a * (grid.x0 + (X + 0.5) * grid.cell);
-        sy += a * (grid.y0 + (Y + 0.5) * grid.cell);
-      }
-    return { sum, x: sum ? sx / sum : x, y: sum ? sy / sum : y };
-  };
-  const density = (x: number, y: number) => activity(x, y).sum;
-  const cands = places
-    .filter((p) => p.kind in PLACE_RANK)
-    .map((p) => {
-      const [x, y] = P.toXY(p.lngLat[0], p.lngLat[1]);
-      return { p, x, y, rank: PLACE_RANK[p.kind], d: density(x, y) };
-    })
-    .filter((c) => c.x > bx0 + 60 && c.x < bx1 - 60 && c.y > by0 + 60 && c.y < by1 - 60 && c.d > 50)
-    .sort((a, b) => a.rank - b.rank || b.d - a.d || a.p.name.localeCompare(b.p.name));
-  const seeds: { name: string; x: number; y: number; named: boolean }[] = [];
-  const far = (x: number, y: number, min: number) => seeds.every((s) => Math.hypot(s.x - x, s.y - y) >= min);
-  for (const c of cands) if (far(c.x, c.y, spacing)) seeds.push({ name: c.p.name, x: c.x, y: c.y, named: true });
-  // fill gaps that have streets or buildings with generated areas
-  const step = spacing * 0.9;
-  let generated = 0;
-  for (let gy = by0 + step / 2; gy < by1; gy += step)
-    for (let gx = bx0 + step / 2; gx < bx1; gx += step) {
-      // centre generated areas on where the streets and buildings are, never on open water
-      const a = activity(gx, gy);
-      if (a.sum < 400) continue;
-      const { x, y } = a;
-      if (!far(x, y, spacing * 0.95) || activity(x, y, 1).sum < 120) continue;
-      let near = '';
-      let nd = Infinity;
-      for (const c of cands) {
-        const d = Math.hypot(c.x - x, c.y - y);
-        if (d < nd) {
-          nd = d;
-          near = c.p.name;
-        }
-      }
-      generated++;
-      seeds.push({ name: nd < 2500 && near ? `${near} ${compass(x, y, cands.find((c) => c.p.name === near)!)}` : `Area ${generated}`, x, y, named: false });
-    }
-  if (seeds.length === 0) seeds.push({ name: 'Town centre', x: (bx0 + bx1) / 2, y: (by0 + by1) / 2, named: false });
+/** an area with less land than this is open water: never licensed, shown beside your areas */
+export const WATER_KM2 = 0.12;
 
-  // Voronoi cells by half-plane clipping of the region box
-  const polys = seeds.map((s, i) => {
-    let poly: [number, number][] = [[bx0, by0], [bx1, by0], [bx1, by1], [bx0, by1]];
-    for (let j = 0; j < seeds.length && poly.length; j++) {
-      if (j === i) continue;
-      const o = seeds[j];
-      const mx = (s.x + o.x) / 2, my = (s.y + o.y) / 2;
-      const nx = o.x - s.x, ny = o.y - s.y;
-      const inside = (p: [number, number]) => (p[0] - mx) * nx + (p[1] - my) * ny <= 0;
-      const out: [number, number][] = [];
-      for (let k = 0; k < poly.length; k++) {
-        const cur = poly[k], prev = poly[(k + poly.length - 1) % poly.length];
-        const ci = inside(cur), pi = inside(prev);
-        if (ci !== pi) {
-          const dc = (cur[0] - mx) * nx + (cur[1] - my) * ny, dp = (prev[0] - mx) * nx + (prev[1] - my) * ny;
-          const t = dp / (dp - dc);
-          out.push([prev[0] + (cur[0] - prev[0]) * t, prev[1] + (cur[1] - prev[1]) * t]);
-        }
-        if (ci) out.push(cur);
-      }
-      poly = out;
-    }
-    return poly;
-  });
-  // stats from demand cells (nearest seed = Voronoi membership)
-  const res = new Float64Array(seeds.length), jobs = new Float64Array(seeds.length);
-  const wsum = new Float64Array(seeds.length), wx = new Float64Array(seeds.length), wy = new Float64Array(seeds.length);
-  const land = new Float64Array(seeds.length); // cells with streets or buildings
+const COMPASS8 = ['East', 'North-East', 'North', 'North-West', 'West', 'South-West', 'South', 'South-East'];
+function compass8(dx: number, dy: number): string {
+  const a = Math.atan2(dy, dx);
+  return COMPASS8[(Math.round(a / (Math.PI / 4)) + 8) % 8];
+}
+
+/**
+ * Operating areas: one per z14 map tile (about 2 km across). Tiles are fixed worldwide, so an
+ * area keeps its id and outline when the map grows. Each is named after the main OSM place
+ * (quarter, suburb, village) inside it, or after the nearest one with a compass direction.
+ * These are game areas, not official administrative boundaries.
+ */
+function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], spec: RegionSpec, P: ReturnType<typeof projector>): Zone[] {
+  const N = 2 ** Z;
+  const tiles = spec.tiles;
+  const index = new Map<string, number>();
+  tiles.forEach(([x, y], i) => index.set(`${x},${y}`, i));
+  const tileOfLL = (lng: number, lat: number) => index.get(`${Math.floor(lngToMercX(lng) * N)},${Math.floor(latToMercY(lat) * N)}`) ?? -1;
+  const T = tiles.length;
+  const res = new Float64Array(T), jobs = new Float64Array(T), land = new Float64Array(T);
+  const wsum = new Float64Array(T), wx = new Float64Array(T), wy = new Float64Array(T);
+  const cellKm2 = (grid.cell * grid.cell) / 1e6;
   for (let cy = 0; cy < grid.h; cy++)
     for (let cx = 0; cx < grid.w; cx++) {
       const k = cy * grid.w + cx;
       const w = grid.residents[k] + grid.jobs[k] + grid.roads[k] * 0.2;
       if (!w) continue;
       const x = grid.x0 + (cx + 0.5) * grid.cell, y = grid.y0 + (cy + 0.5) * grid.cell;
-      const z = nearestSeed(seeds, x, y);
-      res[z] += grid.residents[k];
-      jobs[z] += grid.jobs[k];
-      land[z] += (grid.cell * grid.cell) / 1e6;
-      wsum[z] += w;
-      wx[z] += w * x;
-      wy[z] += w * y;
-    }
-  const ids = new Set<string>();
-  const zones: Zone[] = seeds.map((s, i) => {
-    let id = `z-${slug(s.name) || 'area'}`;
-    while (ids.has(id)) id += '-x';
-    ids.add(id);
-    const ring = polys[i].map(([x, y]) => {
       const [lng, lat] = P.toLngLat(x, y);
-      return [+lng.toFixed(6), +lat.toFixed(6)] as LngLat;
-    });
-    let area = 0, cx = 0, cy = 0;
-    for (let k = 0, j = polys[i].length - 1; k < polys[i].length; j = k++) {
-      const cross = polys[i][j][0] * polys[i][k][1] - polys[i][k][0] * polys[i][j][1];
-      area += cross;
-      cx += (polys[i][j][0] + polys[i][k][0]) * cross;
-      cy += (polys[i][j][1] + polys[i][k][1]) * cross;
+      const t = tileOfLL(lng, lat);
+      if (t < 0) continue;
+      res[t] += grid.residents[k];
+      jobs[t] += grid.jobs[k];
+      land[t] += cellKm2;
+      wsum[t] += w;
+      wx[t] += w * x;
+      wy[t] += w * y;
     }
-    area /= 2;
-    // the centre of activity (inside the convex cell) labels the area better than its geometric
-    // centre, which on a coast can fall in the water
-    const centroid = wsum[i] > 0 ? P.toLngLat(wx[i] / wsum[i], wy[i] / wsum[i]) : area ? P.toLngLat(cx / (6 * area), cy / (6 * area)) : P.toLngLat(s.x, s.y);
+  /** activity (people, jobs, streets) within ±3 cells of a point */
+  const density = (x: number, y: number) => {
+    let sum = 0;
+    const cx = Math.floor((x - grid.x0) / grid.cell), cy = Math.floor((y - grid.y0) / grid.cell);
+    for (let dy = -3; dy <= 3; dy++)
+      for (let dx = -3; dx <= 3; dx++) {
+        const X = cx + dx, Y = cy + dy;
+        if (X < 0 || Y < 0 || X >= grid.w || Y >= grid.h) continue;
+        const k = Y * grid.w + X;
+        sum += grid.residents[k] + grid.jobs[k] + grid.roads[k] * 0.2;
+      }
+    return sum;
+  };
+  const cands = places
+    .filter((p) => p.kind in PLACE_RANK)
+    .map((p) => {
+      const [x, y] = P.toXY(p.lngLat[0], p.lngLat[1]);
+      return { p, x, y, rank: PLACE_RANK[p.kind], d: density(x, y), tile: tileOfLL(p.lngLat[0], p.lngLat[1]) };
+    })
+    .filter((c) => c.d > 50)
+    .sort((a, b) => a.rank - b.rank || b.d - a.d || a.p.name.localeCompare(b.p.name));
+  const best = new Map<number, (typeof cands)[number]>();
+  for (const c of cands) if (c.tile >= 0 && !best.has(c.tile)) best.set(c.tile, c);
+
+  const used = new Set<string>();
+  const unique = (name: string) => {
+    let out = name;
+    for (let i = 2; used.has(out); i++) out = `${name} ${i}`;
+    used.add(out);
+    return out;
+  };
+  const geo = tiles.map(([x, y]) => {
+    const w = mercXToLng(x / N), e = mercXToLng((x + 1) / N), n = mercYToLat(y / N), s = mercYToLat((y + 1) / N);
+    const centre: LngLat = [(w + e) / 2, (n + s) / 2];
+    return { w, e, n, s, centre, xy: P.toXY(centre[0], centre[1]) };
+  });
+  // named tiles first, so a place's own tile keeps the plain name
+  const order = tiles.map((_, i) => i).sort((a, b) => Number(best.has(b)) - Number(best.has(a)) || wsum[b] - wsum[a]);
+  const names = new Array<string>(T);
+  const named = new Array<boolean>(T).fill(false);
+  for (const i of order) {
+    const c = best.get(i);
+    if (c) {
+      names[i] = unique(c.p.name);
+      named[i] = true;
+      continue;
+    }
+    if (land[i] < WATER_KM2) {
+      names[i] = 'Open water';
+      continue;
+    }
+    const [x, y] = wsum[i] ? [wx[i] / wsum[i], wy[i] / wsum[i]] : geo[i].xy;
+    let near: (typeof cands)[number] | null = null, nd = Infinity;
+    for (const q of cands) {
+      const d = Math.hypot(q.x - x, q.y - y);
+      if (d < nd) {
+        nd = d;
+        near = q;
+      }
+    }
+    names[i] = unique(near ? `${near.p.name} ${compass8(x - near.x, y - near.y)}` : `Area ${tiles[i][0] % 1000}-${tiles[i][1] % 1000}`);
+  }
+
+  const zones: Zone[] = tiles.map(([x, y], i) => {
+    const g = geo[i];
+    const r6 = (v: number) => +v.toFixed(6);
+    const areaKm2 = (distanceM([g.w, g.centre[1]], [g.e, g.centre[1]]) * distanceM([g.centre[0], g.s], [g.centre[0], g.n])) / 1e6;
+    const water = land[i] < WATER_KM2;
     return {
-      id,
-      name: s.name,
-      ring,
-      centroid,
-      seed: P.toLngLat(s.x, s.y),
+      id: zoneId(x, y),
+      name: names[i],
+      ring: [[r6(g.w), r6(g.n)], [r6(g.e), r6(g.n)], [r6(g.e), r6(g.s)], [r6(g.w), r6(g.s)]],
+      centroid: wsum[i] > 0 ? P.toLngLat(wx[i] / wsum[i], wy[i] / wsum[i]) : g.centre,
+      seed: g.centre,
       neighbours: [],
-      areaKm2: Math.abs(area) / 1e6,
-      landKm2: Math.min(Math.abs(area) / 1e6, land[i]),
+      areaKm2,
+      landKm2: Math.min(areaKm2, land[i]),
+      ...(water ? { water: true } : {}),
       residents: Math.round(res[i]),
       jobs: Math.round(jobs[i]),
-      named: s.named,
+      named: named[i],
       highlights: [],
     };
   });
-  // neighbours: cells sharing a bisector edge
-  for (let i = 0; i < seeds.length; i++) {
-    const poly = polys[i];
-    for (let k = 0; k < poly.length; k++) {
-      const a = poly[k], c = poly[(k + 1) % poly.length];
-      const mx = (a[0] + c[0]) / 2, my = (a[1] + c[1]) / 2;
-      if (Math.hypot(c[0] - a[0], c[1] - a[1]) < 30) continue;
-      const di = Math.hypot(mx - seeds[i].x, my - seeds[i].y);
-      for (let j = 0; j < seeds.length; j++) {
-        if (j === i) continue;
-        if (Math.abs(Math.hypot(mx - seeds[j].x, my - seeds[j].y) - di) < 1) {
-          if (!zones[i].neighbours.includes(zones[j].id)) zones[i].neighbours.push(zones[j].id);
-          if (!zones[j].neighbours.includes(zones[i].id)) zones[j].neighbours.push(zones[i].id);
-        }
+  // neighbours: the 8 tiles around; across a tile of open water, the land beyond counts too
+  const around = (i: number) => {
+    const [x, y] = tiles[i];
+    const out: number[] = [];
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++) {
+        if (!dx && !dy) continue;
+        const j = index.get(`${x + dx},${y + dy}`);
+        if (j !== undefined) out.push(j);
       }
+    return out;
+  };
+  zones.forEach((z, i) => {
+    const set = new Set<number>();
+    for (const j of around(i)) {
+      if (z.water || !zones[j].water) set.add(j);
+      else for (const k of around(j)) if (k !== i && !zones[k].water) set.add(k);
     }
-  }
+    z.neighbours = [...set].map((j) => zones[j].id);
+  });
   for (const p of pois) {
-    const [x, y] = P.toXY(p.lngLat[0], p.lngLat[1]);
-    const z = zones[nearestSeed(seeds, x, y)];
-    if (z.highlights.length < 4 && !z.highlights.includes(p.name)) z.highlights.push(p.name);
+    const t = tileOfLL(p.lngLat[0], p.lngLat[1]);
+    const z = t >= 0 ? zones[t] : null;
+    if (z && z.highlights.length < 4 && !z.highlights.includes(p.name)) z.highlights.push(p.name);
   }
   return zones;
-}
-
-function nearestSeed(seeds: { x: number; y: number }[], x: number, y: number): number {
-  let best = 0, bd = Infinity;
-  for (let i = 0; i < seeds.length; i++) {
-    const d = (seeds[i].x - x) ** 2 + (seeds[i].y - y) ** 2;
-    if (d < bd) {
-      bd = d;
-      best = i;
-    }
-  }
-  return best;
-}
-
-function compass(x: number, y: number, c: { x: number; y: number }): string {
-  const dx = x - c.x, dy = y - c.y;
-  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? 'East' : 'West';
-  return dy > 0 ? 'North' : 'South';
 }
 
 /** z14 tiles covering a box of `size` tiles around a point. */

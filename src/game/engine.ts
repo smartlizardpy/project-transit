@@ -522,6 +522,18 @@ export class Game {
   }
 
   /**
+   * After the map grew (see growth.ts): a line may now take a slightly different street near the
+   * old map edge, so keep each bus on a line within its route's length.
+   */
+  settleAfterGrowth() {
+    for (const v of Object.values(this.state.vehicles)) {
+      if (v.pos.kind !== 'pattern') continue;
+      const p = this.patterns.get(v.pos.route)?.[v.pos.pat];
+      if (p && v.pos.s > p.path.length) v.pos.s = p.path.length;
+    }
+  }
+
+  /**
    * Operating areas are generated from map data, so a newer version of the game (or changed source
    * data) can redraw them. Keep every area where the company has stops or depots, and the rest of
    * the licences that still exist.
@@ -532,6 +544,7 @@ export class Game {
     for (const st of Object.values(this.state.stops)) if (!valid.has(st.zone)) st.zone = this.geo.zoneAt(st.lngLat).id;
     for (const d of Object.values(this.state.depots)) if (!valid.has(d.zone)) d.zone = this.geo.zoneAt(d.lngLat).id;
     if (t.start?.some((id) => !valid.has(id))) t.start = t.start.filter((id) => valid.has(id));
+    if (t.start && !t.start.length) t.start = undefined; // counts as founded with one area
     if (t.owned.every((id) => valid.has(id)) && valid.has(t.home)) return;
     const owned = new Set(t.owned.filter((id) => valid.has(id)));
     for (const st of Object.values(this.state.stops)) owned.add(st.zone);

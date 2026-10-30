@@ -207,7 +207,7 @@ function Setup() {
 function AreaStep({ city }: { city: string }) {
   const region = session.region;
   const homeZone = useSession((s) => s.homeZone);
-  const zones = useMemo(() => [...(region?.zones ?? [])].sort((a, b) => b.residents + b.jobs - (a.residents + a.jobs)), [region]);
+  const zones = useMemo(() => (region?.zones ?? []).filter((z) => !z.water).sort((a, b) => b.residents + b.jobs - (a.residents + a.jobs)), [region]);
   // suggest the busiest area; the player can pick any other
   useEffect(() => {
     if (!useSession.getState().homeZone && zones[0]) useSession.setState({ homeZone: zones[0].id });
@@ -228,7 +228,7 @@ function AreaStep({ city }: { city: string }) {
           <div><h2>Choose your home area</h2><p>Step 2 of 3 · {city}</p></div>
         </div>
         <div className="mn-scroll">
-          <p className="mn-note">You start with your home area and the areas around it, about {START_AREA_KM2} km², and can license more as you grow. Pick one from the list or click it on the map. Figures are estimates.</p>
+          <p className="mn-note">You start with your home area and the areas around it, about {START_AREA_KM2} km². License the squares next to yours to grow; the map keeps opening up as you expand. Pick one from the list or click it on the map. Figures are estimates.</p>
           <div className="mn-zones">
             {zones.map((z) => (
               <button

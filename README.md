@@ -25,7 +25,7 @@ pnpm test         # game-core tests (vitest)
 
 1. **New company.**
    - Choose a starting city (İstanbul, Durham, Barcelona, Hamburg, Tokyo), search for any town, or start at the current map view.
-   - Pick your home area, then a name, colour and logo. You start with the home area and the areas around it, about 15 km² of land.
+   - Pick your home area, then a name, colour and logo. Areas are map squares about 2 km across, named after the main place in each. You start with your home square and the squares around it, about 15 km² of land.
 2. **Build a depot** (depot tool, ⇧D). Buses park and are serviced there.
 3. **Buy buses** (Fleet → Buy, G). There are six models, from a cheap minibus to an articulated bus. Larger and electric models unlock with reputation.
 4. **Draw a line** (line tool, R). Click stop spots in order to place stops; existing stops work too. Stops can only go on stop spots: real bus stops from OpenStreetMap, plus generated spots about every 300 m along main roads where OSM has none. The line follows real streets and one-way rules. Shift-click the line to force it along a street. Choose two-way or loop, and optionally a custom return route. Warnings point out long one-way detours.
@@ -37,7 +37,7 @@ pnpm test         # game-core tests (vitest)
    - **Finances (M):** daily results, per-line profit, the ledger, loans and the fare.
    - **Company (C):** objectives and territory.
    - **Satisfaction:** the popover in the top bar explains what passengers dislike most.
-8. **Expand.** Only your own areas are shown in full. Areas you can license next sit under a light veil with their price; everything else is blank paper. Click a veiled area (or use overlay O) to license it once you have the reputation and money. Overdraw for too long and the company becomes insolvent, then bankrupt.
+8. **Expand.** Only your own areas are shown in full. Squares you can license next sit under a light veil with their price; everything else is blank paper. Click a veiled square (or use overlay O) to license it once you have the reputation and money. The map has no fixed edge: as you expand, more of the city loads around you (downloaded from OpenFreeMap, so this needs a connection beyond the bundled part of İstanbul). Overdraw for too long and the company becomes insolvent, then bankrupt.
 
 The optional first-steps guide walks through steps 2–6, and you can hide it. The game autosaves; ⌘S / Ctrl+S saves now; Esc opens the game menu (save, load, settings, quit).
 

@@ -123,7 +123,7 @@ These come from `src/game/test/balance.test.ts`: real Istanbul streets, the defa
 |---|---|---|
 | 8 stops, Taksim → Karaköy, 4 buses, about 14 min headway | ~3,000 | **about +3,800** |
 | 3 stops, same 4 buses | ~175 | **about −2,400** |
-| Progression bot: 2 lines, 7 buses, starting areas plus one licence (see `progression.test.ts`) | ~7,300 weekdays, ~5,500 weekends | **about +7,000** |
+| Progression bot: 2 lines, 7 buses, starting areas plus one licence (see `progression.test.ts`) | ~9,000 weekdays, ~7,000 weekends | **about +10,000** |
 
 A strong line repays a 75,000 bus in about two weeks of game time, before grants. An average network grows slowly, and loans (at about 10% a year) are the intended way to speed up. A badly planned line burns money quickly, and that is the main pressure on the player.
 

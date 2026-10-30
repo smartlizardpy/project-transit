@@ -4,7 +4,7 @@ import type { Game } from './engine.ts';
 import type { DayStats, GameState, HourStats, Id, Notification, PaxGroup, RouteHour } from './types.ts';
 import { DAY, ECON, HOUR, MODELS } from './content.ts';
 import { dayTotals, post } from './finance.ts';
-import { distanceM } from './world/graph.ts';
+import { distanceM, type LngLat } from './world/graph.ts';
 import type { Zone } from './world/region.ts';
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
@@ -291,32 +291,35 @@ export const START_AREA_KM2 = 15;
 export const landOf = (z: Zone) => z.landKm2 ?? z.areaKm2;
 
 /**
- * The areas a company starts with: the chosen home area, then the bordering areas nearest
- * to it, until about START_AREA_KM2 is covered.
+ * The areas a company starts with: the chosen home area, then a compact block of the land
+ * areas around it (nearest to the block's middle, busiest first), until about START_AREA_KM2.
  */
 export function startingZones(zones: readonly Zone[], homeId: string): string[] {
   const byId = new Map(zones.map((z) => [z.id, z]));
   const home = byId.get(homeId);
   if (!home) return [homeId];
-  const out = [home.id];
+  const out = [home];
   let area = landOf(home);
   while (area < START_AREA_KM2 - 1) {
-    let best: Zone | null = null, bd = Infinity;
-    for (const id of out)
-      for (const n of byId.get(id)!.neighbours) {
+    const mid: LngLat = [out.reduce((a, z) => a + z.seed[0], 0) / out.length, out.reduce((a, z) => a + z.seed[1], 0) / out.length];
+    let best: Zone | null = null, bd = Infinity, ba = -1;
+    for (const o of out)
+      for (const n of o.neighbours) {
         const z = byId.get(n);
-        if (!z || out.includes(n)) continue;
-        const d = distanceM(z.centroid, home.centroid);
-        if (d < bd) {
+        if (!z || z.water || out.includes(z)) continue;
+        const d = Math.round(distanceM(z.seed, mid) / 100);
+        const a = z.residents + z.jobs;
+        if (d < bd || (d === bd && a > ba)) {
           bd = d;
+          ba = a;
           best = z;
         }
       }
     if (!best || area + landOf(best) > START_AREA_KM2 + 4) break;
-    out.push(best.id);
+    out.push(best);
     area += landOf(best);
   }
-  return out;
+  return out.map((z) => z.id);
 }
 
 /** licences bought since founding (the starting areas are free) */
@@ -345,7 +348,8 @@ export function licenceInfo(game: Game, zoneId: string): LicenceInfo | null {
   const repRequired = Math.min(88, 34 + 6 * bought);
   const blockers: string[] = [];
   if (!owned) {
-    if (!adjacent) blockers.push('Must border an area you already operate in.');
+    if (zone.water) blockers.push('Open water: there is nothing to license here.');
+    else if (!adjacent) blockers.push('Must border an area you already operate in.');
     if (state.company.reputation < repRequired) blockers.push(`Needs reputation ${repRequired} (you have ${Math.floor(state.company.reputation)}).`);
     if (state.finance.balance < cost) blockers.push('Not enough funds.');
     if (state.company.status === 'insolvent' || state.company.status === 'bankrupt') blockers.push('Not available while insolvent.');

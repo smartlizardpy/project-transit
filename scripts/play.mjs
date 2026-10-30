@@ -132,7 +132,7 @@ const corridor = await page.evaluate(async () => {
   let best = null;
   for (const b of main) {
     const d = Math.hypot(gr.x[b] - gr.x[a], gr.y[b] - gr.y[a]);
-    if (d < 700 || d > 1700) continue;
+    if (d < 1300 || d > 2600) continue;
     const l = routeWithFallback(gr, a, b);
     if (!l || l.contraflow.length) continue;
     if (l.nodes.filter((v) => owned.has(g.geo.zoneAt([gr.lng[v], gr.lat[v]]).id)).length < l.nodes.length * 0.85) continue;

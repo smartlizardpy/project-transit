@@ -4,6 +4,8 @@
 import { create } from 'zustand';
 import { Game, newGameState } from '../game/engine.ts';
 import { prepareRegion } from '../game/world/geo.ts';
+import { moveToRegion } from '../game/growth.ts';
+import { tilesNeeded } from '../game/world/zoneTiles.ts';
 import type { Region, RegionData, RegionSpec } from '../game/world/region.ts';
 import { SAVE_VERSION, type GameState } from '../game/types.ts';
 import { persistence, safeId, type SaveMeta } from './persistence.ts';
@@ -31,6 +33,8 @@ interface SessionStore {
   /** new company setup: choose the home area first, then name the company */
   setupStep: 'area' | 'company';
   notice: string | null;
+  /** more of the map is being loaded around the company's territory */
+  growing: boolean;
 }
 
 export const useSession = create<SessionStore>(() => ({
@@ -44,6 +48,7 @@ export const useSession = create<SessionStore>(() => ({
   homeZone: null,
   setupStep: 'area',
   notice: null,
+  growing: false,
 }));
 
 export interface AppSettings {
@@ -82,7 +87,8 @@ export function migrate(raw: unknown): GameState {
   return s as GameState;
 }
 
-type GameListener = (game: Game | null) => void;
+/** `grown`: the same game moved onto a bigger map (keep the camera and the open panels) */
+type GameListener = (game: Game | null, info?: { grown?: boolean }) => void;
 
 class Session {
   game: Game | null = null;
@@ -103,10 +109,64 @@ class Session {
     return () => this.listeners.delete(fn);
   }
 
-  private setGame(g: Game | null) {
+  private setGame(g: Game | null, info?: { grown?: boolean }) {
     this.game = g;
     (window as unknown as { __game?: Game | null }).__game = g;
-    this.listeners.forEach((fn) => fn(g));
+    this.listeners.forEach((fn) => fn(g, info));
+    if (g) this.watchGrowth(g);
+  }
+
+  // ───────────────────────── a map that grows with the company
+
+  private growing = false;
+
+  /** Load more map whenever the company's territory nears the edge of what is loaded. */
+  private watchGrowth(g: Game) {
+    let owned = g.state.territory.owned.join();
+    g.on('changed', () => {
+      const now = g.state.territory.owned.join();
+      if (now === owned || this.game !== g) return;
+      owned = now;
+      void this.grow();
+    });
+    void this.grow();
+  }
+
+  /**
+   * Rebuild the region with the tiles the territory needs, then move the running game onto it.
+   * The game keeps running meanwhile; if the map cannot be downloaded it stays as it is and the
+   * next licence (or loading the save) tries again.
+   */
+  async grow(): Promise<boolean> {
+    const g = this.game;
+    if (!g || this.growing) return false;
+    const tiles = tilesNeeded(g.region.spec, g.state.territory.owned);
+    if (!tiles) return false;
+    this.growing = true;
+    useSession.setState({ growing: true });
+    let ok = false;
+    try {
+      const region = await this.loadRegion({ ...g.region.spec, tiles }, { quiet: true });
+      if (this.game !== g) return false;
+      if (region.coverage.missingTiles > g.region.coverage.missingTiles) throw new Error('missing tiles');
+      const state = JSON.parse(g.serialize()) as GameState;
+      const lost = moveToRegion(state, g.region, region);
+      const next = new Game(state, region);
+      next.settleAfterGrowth();
+      next.setSpeed(g.speed);
+      if (lost) console.warn(`map grew: ${lost} bus(es) returned to the depot`);
+      this.setGame(next, { grown: true });
+      ok = true;
+    } catch (e) {
+      console.warn('the map could not grow', e);
+      useSession.setState({ notice: navigator.onLine === false ? 'You are offline, so the map cannot grow yet. Your areas work as normal; more of the map loads when you are back online.' : 'More of the map could not be downloaded. Your areas work as normal; it will try again when you next license an area or load this game.' });
+    } finally {
+      this.growing = false;
+      useSession.setState({ growing: false });
+    }
+    // the territory may have changed again while the map was loading
+    if (ok) void this.grow();
+    return ok;
   }
 
   async refreshSaves() {
@@ -315,3 +375,5 @@ class Session {
 }
 
 export const session = new Session();
+// back online: load any map the territory is still missing
+if (typeof window !== 'undefined') window.addEventListener('online', () => void session.grow());

@@ -11,7 +11,8 @@ import { nearestNode, projector, type LngLat } from '../game/world/graph.ts';
 import { latToMercY, lngToMercX } from '../geo/tiles.ts';
 import { PAPER } from './palette.ts';
 import { stopSpots } from '../game/spots.ts';
-import type { Region } from '../game/world/region.ts';
+import type { Region, Zone } from '../game/world/region.ts';
+import { zoneTile } from '../game/world/zoneTiles.ts';
 import { STOP_RULES } from '../game/content.ts';
 import { licenceInfo, startingZones } from '../game/progress.ts';
 import { drivesOnLeft } from '../game/world/locale.ts';
@@ -406,7 +407,11 @@ export function installOverlays(map: MlMap): Overlays {
     const level = new Map<string, number>();
     const owned = new Set(game?.state.territory.owned ?? []);
     const playing = useSession.getState().phase === 'playing' && !!game;
-    for (const z of r.zones) level.set(z.id, !playing || owned.has(z.id) ? 0 : z.neighbours.some((n) => owned.has(n)) ? 1 : 2);
+    for (const z of r.zones) {
+      const near = z.neighbours.some((n) => owned.has(n));
+      // open water beside your areas is simply shown; it is never for sale
+      level.set(z.id, !playing || owned.has(z.id) ? 0 : near ? (z.water ? 0 : 1) : 2);
+    }
     return level;
   };
 
@@ -464,38 +469,24 @@ export function installOverlays(map: MlMap): Overlays {
     }
     src('region-mask').setData({ type: 'FeatureCollection', features: hidden });
     src('veil-offer').setData({ type: 'FeatureCollection', features: offered });
-    // outline where the operable area meets the rest: test a point just across each edge
-    const P = projector(r.spec.centre);
-    const seeds = r.zones.map((z) => ({ id: z.id, xy: P.toXY(z.seed[0], z.seed[1]) }));
-    const zoneAtXY = (x: number, y: number) => {
-      let best = '', bd = Infinity;
-      for (const s of seeds) {
-        const d = (s.xy[0] - x) ** 2 + (s.xy[1] - y) ** 2;
-        if (d < bd) {
-          bd = d;
-          best = s.id;
-        }
-      }
-      return best;
-    };
+    // outline where your areas meet the rest (green), and where what is shown meets the paper
+    const owned = new Set(phase === 'playing' ? game?.state.territory.owned ?? [] : []);
+    const byTile = new Map<string, Zone>();
+    for (const z of r.zones) {
+      const t = zoneTile(z.id);
+      if (t) byTile.set(`${t[0]},${t[1]}`, z);
+    }
     const edges: Feature<LineString>[] = [];
     for (const z of r.zones) {
+      const t = zoneTile(z.id);
       const lv = level.get(z.id)!;
-      if (lv === 2) continue;
-      for (let i = 0; i < z.ring.length; i++) {
-        const a = z.ring[i], c = z.ring[(i + 1) % z.ring.length];
-        const [ax, ay] = P.toXY(a[0], a[1]), [cx, cy] = P.toXY(c[0], c[1]);
-        const len = Math.hypot(cx - ax, cy - ay);
-        if (len < 1) continue;
-        const mx = (ax + cx) / 2, my = (ay + cy) / 2, nx = -(cy - ay) / len, ny = (cx - ax) / len;
-        const p1 = zoneAtXY(mx + nx * 6, my + ny * 6), p2 = zoneAtXY(mx - nx * 6, my - ny * 6);
-        const [qx, qy] = p1 === z.id ? [mx - nx * 6, my - ny * 6] : [mx + nx * 6, my + ny * 6];
-        const out = p1 === z.id ? p2 : p1;
-        const ll = P.toLngLat(qx, qy);
-        const inside = ll[0] > b.w && ll[0] < b.e && ll[1] > b.s && ll[1] < b.n;
-        const outLv = inside ? level.get(out) ?? 2 : 2;
-        // the operable area's own border (green), and the outer edge of the offered areas (faint)
-        const kind = lv === 0 && outLv > 0 ? 'own' : lv === 1 && outLv === 2 ? 'offer' : '';
+      if (!t || lv === 2) continue;
+      const [nw, ne, se, sw] = z.ring;
+      const sides: [number, number, LngLat, LngLat][] = [[0, -1, nw, ne], [1, 0, ne, se], [0, 1, se, sw], [-1, 0, sw, nw]];
+      for (const [dx, dy, a, c] of sides) {
+        const o = byTile.get(`${t[0] + dx},${t[1] + dy}`);
+        const oLv = o ? level.get(o.id)! : 2;
+        const kind = owned.has(z.id) && !(o && owned.has(o.id)) ? 'own' : oLv === 2 ? 'offer' : '';
         if (kind) edges.push({ type: 'Feature', properties: { kind }, geometry: { type: 'LineString', coordinates: [a, c] } });
       }
     }
@@ -513,7 +504,7 @@ export function installOverlays(map: MlMap): Overlays {
     const feats: Feature<Polygon>[] = [];
     const labels: Feature<Point>[] = [];
     for (const z of region.zones) {
-      if (level.get(z.id) === 2) continue; // hidden
+      if (level.get(z.id) === 2 || z.water) continue; // hidden, or open water (not an area)
       let state = 'locked';
       let label = z.name;
       if (setup) state = 'pick';
