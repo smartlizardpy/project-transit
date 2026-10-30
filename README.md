@@ -148,6 +148,10 @@ For a native-window check, launch the built app with `open -n --env PT_DIAG_DIR=
 
 Progress against the development milestones is tracked in [`docs/development-progress.md`](docs/development-progress.md).
 
+## Website
+
+The game's website is a separate static site in [`website/`](website/README.md). It is published to GitHub Pages by `.github/workflows/pages.yml`. The design research behind it is in [`docs/website-research.md`](docs/website-research.md).
+
 ## Data and attribution
 
 Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). Tiles from [OpenMapTiles](https://openmaptiles.org/), served by [OpenFreeMap](https://openfreemap.org/). Place search uses [Nominatim](https://nominatim.org/), only when you press Enter. Attribution is shown on the map at all times.

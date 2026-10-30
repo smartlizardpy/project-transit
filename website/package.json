@@ -1,0 +1,27 @@
+{
+  "name": "project-transit-website",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "The Project Transit website (static, GitHub Pages).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && vite build --ssr src/entry-server.tsx --outDir dist-ssr && node scripts/prerender.mjs",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "media": "node scripts/optimize-media.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/figtree": "^5.2.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "hero": {
+    "width": 1920,
+    "height": 1080,
+    "widths": [
+      1280,
+      1920
+    ]
+  },
+  "city-istanbul": {
+    "width": 2000,
+    "height": 1125,
+    "widths": [
+      800,
+      1400,
+      2000
+    ]
+  },
+  "city-tokyo": {
+    "width": 2000,
+    "height": 1125,
+    "widths": [
+      800,
+      1400,
+      2000
+    ]
+  },
+  "city-barcelona": {
+    "width": 2000,
+    "height": 1125,
+    "widths": [
+      800,
+      1400,
+      2000
+    ]
+  },
+  "city-hamburg": {
+    "width": 2000,
+    "height": 1125,
+    "widths": [
+      800,
+      1400,
+      2000
+    ]
+  },
+  "city-durham": {
+    "width": 2000,
+    "height": 1125,
+    "widths": [
+      800,
+      1400,
+      2000
+    ]
+  },
+  "territory": {
+    "width": 2200,
+    "height": 1238,
+    "widths": [
+      1280,
+      2200
+    ]
+  },
+  "closeup": {
+    "width": 2400,
+    "height": 1350,
+    "widths": [
+      960,
+      1600,
+      2400
+    ]
+  },
+  "closeup-b": {
+    "width": 2200,
+    "height": 1238,
+    "widths": [
+      800,
+      1400,
+      2200
+    ]
+  },
+  "closeup-tokyo": {
+    "width": 2200,
+    "height": 1238,
+    "widths": [
+      800,
+      1400,
+      2200
+    ]
+  },
+  "closeup-hamburg": {
+    "width": 2200,
+    "height": 1238,
+    "widths": [
+      800,
+      1400,
+      2200
+    ]
+  },
+  "closeup-barcelona": {
+    "width": 2200,
+    "height": 1238,
+    "widths": [
+      800,
+      1400,
+      2200
+    ]
+  },
+  "closeup-durham": {
+    "width": 2200,
+    "height": 1238,
+    "widths": [
+      800,
+      1400,
+      2200
+    ]
+  }
+}

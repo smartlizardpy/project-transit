@@ -1,0 +1,130 @@
+{
+  "images": [
+    {
+      "id": "hero",
+      "src": "video-istanbul-poster.jpg",
+      "widths": [
+        1280,
+        1920
+      ]
+    },
+    {
+      "id": "city-istanbul",
+      "src": "city-istanbul.png",
+      "widths": [
+        800,
+        1400,
+        2000
+      ]
+    },
+    {
+      "id": "city-tokyo",
+      "src": "city-tokyo.png",
+      "widths": [
+        800,
+        1400,
+        2000
+      ]
+    },
+    {
+      "id": "city-barcelona",
+      "src": "city-barcelona-eixample.png",
+      "widths": [
+        800,
+        1400,
+        2000
+      ]
+    },
+    {
+      "id": "city-hamburg",
+      "src": "city-hamburg.png",
+      "widths": [
+        800,
+        1400,
+        2000
+      ]
+    },
+    {
+      "id": "city-durham",
+      "src": "city-durham.png",
+      "widths": [
+        800,
+        1400,
+        2000
+      ]
+    },
+    {
+      "id": "territory",
+      "src": "territory-wide-nohud.png",
+      "widths": [
+        1280,
+        2200
+      ]
+    },
+    {
+      "id": "closeup",
+      "src": "closeup-a.png",
+      "widths": [
+        960,
+        1600,
+        2400
+      ]
+    },
+    {
+      "id": "closeup-b",
+      "src": "closeup-b.png",
+      "widths": [
+        800,
+        1400,
+        2200
+      ]
+    },
+    {
+      "id": "closeup-tokyo",
+      "src": "closeup-tokyo.png",
+      "widths": [
+        800,
+        1400,
+        2200
+      ]
+    },
+    {
+      "id": "closeup-hamburg",
+      "src": "closeup-hamburg.png",
+      "widths": [
+        800,
+        1400,
+        2200
+      ]
+    },
+    {
+      "id": "closeup-barcelona",
+      "src": "closeup-barcelona.png",
+      "widths": [
+        800,
+        1400,
+        2200
+      ]
+    },
+    {
+      "id": "closeup-durham",
+      "src": "closeup-durham.png",
+      "widths": [
+        800,
+        1400,
+        2200
+      ]
+    }
+  ],
+  "videos": [
+    {
+      "id": "hero",
+      "mp4": "video-istanbul.mp4",
+      "webm": "video-istanbul.webm"
+    }
+  ],
+  "og": {
+    "src": "hero-istanbul-e.png",
+    "crop": "2560x1344+640+300"
+  }
+}
