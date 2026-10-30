@@ -16,6 +16,8 @@ import { session, useSession } from './app/session.ts';
 import { exitApp, isDesktop, toggleFullscreen } from './app/persistence.ts';
 import { useUI } from './state/store.ts';
 import { CompanyMark } from './ui/logos.tsx';
+import { UpdateBanner } from './ui/UpdateBanner.tsx';
+import { installOnExit, startAutoUpdates } from './app/updates.ts';
 import './styles/ui.css';
 import './styles/game.css';
 
@@ -78,6 +80,8 @@ function useSaveOnExit() {
     // item, see src-tauri/src/lib.rs). At most a few seconds, so quitting never hangs.
     const saveNow = async (): Promise<void> => {
       if (playing()) await Promise.race([session.save('auto'), new Promise((r) => setTimeout(r, 3000))]);
+      // a downloaded update installs now, so the next launch is the new version
+      await installOnExit();
     };
     const offs: (() => void)[] = [];
     let disposed = false;
@@ -106,6 +110,7 @@ export function App() {
   useSaveOnExit();
   const phase = useSession((s) => s.phase);
   const [hud, setHud] = useState(true);
+  useEffect(() => startAutoUpdates(), []);
   useEffect(() => {
     void session.refreshSaves();
     const h = (e: KeyboardEvent) => {
@@ -142,6 +147,7 @@ export function App() {
       <NewCompany />
       <GameMenu />
       <Toast />
+      <UpdateBanner />
       <SessionNotices />
       <Attribution />
       <Boot />

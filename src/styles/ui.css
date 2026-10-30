@@ -329,6 +329,13 @@ button.lrow:hover { background: var(--card-hover); }
 .toast.out { animation: toast-out 200ms ease-in forwards; }
 /* above the line editor's help strip while drawing a line */
 .app:has(.tray) .toast { bottom: calc(var(--edge) + 136px); }
+/* an update has downloaded: below the clock, above the map and HUD */
+.update-banner { position: absolute; left: 50%; top: calc(var(--edge) + 76px); transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 14px; max-width: calc(100% - 2 * var(--edge)); color: var(--accent); animation: toast-in 240ms var(--ease-out); }
+.update-banner > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.update-banner b { font-size: 13px; font-weight: 800; color: var(--text); }
+.update-banner span { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.phase-menu .update-banner { top: var(--edge); }
+
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
 @keyframes toast-out { to { opacity: 0; transform: translate(-50%, 6px); } }
 

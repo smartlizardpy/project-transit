@@ -168,3 +168,19 @@ Fallbacks:
     - `growth.test.ts`: a company running buses on the old 12-tile map moves onto the 30-tile map mid-service. No bus returns to its depot, every stop keeps its street point, money and statuses are unchanged, and trips keep completing with clean books.
     - Browser: founding grew İstanbul from 30 to 49 tiles in 0.7 s; licensing Bademlik at the edge grew it to 56 tiles in 1.2 s with buses running and a clean audit. Offline, the map waits and grows when the connection is back.
     - Older saves: their areas are redrawn as squares on load. The game keeps every square with a stop or depot, and says so.
+  - From the player's requests ("a little MCP for AI agents", "better onboarding form content", "automatic updates, push to GitHub"):
+    - **MCP server** (`mcp/server.ts`, `mcp/data.ts`; `.mcp.json` for Claude Code). It gives agents read-only access to the desktop saves through 12 tools: overview, lines, line details, buses, stops, finances, daily history, objectives, notifications, territory, and raw JSON-pointer queries. Figures come from the game's own helpers and are shown in the city's currency. Checked on the real Tokyo and İstanbul saves. `mcp/server.test.ts` runs a company, saves it, and reads it back through the official MCP client over stdio; it also refuses a path-traversal save id.
+    - The desktop app ships the server as one bundled file (`pnpm build:mcp` → `dist-mcp/project-transit-mcp.mjs`, a Tauri resource). Settings → AI agents copies a Claude Code command or a JSON config pointing at it, with the absolute Node.js path the app finds (Rust `find_node`; apps like Claude Desktop start servers with a bare PATH). Verified:
+      - the bundle passes the MCP tests (`PT_MCP_BUNDLE=1`);
+      - the copied JSON entry starts the server from inside the built app with a bare PATH and reads the real Tokyo save;
+      - the copied command splits correctly in zsh despite the space in "Project Transit.app".
+    - The game core now runs in plain Node (no TypeScript-only constructor shorthand in `engine.ts`, `geo.ts`, `graph.ts` and `traffic.ts`).
+    - **New-company form:**
+      - Step 1: clearer search and "start where the map is".
+      - Step 2: each area shows how busy it is, whether it is mostly homes or workplaces, and its kinds of key places. Kinds only, because OSM maps one university as many buildings. The starting area is summarised the same way.
+      - Step 3: name suggestions, named colours with a bus paint preview, named logos, and what the money buys (depot and bus prices). It explains what reputation does, gives the right starting area (it said "1 area"), says what happens after founding, and hints when the name is empty.
+    - **Automatic updates** (`src/app/updates.ts`, `src/ui/UpdateBanner.tsx`, `.github/workflows/release.yml`, `docs/releasing.md`). Tauri's updater checks this repository's GitHub releases at launch and every 6 hours, downloads in the background, and offers "Restart now". Otherwise it installs on quit, saving first. Settings has the version, Check now, and an on/off switch.
+      - Updates are signed. The key is outside the repository, with a GitHub secret copy.
+      - Tagging `v*` tests, builds macOS (both chips), Windows and Linux, and publishes the release with `latest.json`.
+      - The speed test's budget is tripled on CI only, because shared runners are slower.
+      - Verified locally: a signed release build produces the `.app.tar.gz` update and its signature.

@@ -97,10 +97,12 @@ export class Game {
   rev = 0;
   ticks = 0;
 
-  constructor(
-    public state: GameState,
-    readonly region: Region,
-  ) {
+  state: GameState;
+  readonly region: Region;
+
+  constructor(state: GameState, region: Region) {
+    this.state = state;
+    this.region = region;
     this.geo = new Geo(region);
     this.traffic = new SimulatedTraffic(region.graph, region.demand, state.clock.startWeekday);
     this.trafficIntensity = this.traffic.intensity;

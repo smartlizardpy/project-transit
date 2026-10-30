@@ -12,7 +12,10 @@ export class Geo {
   private stopXY: { name: string; x: number; y: number }[];
   private poiXY: { p: Poi; x: number; y: number }[];
 
-  constructor(readonly region: Region) {
+  readonly region: Region;
+
+  constructor(region: Region) {
+    this.region = region;
     this.P = projector(region.spec.centre);
     for (const z of region.zones) {
       const t = zoneTile(z.id);

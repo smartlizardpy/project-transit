@@ -58,7 +58,10 @@ export class SimulatedTraffic implements TrafficProvider {
   private cacheSlot = -1;
   private cache: Float32Array;
 
-  constructor(g: RoadGraph, demand: DemandGrid, private startWeekday: number) {
+  private startWeekday: number;
+
+  constructor(g: RoadGraph, demand: DemandGrid, startWeekday: number) {
+    this.startWeekday = startWeekday;
     this.weight = new Float32Array(g.m);
     this.bias = new Float32Array(g.m);
     this.cache = new Float32Array(g.m * 2);

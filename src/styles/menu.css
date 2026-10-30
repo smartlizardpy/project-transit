@@ -119,7 +119,20 @@
 .mn-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 20px; }
 .mn-summary div { background: var(--card-raised); border-radius: 10px; padding: 10px 12px; }
 .mn-summary b { display: block; font-size: 16px; font-weight: 800; }
-.mn-summary span { font-size: 11px; color: var(--text-3); font-weight: 600; }
+.mn-summary span { display: block; margin-top: 3px; font-size: 11px; color: var(--text-3); font-weight: 600; line-height: 1.35; }
+.mn-summary b small { font-size: 11px; color: var(--text-3); font-weight: 700; }
+.mn-summary { margin-top: 10px; }
+.mn-hint { margin: 0 0 10px; font-size: 12px; color: var(--text-3); font-weight: 500; line-height: 1.45; }
+.mn-next { margin: 14px 0 0; }
+.mn-pick { color: var(--text-2); text-transform: none; letter-spacing: 0; }
+.mn-suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.mn-suggest button { height: 26px; padding: 0 10px; border-radius: 13px; background: var(--card-raised); color: var(--text-2); font-size: 12px; font-weight: 600; transition: background var(--t-fast), color var(--t-fast); }
+.mn-suggest button:hover, .mn-suggest button:focus-visible { background: var(--card-hover); color: var(--text); outline: none; }
+.mn-suggest button.on { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+.mn-paint { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.mn-paint .mn-hint { margin: 4px 0 0; }
+.mn-bus { flex: none; margin-bottom: -6px; }
+.mn-foot-hint { margin-left: auto; margin-right: 10px; font-size: 12px; color: var(--text-3); font-weight: 600; }
 
 @media (min-width: 2200px) {
   .mn-start-col { width: 500px; }
@@ -153,3 +166,9 @@
   .mn-title h1, .mn-title p, .mn-start .mn-menu, .mn-start .mn-item, .mn-foot, .mn-flow .mn-panel { animation: none; }
 }
 .mn-zone-start { display: block; margin-top: 6px; font-size: 11.5px; font-weight: 700; color: var(--accent, #2f7fd6); line-height: 1.35; }
+
+/* settings: AI agents */
+.mn-agent-btns { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 8px; }
+.mn-agent-note { margin: 0 0 6px; font-size: 11.5px; color: var(--text-3); font-weight: 500; line-height: 1.45; }
+.mn-agent-note.warn { color: var(--amber); }
+.mn-agent-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; word-break: break-all; user-select: text; -webkit-user-select: text; }

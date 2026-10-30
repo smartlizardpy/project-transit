@@ -53,14 +53,19 @@ export const useSession = create<SessionStore>(() => ({
 
 export interface AppSettings {
   autosaveMinutes: number;
+  /** desktop: look for updates on launch and every few hours */
+  autoUpdate: boolean;
 }
 
 const SETTINGS_KEY = 'pt-settings-v1';
 export function loadSettings(): AppSettings {
-  const d: AppSettings = { autosaveMinutes: 5 };
+  const d: AppSettings = { autosaveMinutes: 5, autoUpdate: true };
   try {
     const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}');
-    return { autosaveMinutes: typeof raw.autosaveMinutes === 'number' ? raw.autosaveMinutes : d.autosaveMinutes };
+    return {
+      autosaveMinutes: typeof raw.autosaveMinutes === 'number' ? raw.autosaveMinutes : d.autosaveMinutes,
+      autoUpdate: typeof raw.autoUpdate === 'boolean' ? raw.autoUpdate : d.autoUpdate,
+    };
   } catch {
     return d;
   }

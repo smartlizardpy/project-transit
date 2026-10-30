@@ -41,6 +41,31 @@ fn diag_save_report(report: String) -> Result<(), String> {
   std::fs::write(dir.join("save-check.json"), report).map_err(|e| e.to_string())
 }
 
+/// AI agents: where Node.js is installed, for the MCP setup that Settings copies. Apps such as
+/// Claude Desktop start MCP servers with a bare PATH, so an absolute path is more reliable.
+#[tauri::command]
+fn find_node() -> Option<String> {
+  let exe = if cfg!(windows) { "node.exe" } else { "node" };
+  let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+  for d in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "C:\\Program Files\\nodejs"] {
+    dirs.push(PathBuf::from(d));
+  }
+  if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from) {
+    dirs.push(home.join(".volta").join("bin"));
+    // nvm: the newest installed version
+    if let Ok(rd) = std::fs::read_dir(home.join(".nvm").join("versions").join("node")) {
+      let ver = |p: &PathBuf| -> Vec<u32> {
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        name.trim_start_matches('v').split('.').map(|x| x.parse().unwrap_or(0)).collect()
+      };
+      let mut v: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+      v.sort_by_key(|p| std::cmp::Reverse(ver(p)));
+      dirs.extend(v.into_iter().map(|p| p.join("bin")));
+    }
+  }
+  dirs.into_iter().map(|d| d.join(exe)).find(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned())
+}
+
 /// macOS: Cmd+Q normally terminates the app at once, skipping the game's save-on-close.
 /// Replace the app menu's Quit with our own item that asks the page to save and exit
 /// (it calls `app_exit` when done). If the page does not answer, exit anyway after 5 s.
@@ -78,11 +103,13 @@ fn install_quit_menu(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .plugin(tauri_plugin_process::init())
     .invoke_handler(tauri::generate_handler![
       diag_enabled,
       diag_report,
       diag_save_mode,
       diag_save_report,
+      find_node,
       saves::saves_list,
       saves::save_read,
       saves::save_write,
@@ -90,6 +117,8 @@ pub fn run() {
       saves::app_exit
     ])
     .setup(|app| {
+      #[cfg(desktop)]
+      app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
       #[cfg(target_os = "macos")]
       install_quit_menu(app)?;
       if cfg!(debug_assertions) {

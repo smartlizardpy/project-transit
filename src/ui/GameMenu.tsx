@@ -7,6 +7,8 @@ import { useUI } from '../state/store.ts';
 import { useGame } from './hooks.ts';
 import { CompanyMark } from './logos.tsx';
 import { Segmented } from './primitives.tsx';
+import { APP_VERSION, checkForUpdates, installAndRestart, useUpdates } from '../app/updates.ts';
+import { claudeCodeCommand, copyText, jsonConfig, mcpSetup, type McpSetup } from '../app/agents.ts';
 
 export function relTime(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -114,10 +116,12 @@ export function SettingsDialog({ onClose }: { onClose?: () => void }) {
             onChange={(v) => patch({ autosaveMinutes: Number(v) })}
           />
         </div>
+        {isDesktop() && <UpdateSettings auto={s.autoUpdate} setAuto={(v) => patch({ autoUpdate: v })} />}
         <div className="mn-set-row">
           <div><b>Fullscreen</b><span>Also F11.</span></div>
           <button role="switch" aria-checked={full} aria-label="Fullscreen" className={'mn-switch' + (full ? ' on' : '')} onClick={() => void setFullscreen(!full).then(() => isFullscreen().then(setFull))}><i /></button>
         </div>
+        <AgentSettings />
         {game && gs && (
           <>
             <div className="label mn-set-h">This company</div>
@@ -142,6 +146,68 @@ export function SettingsDialog({ onClose }: { onClose?: () => void }) {
         )}
       </div>
     </Dialog>
+  );
+}
+
+function UpdateSettings({ auto, setAuto }: { auto: boolean; setAuto: (v: boolean) => void }) {
+  const u = useUpdates();
+  const line =
+    u.status === 'checking' ? 'Checking for updates…'
+    : u.status === 'downloading' ? `Downloading version ${u.version}… ${Math.round(u.progress * 100)}%`
+    : u.status === 'ready' ? `Version ${u.version} is ready. It installs when you restart or quit.`
+    : u.status === 'installing' ? 'Installing…'
+    : u.status === 'error' ? (u.error ?? 'Update failed.')
+    : u.status === 'none' ? 'You have the latest version.'
+    : 'Updates come from the project’s GitHub releases.';
+  return (
+    <>
+      <div className="mn-set-row">
+        <div><b>Version {APP_VERSION}</b><span>{line}</span></div>
+        {u.status === 'ready' || u.status === 'installing'
+          ? <button className="btn sm primary" disabled={u.status === 'installing'} onClick={() => void installAndRestart()}>Restart to update</button>
+          : <button className="btn sm" disabled={u.status === 'checking' || u.status === 'downloading'} onClick={() => void checkForUpdates(true)}>Check now</button>}
+      </div>
+      <div className="mn-set-row">
+        <div><b>Automatic updates</b><span>Look for a new version when the game starts and every few hours, and download it in the background.</span></div>
+        <button role="switch" aria-checked={auto} aria-label="Automatic updates" className={'mn-switch' + (auto ? ' on' : '')} onClick={() => setAuto(!auto)}><i /></button>
+      </div>
+    </>
+  );
+}
+
+/** Copy the setup that lets Claude and other AI apps read your saved games (MCP, read-only). */
+function AgentSettings() {
+  const [setup, setSetup] = useState<McpSetup | null>(null);
+  useEffect(() => void mcpSetup().then(setSetup).catch(() => setSetup(null)), []);
+  const notify = useUI((s) => s.notify);
+  const copy = async (text: string, done: string) => notify((await copyText(text)) ? done : 'Could not copy. Select the text below and copy it yourself.', 'info');
+  return (
+    <>
+      <div className="label mn-set-h">AI agents</div>
+      <div className="mn-set-row">
+        <div>
+          <b>Connect Claude and other AI apps</b>
+          <span>
+            {isDesktop()
+              ? 'Lets AI agents read your saved games through MCP: lines, buses, money, objectives. Read-only; they cannot change your game. Save (⌘S) to give them the latest numbers.'
+              : 'Available in the desktop app, which keeps saves where AI agents can read them.'}
+          </span>
+        </div>
+      </div>
+      {setup && (
+        <>
+          <div className="mn-agent-btns">
+            <button className="btn sm" onClick={() => void copy(claudeCodeCommand(setup), 'Copied. Paste it into a terminal and press Enter, then start Claude Code.')}>Copy for Claude Code</button>
+            <button className="btn sm" onClick={() => void copy(jsonConfig(setup), 'Copied. Add it to your app’s MCP config (Claude Desktop: Settings → Developer → Edit Config), then restart the app.')}>Copy JSON config</button>
+          </div>
+          <p className={'mn-agent-note' + (setup.node ? '' : ' warn')}>
+            {setup.node ? `Uses Node.js at ${setup.node}.` : 'Needs Node.js 18 or newer (nodejs.org). It was not found on this computer; install it, then copy again.'}
+            <br />
+            <span className="mn-agent-path">{setup.server}</span>
+          </p>
+        </>
+      )}
+    </>
   );
 }
 

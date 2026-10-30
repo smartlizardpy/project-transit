@@ -1,10 +1,10 @@
 [package]
 name = "project-transit"
-version = "0.1.0"
-description = "Project Transit design prototype"
+version = "0.2.0"
+description = "Project Transit: run a bus company in a real city"
 authors = ["Project Transit"]
 license = ""
-repository = ""
+repository = "https://github.com/smartlizardpy/project-transit"
 edition = "2024"
 rust-version = "1.90"
 
@@ -30,3 +30,7 @@ log = "0.4"
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-log = "2"
 base64 = "0.22"
+tauri-plugin-process = "2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"

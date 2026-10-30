@@ -522,7 +522,9 @@ class Workspace {
   heapK: Float64Array;
   heapV: Int32Array;
   size = 0;
-  constructor(public cap: number) {
+  cap: number;
+  constructor(cap: number) {
+    this.cap = cap;
     this.dist = new Float64Array(cap);
     this.prev = new Int32Array(cap);
     this.stamp = new Int32Array(cap);

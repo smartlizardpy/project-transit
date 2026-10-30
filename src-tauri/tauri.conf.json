@@ -1,13 +1,13 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Project Transit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "dev.projecttransit.prototype",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeDevCommand": "pnpm build:mcp && pnpm dev",
+    "beforeBuildCommand": "pnpm build && pnpm build:mcp"
   },
   "app": {
     "windows": [
@@ -48,6 +48,24 @@
       "icons/icon.ico"
     ],
     "category": "SimulationGame",
-    "shortDescription": "Project Transit \u2014 design prototype"
+    "shortDescription": "Project Transit: run a bus company in a real city",
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "resources": {
+      "../dist-mcp/project-transit-mcp.mjs": "mcp/project-transit-mcp.mjs"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "requireSignedVersion": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY2NDMwNERDNDA3RTkwMzcKUldRM2tINUEzQVJEOW1PMFNhTzg4TytDQjI5ZE5CZWFPeDBZbC9ubFE1cDM1VEZFY1ZXUy9Fci8K",
+      "endpoints": [
+        "https://github.com/smartlizardpy/project-transit/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
