@@ -351,8 +351,10 @@ export class VehicleLayer {
     ctx.shadowColor = 'transparent';
     ctx.beginPath();
     ctx.arc(0, 0, R, 0, Math.PI * 2);
+    // driving to or from the depot, off the line: a hollow ring, so it is not taken for a bus on the route
+    if (v.pos.kind === 'path') ctx.arc(0, 0, R - 2.6, 0, Math.PI * 2, true);
     ctx.fillStyle = colour;
-    ctx.fill();
+    ctx.fill('evenodd');
     if (v.status === 'broken' || v.delay > 300) {
       ctx.beginPath();
       ctx.arc(R * 0.75, -R * 0.75, 2.6, 0, Math.PI * 2);
