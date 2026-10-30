@@ -119,6 +119,7 @@ export class VehicleLayer {
   private tag: HTMLDivElement;
   private tagKey = '';
   private canvas: HTMLCanvasElement;
+  private canvasKey = '';
   private ctx: CanvasRenderingContext2D;
   private geos = new Map<string, THREE.BufferGeometry>();
   private livery = '';
@@ -217,13 +218,27 @@ export class VehicleLayer {
     return this.screen.get(id);
   }
 
+  /**
+   * The marker canvas covers the whole screen and is never resized with the window: in the
+   * desktop app, resizing it during a window resize or fullscreen change could leave old dots
+   * frozen on screen. A new screen size or pixel density gets a fresh canvas instead.
+   */
   private resizeCanvas() {
-    const w = this.container.clientWidth, h = this.container.clientHeight, dpr = window.devicePixelRatio || 1;
-    if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
-      this.canvas.width = Math.round(w * dpr);
-      this.canvas.height = Math.round(h * dpr);
-      this.canvas.style.width = `${w}px`;
-      this.canvas.style.height = `${h}px`;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(window.screen.width, this.container.clientWidth);
+    const h = Math.max(window.screen.height, this.container.clientHeight);
+    const key = `${w}x${h}@${dpr}`;
+    if (key !== this.canvasKey) {
+      this.canvasKey = key;
+      const fresh = document.createElement('canvas');
+      fresh.className = 'vehicle-markers';
+      fresh.width = Math.round(w * dpr);
+      fresh.height = Math.round(h * dpr);
+      fresh.style.width = `${w}px`;
+      fresh.style.height = `${h}px`;
+      this.canvas.replaceWith(fresh);
+      this.canvas = fresh;
+      this.ctx = fresh.getContext('2d')!;
     }
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.ctx.clearRect(0, 0, w, h);

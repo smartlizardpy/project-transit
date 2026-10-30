@@ -82,7 +82,10 @@ export function installController(map: MlMap, city: CityLayer): Controller {
     raf = requestAnimationFrame(loop);
   };
   raf = requestAnimationFrame(loop);
-  map.on('remove', () => cancelAnimationFrame(raf));
+  map.on('remove', () => {
+    cancelAnimationFrame(raf);
+    vehicles.dispose();
+  });
   map.on('dragstart', () => useUI.getState().following && useUI.getState().follow(null));
 
   // ───────────────────────── store → map

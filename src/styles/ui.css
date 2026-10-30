@@ -186,8 +186,9 @@ button.stat:hover { background: var(--card-raised); }
   animation: panel-in var(--t-panel) var(--ease-out);
 }
 .panel { left: calc(var(--edge) + var(--rail-w) + 10px); top: calc(var(--edge) + 76px); width: var(--panel-w); max-height: calc(100% - var(--edge) * 2 - 76px - 52px); }
-.inspector { right: var(--edge); top: calc(var(--edge) + 76px); width: var(--inspector-w); max-height: calc(100% - var(--edge) * 2 - 76px - 56px); }
-.inspector.with-tray { max-height: calc(100% - var(--edge) * 2 - 76px - 120px); }
+/* the bottom space is kept for the map controls, which sit in a row under the inspector */
+.inspector { right: var(--edge); top: calc(var(--edge) + 76px); width: var(--inspector-w); max-height: calc(100% - var(--edge) * 2 - 76px - 74px); }
+.inspector.with-tray { max-height: calc(100% - var(--edge) * 2 - 76px - 130px); }
 @keyframes panel-in { from { opacity: 0; transform: translateX(var(--from, 12px)); } to { opacity: 1; transform: none; } }
 .panel { --from: -12px; }
 .panel.closing, .inspector.closing { animation: panel-out 150ms ease-in forwards; }
@@ -404,8 +405,19 @@ button.lrow:hover { background: var(--card-hover); }
 .proto { position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%); font-size: 10.5px; font-weight: 700; color: #7b827c; letter-spacing: 0.04em; background: rgba(235,232,224,0.7); padding: 2px 8px; border-radius: 6px; }
 
 /* map controls step aside while the inspector is open */
-.mapctl { transition: right var(--t-panel) var(--ease-out); }
-.hud:has(.inspector) .mapctl { right: calc(var(--edge) + var(--inspector-w) + 10px); }
+/* map controls: a column in the corner, or, while the inspector is open, a row under it as wide as it is */
+.mapctl { animation: mapctl-col var(--t-panel) var(--ease-out); }
+.hud:has(.inspector) .mapctl { flex-direction: row; justify-content: space-between; width: var(--inspector-w); animation-name: mapctl-row; }
+.hud:has(.inspector) .mapctl .card { flex-direction: row; }
+.hud:has(.inspector.with-tray) .mapctl { bottom: calc(var(--edge) + 78px); }
+/* tooltips open upwards in the row; the right-hand ones stay on screen */
+.hud:has(.inspector) .mapctl .tip { left: 50%; right: auto; top: auto; bottom: calc(100% + 12px); transform: translate(-50%, 4px); }
+.hud:has(.inspector) .mapctl .has-tip:hover .tip { transform: translate(-50%, 0); }
+.hud:has(.inspector) .mapctl .card:last-child .tip { left: auto; right: -4px; transform: translate(0, 4px); }
+.hud:has(.inspector) .mapctl .card:last-child .has-tip:hover .tip { transform: none; }
+@keyframes mapctl-col { from { opacity: 0; transform: translateY(6px); } }
+@keyframes mapctl-row { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .mapctl { animation: none !important; } }
 
 @media (max-width: 1560px) {
   .daybar { display: none; }
