@@ -123,5 +123,37 @@
       1600,
       1920
     ]
+  },
+  "automation-build-poster": {
+    "width": 1600,
+    "height": 900,
+    "widths": [
+      960,
+      1600
+    ]
+  },
+  "automation-live-poster": {
+    "width": 1600,
+    "height": 900,
+    "widths": [
+      960,
+      1600
+    ]
+  },
+  "automation-lab-poster": {
+    "width": 1600,
+    "height": 900,
+    "widths": [
+      960,
+      1600
+    ]
+  },
+  "automation-flows-poster": {
+    "width": 1600,
+    "height": 900,
+    "widths": [
+      960,
+      1600
+    ]
   }
 }

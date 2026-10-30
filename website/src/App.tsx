@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Nav } from './components/Nav.tsx';
+import { Automation } from './sections/Automation.tsx';
 import { Company } from './sections/Company.tsx';
 import { Development } from './sections/Development.tsx';
 import { Footer } from './sections/Footer.tsx';
@@ -16,6 +17,7 @@ const NAV_FOR: [string, string][] = [
   ['routes', '#routes'],
   ['living', '#routes'],
   ['company', '#routes'],
+  ['automation', '#routes'],
   ['screenshots', '#screenshots'],
   ['development', '#development'],
   ['get', '#development'],
@@ -64,6 +66,7 @@ export function App() {
         <Routes />
         <Living />
         <Company />
+        <Automation />
         <Screenshots />
         <Development />
         <Terminus />
