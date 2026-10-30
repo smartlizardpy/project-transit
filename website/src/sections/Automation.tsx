@@ -5,14 +5,14 @@ const CLIPS = [
   {
     id: 'automation-build',
     title: 'Build a workflow from nodes',
-    body: 'A new workflow starts with a trigger. Drag in a Line, a Compare and a Send a notification node, join them and press Test. The test shows what each node did and changes nothing. Here it read Line 1 at 05:00, found no passengers, and so the condition was false.',
-    alt: 'Automation Studio: a trigger, a Line node, a Compare node and a Send a notification node are dragged onto the canvas and joined. A test run lists the path through the four nodes.',
+    body: 'A new workflow starts with a trigger. Search for a node, drag it onto the canvas and join it up: here a Line node feeding a Compare node. Pick a line and press Test. The test shows what each node did and changes nothing. At 07:30 it read Line 1 as 0% full on average with 3 people waiting, so the condition was false.',
+    alt: 'Automation Studio with a large mouse pointer, zooming in as a Line node and a Compare node are searched for, dragged onto the canvas and joined to a trigger. A test run then lists the path through the three nodes.',
   },
   {
     id: 'automation-live',
     title: 'A suggestion on the live network',
-    body: 'This workflow is in Suggest mode: it looks for a busy line and proposes an extra departure. Approving it checks the plan again. Bus 106 then leaves the depot and runs a real extra trip on Line 1. The threshold is set to 1% because this test company is quiet.',
-    alt: 'Network Control, Automation tab, over the map of İstanbul. A suggested extra departure is approved, then the game runs and buses move along the lines.',
+    body: 'This workflow is in Suggest mode: it looks for a busy line and proposes an extra departure. Approving it checks the plan again. Here bus 106 leaves the depot, runs a real extra trip on Line 1 from Eminönü, then returns. The threshold is set to 1% because this test company is quiet.',
+    alt: 'Network Control, Automation tab, zoomed in on a suggestion for an extra departure. The pointer clicks Approve, the card confirms it, and the game then runs with buses moving along the lines.',
   },
   {
     id: 'automation-lab',
@@ -23,8 +23,8 @@ const CLIPS = [
   {
     id: 'automation-flows',
     title: 'See where passengers go',
-    body: 'Network Control is the analytics around the Studio. Its flows view draws the busiest journeys on the map. Solid arcs are journeys that happened; dashed arcs are demand estimated by the game’s model. Here, Akdeniz to Tünel had 440 journeys in the last 7 days.',
-    alt: 'Network Control, Passengers tab: a table of the busiest flows, and a blue arc on the map of İstanbul for the selected flow, then the same view switched to estimated demand.',
+    body: 'Network Control is the analytics around the Studio. Its flows view draws the busiest journeys on the map. Solid arcs are journeys that happened: Akdeniz to Tünel had 440 in the last 7 days. Dashed arcs are demand estimated by the game’s model: about 257 trips a day for the same pair, an estimate and not journeys carried.',
+    alt: 'Network Control, Passengers tab, with a large mouse pointer. A flow is selected and drawn as a solid blue arc on the map of İstanbul, then the view is switched to estimated demand, which draws dashed arcs.',
   },
 ] as const;
 
