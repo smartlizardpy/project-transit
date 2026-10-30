@@ -7,6 +7,7 @@ import type { Geo } from './world/geo.ts';
 import { buildPath, type Path } from './paths.ts';
 import type { GameState, Id, Route } from './types.ts';
 import { STOP_RULES } from './content.ts';
+import { patternDiagnostics, type Diagnostic } from './diagnostics.ts';
 
 // ───────────────────────────────────────────── placement
 
@@ -148,6 +149,10 @@ export interface Pattern {
   warnings: string[];
   /** legs that had to drive against one-way restrictions */
   contraflowLegs: number[];
+  /** index into path.nodes of each stop */
+  stopIdx: number[];
+  /** structured problems and warnings (route diagnostics); `problems`/`warnings` keep the plain text */
+  diagnostics: Diagnostic[];
 }
 
 /** Stop sequence for each pattern of a route. */
@@ -175,24 +180,31 @@ function viaNodes(region: Region, geo: Geo, pts: LngLat[] | undefined): number[]
  * terminus), and at stops on divided roads the
  * halt on the correct side of the road is chosen for the direction of travel.
  */
-export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Route): Pattern[] {
+export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Route, opts: { diagnostics?: boolean } = {}): Pattern[] {
   const g = region.graph;
   const seqs = patternStops(r);
   const out: Pattern[] = [];
   let prevEnd = -1;
   seqs.forEach((stops, pi) => {
+    const patternEnd = prevEnd;
     const nodes: number[] = [];
     const dedges: number[] = [];
     const stopS: number[] = [];
     const stopNodes: number[] = [];
     const problems: string[] = [];
     const contraflowLegs: number[] = [];
+    const unreachable: { leg: number; text: string }[] = [];
+    /** index into the path of each stop, recorded while the legs are joined */
+    const stopIdx: number[] = [];
     let contraflow = 0;
     let valid = stops.every((id) => stopHalts(state, id).length > 0);
     if (!valid) problems.push('A stop on this line no longer exists.');
     const name = (id: Id) => state.stops[id]?.name ?? 'a removed stop';
-    /** route from `from` through the leg's waypoints to the best halt of `stop` */
-    const leg = (from: number, pe: number, i: number) => {
+    /** `ahead`: cost of the best next leg from this halt, when the halt choice looked ahead */
+    type Leg = { node: number; nodes: number[]; dedges: number[]; seconds: number; metres: number; contra: number; ahead: number };
+    const legCost = (l: Leg) => l.seconds + l.contra * 600;
+    /** route from `from` through the waypoints of leg i to each halt of stop i + 1 */
+    const legOptions = (from: number, pe: number, i: number): Leg[] => {
       const key = `${pi === 0 ? 'o' : 'r'}:${i}`;
       const vias = viaNodes(region, geo, r.via[key]);
       let cur = from, curEdge = pe;
@@ -200,7 +212,7 @@ export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Rou
       let secs = 0, metres = 0, contra = 0;
       for (const v of vias) {
         const l = routeWithFallback(g, cur, v, { prevEdge: curEdge });
-        if (!l) return null;
+        if (!l) return [];
         lnodes.push(...l.nodes.slice(1));
         ledges.push(...l.dedges);
         secs += l.seconds;
@@ -209,22 +221,33 @@ export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Rou
         cur = v;
         if (l.dedges.length) curEdge = l.dedges[l.dedges.length - 1];
       }
-      let best: { node: number; l: NonNullable<ReturnType<typeof routeWithFallback>> } | null = null;
+      const out: Leg[] = [];
       for (const h of stopHalts(state, stops[i + 1])) {
         const l = routeWithFallback(g, cur, h, { prevEdge: curEdge });
         if (!l) continue;
-        const cost = l.seconds + l.contraflow.length * 600;
-        if (!best || cost < best.l.seconds + best.l.contraflow.length * 600) best = { node: h, l };
+        out.push({ node: h, nodes: [...lnodes, ...l.nodes.slice(1)], dedges: [...ledges, ...l.dedges], seconds: secs + l.seconds, metres: metres + l.metres, contra: contra + l.contraflow.length, ahead: 0 });
       }
-      if (!best) return null;
-      return {
-        node: best.node,
-        nodes: [...lnodes, ...best.l.nodes.slice(1)],
-        dedges: [...ledges, ...best.l.dedges],
-        seconds: secs + best.l.seconds,
-        metres: metres + best.l.metres,
-        contra: contra + best.l.contraflow.length,
-      };
+      return out;
+    };
+    /**
+     * Best leg to stop i + 1. At a stop with a halt on each side of a divided road the halt also
+     * decides which way the bus leaves it, so the choice looks one leg ahead (choosing by the leg
+     * in alone sent buses off the wrong way and round long detours).
+     */
+    const leg = (from: number, pe: number, i: number): Leg | null => {
+      const opts = legOptions(from, pe, i);
+      if (!opts.length) return null;
+      if (opts.length === 1 || i + 2 >= stops.length) return opts.reduce((x, y) => (legCost(y) < legCost(x) ? y : x));
+      let best: Leg | null = null, bestCost = Infinity;
+      for (const o of opts) {
+        const next = legOptions(o.node, o.dedges.length ? o.dedges[o.dedges.length - 1] : pe, i + 1);
+        const ahead = next.length ? Math.min(...next.map(legCost)) : 1e6;
+        if (legCost(o) + ahead < bestCost) {
+          bestCost = legCost(o) + ahead;
+          best = { ...o, ahead };
+        }
+      }
+      return best;
     };
     if (valid) {
       // Choose the starting halt that makes the first leg (plus any repositioning) cheapest.
@@ -238,7 +261,7 @@ export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Rou
         }
         const l = leg(h, -1, 0);
         if (!l) continue;
-        const cost = pre + l.seconds + l.contra * 600;
+        const cost = pre + l.seconds + l.contra * 600 + l.ahead;
         if (cost < bestCost) {
           bestCost = cost;
           start = h;
@@ -248,16 +271,19 @@ export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Rou
       if (!first) {
         valid = false;
         problems.push(`No drivable connection from ${name(stops[0])} to ${name(stops[1])}.`);
+        unreachable.push({ leg: 0, text: problems[problems.length - 1] });
       } else {
         nodes.push(start);
         stopNodes.push(start);
         stopS.push(0);
+        stopIdx.push(0);
         let cur = first;
         for (let i = 0; ; i++) {
           nodes.push(...cur.nodes);
           dedges.push(...cur.dedges);
           stopNodes.push(cur.node);
           stopS.push(-1);
+          stopIdx.push(nodes.length - 1);
           if (cur.contra) {
             contraflow += cur.contra;
             contraflowLegs.push(i);
@@ -267,6 +293,7 @@ export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Rou
           if (!next) {
             valid = false;
             problems.push(`No drivable connection from ${name(stops[i + 1])} to ${name(stops[i + 2])}.`);
+            unreachable.push({ leg: i + 1, text: problems[problems.length - 1] });
             break;
           }
           cur = next;
@@ -275,32 +302,35 @@ export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Rou
     }
     const path = buildPath(g, valid ? nodes : [stopHalts(state, stops[0])[0] ?? 0], valid ? dedges : [], contraflow);
     if (valid) {
-      // distance of each stop along the path, walking forward so repeated nodes resolve in order
-      let k = 0;
-      for (let i = 0; i < stopNodes.length; i++) {
-        if (i === 0) {
-          stopS[0] = 0;
-          continue;
-        }
-        k++;
-        while (k < path.nodes.length && path.nodes[k] !== stopNodes[i]) k++;
-        stopS[i] = k < path.nodes.length ? path.cum[k] : path.length;
-      }
+      // distance of each stop along the path, from where its leg actually ends. (Searching the
+      // path for the stop's node found the first pass instead when waypoints took a leg past
+      // the stop and back.)
+      for (let i = 0; i < stopNodes.length; i++) stopS[i] = path.cum[stopIdx[i]];
       stopS[stopS.length - 1] = path.length;
       prevEnd = stopNodes[stopNodes.length - 1];
-    }
+    } else stopIdx.length = 0;
     const warnings: string[] = [];
-    if (contraflowLegs.length) warnings.push('Part of this line runs against a one-way street (probably a gap in the map data).');
+    const contraflowText = 'Part of this line runs against a one-way street (probably a gap in the map data).';
+    if (contraflowLegs.length) warnings.push(contraflowText);
+    const detours: { leg: number; text: string }[] = [];
     if (valid) {
       for (let i = 0; i + 1 < stops.length; i++) {
         const a = state.stops[stops[i]], b = state.stops[stops[i + 1]];
         const road = stopS[i + 1] - stopS[i];
         const straight = distanceM(a.lngLat, b.lngLat);
-        if (road > 700 && road > straight * 2.3)
-          warnings.push(`${a.name} → ${b.name}: one-way streets force a ${(road / 1000).toFixed(1)} km detour for ${Math.round(straight)} m. Consider a different stop or a separate return route.`);
+        if (road > 700 && road > straight * 2.3) {
+          const text = `${a.name} → ${b.name}: one-way streets force a ${(road / 1000).toFixed(1)} km detour for ${Math.round(straight)} m. Consider a different stop or a separate return route.`;
+          warnings.push(text);
+          detours.push({ leg: i, text });
+        }
       }
     }
-    out.push({ route: r.id, index: pi, stops, path, stopS, stopNodes, valid, problems, warnings, contraflowLegs });
+    const diagnostics = opts.diagnostics === false ? [] : patternDiagnostics({
+      state, region, geo, route: r, pat: pi, stops, path, stopIdx, stopNodes,
+      halts: stops.map((id) => stopHalts(state, id)),
+      contraflowLegs: valid ? contraflowLegs : [], unreachable, detours, contraflowText: contraflowLegs.length ? contraflowText : null, prevEnd: pi > 0 ? patternEnd : -1,
+    });
+    out.push({ route: r.id, index: pi, stops, path, stopS, stopNodes, valid, problems, warnings, contraflowLegs, stopIdx, diagnostics });
   });
   return out;
 }

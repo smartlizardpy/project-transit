@@ -14,6 +14,8 @@ import { OBJECTIVES, licenceInfo, routeMoney, routeWindow, unlockedModels } from
 import { CATEGORY_LABEL, dayTotals } from '../game/finance.ts';
 import { hhmm } from '../game/time.ts';
 import type { LedgerCategory } from '../game/types.ts';
+import { NetworkControl } from './network/NetworkControl.tsx';
+import { companyLevel } from '../game/control.ts';
 import '../styles/panels.css';
 
 const notify = (text: string, tone: 'good' | 'bad' | 'warn' | 'info') => useUI.getState().notify(text, tone);
@@ -41,11 +43,12 @@ export function Panels() {
   }, [panel]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!shown || !game) return null;
   return (
-    <section className={`card panel ${closing ? 'closing' : ''}`} key={shown} aria-label={shown}>
+    <section className={`card panel ${shown === 'network' ? 'wide' : ''} ${closing ? 'closing' : ''}`} key={shown} aria-label={shown}>
       {shown === 'fleet' && <FleetPanel game={game} />}
       {shown === 'finance' && <FinancePanel game={game} />}
       {shown === 'lines' && <LinesPanel game={game} />}
       {shown === 'company' && <CompanyPanel game={game} />}
+      {shown === 'network' && <NetworkControl game={game} />}
     </section>
   );
 }
@@ -504,7 +507,8 @@ function FinLoans({ game }: { game: Game }) {
 // ───────────────────────────────────────── company
 
 function repTitle(r: number) {
-  return r >= 85 ? 'Beloved operator' : r >= 65 ? 'Trusted operator' : r >= 45 ? 'Established operator' : r >= 25 ? 'Local operator' : 'Newcomer';
+  const l = companyLevel(r);
+  return `Level ${l.level} · ${l.title}`;
 }
 
 function CompanyPanel({ game }: { game: Game }) {

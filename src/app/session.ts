@@ -8,6 +8,7 @@ import { moveToRegion } from '../game/growth.ts';
 import { tilesNeeded } from '../game/world/zoneTiles.ts';
 import type { Region, RegionData, RegionSpec } from '../game/world/region.ts';
 import { SAVE_VERSION, type GameState } from '../game/types.ts';
+import { upgradeState } from '../game/upgrade.ts';
 import { persistence, safeId, type SaveMeta } from './persistence.ts';
 import type { RegionWorkerMessage } from './regionWorker.ts';
 
@@ -88,8 +89,8 @@ export function migrate(raw: unknown): GameState {
   if (typeof s.clock.t !== 'number' || typeof s.finance.balance !== 'number' || !Array.isArray(s.territory.owned)) throw new Error(damaged);
   const v = s.version ?? 0;
   if (v > SAVE_VERSION) throw new Error('This save was made by a newer version of Project Transit.');
-  // v1 is the first released format; future migrations go here in order.
-  return s as GameState;
+  // v1 → v2: analytics, Network Control progress and automation (safe defaults)
+  return upgradeState(s as GameState);
 }
 
 /** `grown`: the same game moved onto a bigger map (keep the camera and the open panels) */

@@ -178,3 +178,6 @@ button.link:hover { color: #b3dcf6; text-decoration: underline; }
 
 /* never squash illustrations or KPI blocks when the panel is short; the body scrolls instead */
 .p-body > * { flex-shrink: 0; }
+
+/* moving a bus to another depot: the plan, then confirm */
+.depot-move { margin-top: 8px; padding: 9px 10px; border-radius: 10px; background: var(--accent-soft); font-size: 12.5px; line-height: 1.4; }

@@ -10,13 +10,58 @@ import { buildPatterns, checkDepot, checkStop, type Pattern } from './network.ts
 import type { Path } from './paths.ts';
 import { DemandModel, abandonAndReplan, generatePassengers, offloadAll, paxTotals, type PatternService, type StopEvent } from './passengers.ts';
 import { bandAt, buildRunProfile, defaultTimetable, generateTrips, normaliseBands, requirement, scheduleAt, type Requirement, type RunProfile } from './timetable.ts';
-import { abortService, detachFromPattern, dispatch, minuteVehicles, sendToDepot, startDeadhead, tickVehicle, vehicleNode, vehicleXY } from './vehicles.ts';
+import { abortService, detachFromPattern, dispatch, extraOption, minuteVehicles, PREP, sendToDepot, startDeadhead, startExtra, tickVehicle, transferDepot, vehicleNode, vehicleXY, type ExtraOption } from './vehicles.ts';
+import { waitingAt } from './passengers.ts';
 import { compactLedger, emptyFinance, flushHour, post, reconcile } from './finance.ts';
 import { checkObjectives, closeDay, licenceInfo, notify, startingZones, routeWindow, unlockedModels } from './progress.ts';
 import { currencyFor, formatMoney, type Currency } from './currency.ts';
 import { DAY, DT, ECON, HOUR, LINE_COLOURS, MODEL, SERVICE, SPEEDS, STARTING_REPUTATION } from './content.ts';
 import { SAVE_VERSION, TripState, type GameState, type Id, type Route, type RouteKind, type Stop, type Timetable, type Trip, type Vehicle } from './types.ts';
 import { hhmm, serviceDayOf, serviceDayWeekend, weekdayOf } from './time.ts';
+import { emptyAnalytics } from './analytics/types.ts';
+import { closeAnalyticsDay, recAssignment, sampleWaiting } from './analytics/record.ts';
+import { checkUnlock, closeControlDay, emptyControl } from './control.ts';
+import { emptyAutomation } from './automation/types.ts';
+import { upgradeState } from './upgrade.ts';
+import { METRIC_VARIABLES, type CustomMetric, type SavedReport } from './analytics/query.ts';
+import { checkExpr } from './expr.ts';
+import { approveProposal, daySummary, declineProposal, processAutomation, refreshWants, runNow, validation } from './automation/executor.ts';
+import { simEvent } from './automation/events.ts';
+import * as auto from './automation/manage.ts';
+import type { RunRecord, Workflow } from './automation/types.ts';
+import type { Validation } from './automation/validate.ts';
+
+export interface ExtraPlan {
+  route: Id;
+  pat: number;
+  vehicle: Id;
+  fleetNo: string;
+  from: 'depot' | 'terminus';
+  /** departure from the first stop (game time) */
+  dep: number;
+  /** a spare bus, which returns to its depot afterwards */
+  spare: boolean;
+  minutes: number;
+  /** passengers waiting along this direction now */
+  waiting: number;
+  /** estimated driver and energy cost */
+  cost: number;
+  first: string;
+  last: string;
+  text: string;
+}
+
+function busyReason(v: Vehicle): string {
+  switch (v.status) {
+    case 'in_service': case 'at_stop': return v.load > 0 ? `is carrying ${v.load} passengers on a trip` : 'is running a trip';
+    case 'preparing': case 'to_route': return 'is already on its way to a trip';
+    case 'layover': return v.trip !== null || v.next !== null ? 'has its next trip planned' : 'is not free';
+    case 'to_depot': return 'is driving back to the depot';
+    case 'maintenance': return 'is in the workshop';
+    case 'broken': return 'has broken down';
+    default: return v.sell ? 'is being sold' : v.wantsService ? 'is due for maintenance' : 'is not free';
+  }
+}
 
 export type Result<T = undefined> = { ok: true; value: T } | { ok: false; error: string };
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
@@ -60,6 +105,9 @@ export function newGameState(o: NewGameOptions): GameState {
     counters: { stop: 0, route: 0, vehicle: 0, depot: 0, ledger: 0, trip: 0, notification: 0 },
     settings: { autoService: true, serviceBelow: SERVICE.defaultBelow },
     onboarding: { active: true, step: 0, flags: {} },
+    analytics: emptyAnalytics(Math.floor(((o.startHour ?? 5) * HOUR) / DAY)),
+    control: emptyControl(),
+    automation: emptyAutomation(),
   };
   post(state, { amt: ECON.startingFunds, cat: 'equity', memo: `Founding capital, ${state.company.name}` });
   return state;
@@ -80,6 +128,10 @@ export class Game {
   readonly vpaths = new Map<Id, Path>();
   readonly segHint = new Map<Id, number>();
   readonly missNotice = new Map<Id, number>();
+  /** simulation events some enabled workflow listens to (see automation/events.ts) */
+  readonly autoWants = new Set<string>();
+  /** true while an automation's command runs, so it is not recorded as the player's change */
+  automationActing = false;
   private readonly tripIndex = new Map<number, Trip>();
   private readonly travelCache = new Map<string, number>();
   private vlist: Vehicle[] | null = null;
@@ -101,7 +153,7 @@ export class Game {
   readonly region: Region;
 
   constructor(state: GameState, region: Region) {
-    this.state = state;
+    this.state = upgradeState(state);
     this.region = region;
     this.geo = new Geo(region);
     this.traffic = new SimulatedTraffic(region.graph, region.demand, state.clock.startWeekday);
@@ -111,8 +163,11 @@ export class Game {
     this.reconcileTerritory();
     for (const r of Object.values(state.routes)) this.rebuildDerived(r.id);
     this.reindexTrips();
+    // missed-departure notices are throttled per line; recover the throttle from the saved notices
+    for (const n of state.notifications) if (n.ref?.kind === 'route' && n.title.includes(' missed the ')) this.missNotice.set(n.ref.id, n.t);
     const pax = paxTotals(state);
     this.counters.generated = pax.waiting + pax.onboard;
+    refreshWants(this);
     this.refreshQuality();
   }
 
@@ -202,11 +257,20 @@ export class Game {
     const t = this.t;
     for (const r of Object.values(this.state.routes)) this.ensureTrips(r.id);
     dispatch(this);
-    if (this.demand.dirty || this.demand.slot !== Math.floor(t / HOUR)) this.demand.refresh(this, t);
+    // demand inputs depend only on saved state and the hour slot, so a loaded game rebuilds the same rates
+    const slot = Math.floor(t / HOUR);
+    if (this.demand.dirty || this.demand.slot !== slot) {
+      this.refreshQuality();
+      this.demand.refresh(this, slot * HOUR);
+    }
     generatePassengers(this);
     abandonAndReplan(this);
     minuteVehicles(this);
-    if (t % 600 === 0) checkObjectives(this);
+    processAutomation(this);
+    if (t % 600 === 0) {
+      checkObjectives(this);
+      checkUnlock(this);
+    }
     if (t % 1800 === 0) this.pruneTrips();
     this.emit('minute', t);
   }
@@ -214,7 +278,7 @@ export class Game {
   private hour() {
     const t = this.t;
     flushHour(this.state, t - 1, `${hhmm(t - HOUR)}–${hhmm(t)}`);
-    this.refreshQuality();
+    sampleWaiting(this.state);
     if (Math.floor((t % DAY) / HOUR) === 4) compactLedger(this.state);
     this.emit('hour', t);
   }
@@ -223,9 +287,13 @@ export class Game {
     const t = this.t;
     const ended = t / DAY - 1;
     closeDay(this, ended);
+    this.demand.slot = -1; // reputation moved: re-rate demand
+    closeAnalyticsDay(this.state, ended);
+    closeControlDay(this, ended);
     const c = this.state.company;
     if (c.status === 'insolvent' && c.redDays > ECON.graceDays + 7) this.bankrupt('The company stayed insolvent for too long and has been wound up.');
     this.dailyCosts();
+    simEvent(this, 'day', daySummary(this, ended) as Record<string, number>);
     this.emit('day', ended);
   }
 
@@ -346,7 +414,7 @@ export class Game {
   private refreshQuality() {
     this.quality = new Map();
     for (const r of Object.values(this.state.routes)) {
-      const w = routeWindow(this.state, r.id, 3);
+      const w = routeWindow(this.state, r.id, 3, Math.floor(this.t / HOUR)); // complete hours only
       this.quality.set(r.id, { load: w.load ?? 0.5, ontime: w.ontime ?? 1 });
     }
   }
@@ -644,13 +712,16 @@ export class Game {
     return LINE_COLOURS.find((c) => !used.has(c)) ?? LINE_COLOURS[Object.keys(this.state.routes).length % LINE_COLOURS.length];
   }
 
-  /** Validate a line definition without changing anything (used by the editor preview). */
-  /** Validate and route a line without changing the game. Pass `editing` when previewing changes to an existing line. */
-  previewRoute(def: RouteDef, editing?: Id): { patterns: Pattern[]; profiles: RunProfile[]; problems: string[]; warnings: string[] } {
+  /**
+   * Validate and route a line without changing the game. Pass `editing` when previewing changes to
+   * an existing line, and `stops` to try stops at hypothetical positions (route diagnostics).
+   */
+  previewRoute(def: RouteDef, editing?: Id, opts: { stops?: Record<Id, Stop> } = {}): { patterns: Pattern[]; profiles: RunProfile[]; problems: string[]; warnings: string[] } {
     const base = editing ? this.state.routes[editing] : undefined;
     const r = this.routeFromDef(base ? base.id : 'preview', def, base);
-    const problems = this.routeProblems(r);
-    const patterns = r.stops.length >= 2 ? buildPatterns(this.state, this.region, this.geo, r) : [];
+    const st = opts.stops ? { ...this.state, stops: { ...this.state.stops, ...opts.stops } } : this.state;
+    const problems = this.routeProblems(r, st);
+    const patterns = r.stops.length >= 2 ? buildPatterns(st, this.region, this.geo, r) : [];
     for (const p of patterns) problems.push(...p.problems);
     const warnings = [...new Set(patterns.flatMap((p) => p.warnings))];
     const { wd, we } = this.profileDays();
@@ -675,11 +746,11 @@ export class Game {
     };
   }
 
-  private routeProblems(r: Route): string[] {
+  private routeProblems(r: Route, st: GameState = this.state): string[] {
     const out: string[] = [];
     if (r.stops.length < 2) out.push('A line needs at least two stops.');
     if (r.kind === 'loop' && r.stops.length < 3) out.push('A loop needs at least three stops.');
-    for (const id of [...r.stops, ...(r.returnStops ?? [])]) if (!this.state.stops[id]) out.push('A stop on this line no longer exists.');
+    for (const id of [...r.stops, ...(r.returnStops ?? [])]) if (!st.stops[id]) out.push('A stop on this line no longer exists.');
     for (let i = 0; i + 1 < r.stops.length; i++) if (r.stops[i] === r.stops[i + 1]) out.push('The same stop appears twice in a row.');
     if (new Set(r.stops).size !== r.stops.length) out.push('Each stop can only appear once per direction.');
     const dup = Object.values(this.state.routes).find((x) => x.id !== r.id && x.number === r.number);
@@ -725,8 +796,21 @@ export class Game {
       if (ttChanged) this.regenerateTrips(id);
     }
     if (r.suspended !== old.suspended && r.suspended) for (const v of this.vehicleList()) if (v.route === id && v.status === 'layover' && v.trip === null) sendToDepot(this, v);
+    if (r.suspended !== old.suspended) this.notePlayerChange(`route:${id}`, 'suspend_line', `suspended:${r.suspended}`);
+    if (ttChanged) this.notePlayerChange(`route:${id}`, 'set_headway', 'timetable:player');
     this.changed();
     return ok(undefined);
+  }
+
+  /**
+   * Remember a change the player made by hand, so automations do not quietly undo it: for 24
+   * game hours an automation that wants the opposite is blocked and says why.
+   */
+  private notePlayerChange(target: string, kind: string, key: string) {
+    if (this.automationActing) return;
+    const a = this.state.automation;
+    if (!a.order.length) return;
+    a.ledger.push({ t: this.t, wf: 'player', target, kind, key, cost: 0 });
   }
 
   setTimetable(id: Id, tt: Timetable): Result {
@@ -783,6 +867,128 @@ export class Game {
     return Object.values(this.state.vehicles).filter((v) => v.depot === id).length;
   }
 
+  /** Can this bus move to depot `depotId`, and what happens if it does? */
+  depotMovePlan(id: Id, depotId: Id): Result<{ now: boolean; text: string; km: number | null }> {
+    const v = this.state.vehicles[id];
+    const d = this.state.depots[depotId];
+    if (!v) return fail('That bus no longer exists.');
+    if (!d) return fail('That depot no longer exists.');
+    if (v.depot === depotId) return fail(`${v.fleetNo} is already based at ${d.name}.`);
+    if (v.sell) return fail('This bus is being sold.');
+    if (this.depotUse(depotId) >= d.capacity) return fail(`${d.name} is full (${d.capacity} buses). Expand it first.`);
+    if (v.status === 'maintenance') return fail(`${v.fleetNo} is in the workshop until ${hhmm(v.until)}. Move it afterwards.`);
+    if (v.status === 'preparing') return fail(`${v.fleetNo} is getting ready for a trip. Move it once it is back.`);
+    const from = this.state.depots[v.depot];
+    let km: number | null = null;
+    if (from) {
+      const leg = routeLeg(this.region.graph, from.node, d.node);
+      if (leg) km = leg.metres / 1000;
+    }
+    const parked = v.status === 'parked' && v.pos.kind === 'depot';
+    const line = v.route ? this.state.routes[v.route] : null;
+    const text = parked
+      ? `${v.fleetNo} drives empty from ${from?.name ?? 'its depot'} to ${d.name}${km !== null ? ` (${km.toFixed(1)} km)` : ''}${line ? `, and starts its line ${line.number} work from there` : ''}.`
+      : v.status === 'to_depot'
+        ? `${v.fleetNo} heads to ${d.name} instead of ${from?.name ?? 'its old depot'}.`
+        : `${v.fleetNo} keeps working${line ? ` on line ${line.number}` : ''} and returns to ${d.name} from now on.`;
+    return ok({ now: parked || v.status === 'to_depot', text, km });
+  }
+
+  /** Base a bus at another depot. A parked bus drives there on the road; others go there next time. */
+  moveToDepot(id: Id, depotId: Id): Result<'driving' | 'later'> {
+    const err = this.requireActive();
+    if (err) return fail(err);
+    const plan = this.depotMovePlan(id, depotId);
+    if (!plan.ok) return plan;
+    const res = transferDepot(this, this.state.vehicles[id], depotId);
+    this.notePlayerChange(`vehicle:${id}`, 'move_depot', `depot:${depotId}`);
+    this.changed();
+    return ok(res);
+  }
+
+  // ── extra departures
+
+  /**
+   * Plan an extra departure on a line now, outside the timetable. Only a bus with nothing to do
+   * can run it: one of the line's buses waiting at a terminus or parked, or a spare bus (on no
+   * line), which goes back to its depot afterwards. Nothing changes until `dispatchExtra`.
+   */
+  extraPlan(route: Id, opts: { pat?: number; vehicle?: Id } = {}): Result<ExtraPlan> {
+    const err = this.requireActive();
+    if (err) return fail(err);
+    const s = this.state;
+    const r = s.routes[route];
+    if (!r) return fail('That line no longer exists.');
+    if (r.suspended) return fail(`Line ${r.number} is suspended.`);
+    const pats = (this.patterns.get(route) ?? []).filter((p) => p.valid);
+    if (!pats.length) return fail(`Line ${r.number} has no drivable route.`);
+    const now = this.t;
+    let choices = opts.pat !== undefined ? pats.filter((p) => p.index === opts.pat) : pats;
+    if (!choices.length) return fail('That direction does not exist on this line.');
+    // the direction with the most people waiting along it
+    const waitingOn = (p: Pattern) => p.stops.slice(0, -1).reduce((n, id) => n + waitingAt(s, id), 0);
+    choices = [...choices].sort((a, b) => waitingOn(b) - waitingOn(a) || a.index - b.index);
+    const pat = choices[0];
+    const startNode = pat.path.nodes[0];
+    let opt: ExtraOption | null = null;
+    if (opts.vehicle) {
+      const v = s.vehicles[opts.vehicle];
+      if (!v) return fail('That bus no longer exists.');
+      if (v.route && v.route !== route) return fail(`${v.fleetNo} runs on line ${s.routes[v.route]?.number ?? '?'}. Move it to line ${r.number} first.`);
+      opt = extraOption(this, v, startNode, now);
+      if (!opt) return fail(`${v.fleetNo} ${busyReason(v)}.`);
+    } else {
+      for (const v of this.vehicleList()) {
+        if (v.route !== route && v.route !== null) continue;
+        const o = extraOption(this, v, startNode, now);
+        if (!o) continue;
+        // prefer the line's own buses when they are about as quick
+        const score = o.ready + (v.route === route ? 0 : 120);
+        if (!opt || score < opt.ready + (opt.v.route === route ? 0 : 120)) opt = o;
+      }
+      if (!opt) return fail(`No bus is free for line ${r.number}: its buses are all busy and no spare bus is parked at a depot.`);
+    }
+    if (opt.ready > now + 45 * 60) return fail(`The nearest free bus could only start at ${hhmm(opt.ready)}.`);
+    let dep = Math.ceil((opt.ready + 30) / 60) * 60;
+    const list = s.trips[route] ?? [];
+    while (list.some((x) => x.pat === pat.index && x.dep === dep)) dep += 60;
+    const sch = this.schedule(route, pat.index, dep);
+    const tripSec = sch ? sch[sch.length - 1] : (pat.path.length / 6);
+    const m = MODEL[opt.v.model];
+    const prep = opt.from === 'depot' ? PREP : 0;
+    const spare = opt.v.route === null;
+    // driver time: preparation, the empty run, the trip, and (a spare bus) the run back; energy for the distance
+    const busSec = prep + opt.deadhead + tripSec + (spare ? opt.deadhead : 0) + (dep - opt.ready);
+    const km = pat.path.length / 1000 + ((opt.deadhead * 7) / 1000) * (spare ? 2 : 1);
+    const cost = Math.round((busSec / 3600) * ECON.driverPerHour + km * m.energyPerKm * (m.electric ? ECON.electricPrice : ECON.fuelPrice));
+    const first = s.stops[pat.stops[0]]?.name ?? 'the first stop';
+    const last = s.stops[pat.stops[pat.stops.length - 1]]?.name ?? 'the last stop';
+    return ok({
+      route, pat: pat.index, vehicle: opt.v.id, fleetNo: opt.v.fleetNo, from: opt.from, dep, spare,
+      minutes: Math.round(tripSec / 60), waiting: waitingOn(pat), cost, first, last,
+      text: `${opt.v.fleetNo} ${opt.from === 'depot' ? 'leaves the depot' : 'leaves the terminus'} and runs an extra line ${r.number} trip from ${first} at ${hhmm(dep)} to ${last} (${Math.round(tripSec / 60)} min)${spare ? ', then returns to the depot' : ', then carries on with the timetable'}.`,
+    });
+  }
+
+  /** Run the extra departure `extraPlan` describes. `src`: 'player' or the workflow that asked. */
+  dispatchExtra(route: Id, opts: { pat?: number; vehicle?: Id; src?: string } = {}): Result<ExtraPlan & { trip: number }> {
+    const plan = this.extraPlan(route, opts);
+    if (!plan.ok) return plan;
+    const p = plan.value;
+    const v = this.state.vehicles[p.vehicle];
+    const pattern = this.pattern(route, p.pat)!;
+    const startNode = pattern.path.nodes[0];
+    const opt = extraOption(this, v, startNode, this.t)!;
+    const trip: Trip = { id: ++this.state.counters.trip, route, pat: p.pat, dep: p.dep, veh: null, state: TripState.Planned, extra: opts.src ?? 'player' };
+    const list = (this.state.trips[route] ??= []);
+    list.push(trip);
+    list.sort((a, b) => a.dep - b.dep || a.pat - b.pat);
+    this.tripIndex.set(trip.id, trip);
+    startExtra(this, opt, trip, startNode);
+    this.changed();
+    return ok({ ...p, trip: trip.id });
+  }
+
   // ── fleet
 
   buyVehicle(modelId: string, depotId: Id): Result<Id> {
@@ -830,12 +1036,15 @@ export class Game {
     return Math.round(v.price * ECON.resaleNew * (0.55 + 0.45 * v.condition) * Math.max(0.3, 1 - ageDays * 0.004));
   }
 
-  assignVehicle(id: Id, route: Id | null): Result {
+  /** `src`: who asked ('player' or a workflow id), kept in the assignment history. */
+  assignVehicle(id: Id, route: Id | null, src = 'player'): Result {
     const v = this.state.vehicles[id];
     if (!v) return fail('That bus no longer exists.');
     if (route && !this.state.routes[route]) return fail('That line no longer exists.');
     if (v.sell) return fail('This bus is being sold.');
     if (v.route === route) return ok(undefined);
+    recAssignment(this.state, id, v.route, route, src);
+    if (src === 'player') this.notePlayerChange(`vehicle:${id}`, 'assign_vehicle', `route:${route ?? 'none'}`);
     if (v.route) {
       const old = this.state.routes[v.route];
       if (old) old.vehicles = old.vehicles.filter((x) => x !== id);
@@ -939,6 +1148,7 @@ export class Game {
     if (!Number.isFinite(fare)) return fail('Invalid fare.');
     this.state.company.fare = Math.round(Math.max(ECON.fareMin, Math.min(ECON.fareMax, fare)) * 20) / 20;
     this.demand.slot = -1;
+    this.notePlayerChange('company:fare', 'set_fare', `fare:${this.state.company.fare}`);
     this.changed();
     return ok(undefined);
   }
@@ -953,6 +1163,156 @@ export class Game {
   setSettings(patch: Partial<GameState['settings']>) {
     Object.assign(this.state.settings, patch);
     this.changed();
+  }
+
+  // ───────────────────────────────────────── Automation Studio
+
+  workflowList(): Workflow[] {
+    const a = this.state.automation;
+    return a.order.map((id) => a.workflows[id]).filter(Boolean);
+  }
+
+  validateWorkflow(id: string): Validation | null {
+    const wf = this.state.automation.workflows[id];
+    return wf ? validation(this, wf) : null;
+  }
+
+  createWorkflow(init: Parameters<typeof auto.createWorkflow>[1]): Result<string> {
+    const r = auto.createWorkflow(this, init);
+    if (r.ok) this.changed();
+    return r;
+  }
+
+  updateWorkflow(id: string, patch: auto.WorkflowPatch): Result {
+    const r = auto.updateWorkflow(this, id, patch);
+    if (r.ok) this.changed();
+    return r;
+  }
+
+  deleteWorkflow(id: string): Result {
+    const r = auto.deleteWorkflow(this, id);
+    if (r.ok) this.changed();
+    return r;
+  }
+
+  duplicateWorkflow(id: string): Result<string> {
+    const r = auto.duplicateWorkflow(this, id);
+    if (r.ok) this.changed();
+    return r;
+  }
+
+  reorderWorkflow(id: string, to: number): Result {
+    const r = auto.reorderWorkflow(this, id, to);
+    if (r.ok) this.changed();
+    return r;
+  }
+
+  clearWorkflowMemory(id: string): Result {
+    const r = auto.clearMemory(this, id);
+    if (r.ok) this.changed();
+    return r;
+  }
+
+  /** A fresh node id for the editor (ids are never reused). */
+  newNodeId(): string {
+    return auto.newNodeId(this);
+  }
+
+  /** Run now from the editor. `test`: nothing changes in the game; actions are described only. */
+  runWorkflowNow(id: string, opts: { test: boolean; node?: string }): Result<RunRecord> {
+    const wf = this.state.automation.workflows[id];
+    if (!wf) return fail('That workflow no longer exists.');
+    if (wf.kind === 'function') return fail('A function runs when a workflow uses it. Test the workflow that uses it.');
+    const run = runNow(this, wf, opts);
+    this.changed();
+    return ok(run);
+  }
+
+  /**
+   * Test an unsaved draft from the editor (a copy of a workflow with the player's edits). Nothing
+   * in the game changes; the run is returned, not stored. `node` picks which trigger to start from.
+   */
+  testWorkflowDraft(draft: Workflow, node?: string): RunRecord {
+    return runNow(this, structuredClone(draft), { test: true, node, draft: true });
+  }
+
+  approveProposal(id: number): Result<string> {
+    const r = approveProposal(this, id);
+    this.changed();
+    return r.ok ? ok(r.effect) : fail(r.error);
+  }
+
+  declineProposal(id: number): Result {
+    if (!declineProposal(this, id)) return fail('That suggestion is no longer open.');
+    this.changed();
+    return ok(undefined);
+  }
+
+  /** Pause or resume every workflow. */
+  setAutomationPaused(paused: boolean) {
+    this.state.automation.paused = paused;
+    refreshWants(this);
+    this.changed();
+  }
+
+  // ───────────────────────────────────────── Network Control
+
+  /** The unlock card was read (`seen`), and the guided tour step (-1 = off, 99 = finished). */
+  setNetworkIntro(patch: { seen?: boolean; tour?: number }) {
+    const c = this.state.control;
+    if (patch.seen !== undefined) c.introSeen = patch.seen;
+    if (patch.tour !== undefined) c.tour = patch.tour;
+    this.changed();
+  }
+
+  /** Add or update a custom metric. The expression must only use known measures. */
+  saveMetric(m: Omit<CustomMetric, 'id'> & { id?: string }): Result<string> {
+    const c = this.state.control;
+    const name = m.name.trim().slice(0, 40);
+    if (!name) return fail('Give the metric a name.');
+    const chk = checkExpr(m.expr, METRIC_VARIABLES);
+    if (!chk.ok) return fail(chk.error);
+    if (!chk.vars.length) return fail('A metric needs at least one measure, for example revenue / busHours.');
+    const existing = m.id ? c.metrics.find((x) => x.id === m.id) : undefined;
+    if (!existing && c.metrics.length >= 30) return fail('You can keep up to 30 metrics. Delete one first.');
+    const def: CustomMetric = { id: existing?.id ?? `m${++c.counter}`, name, expr: m.expr.trim(), unit: m.unit, decimals: m.decimals, better: m.better };
+    if (existing) Object.assign(existing, def);
+    else c.metrics.push(def);
+    this.changed();
+    return ok(def.id);
+  }
+
+  deleteMetric(id: string): Result {
+    const c = this.state.control;
+    if (!c.metrics.some((m) => m.id === id)) return fail('That metric no longer exists.');
+    c.metrics = c.metrics.filter((m) => m.id !== id);
+    for (const r of c.reports) r.columns = r.columns.filter((x) => x !== id);
+    this.changed();
+    return ok(undefined);
+  }
+
+  saveReport(r: Omit<SavedReport, 'id' | 'created'> & { id?: string }): Result<string> {
+    const c = this.state.control;
+    const name = r.name.trim().slice(0, 60);
+    if (!name) return fail('Give the report a name.');
+    if (r.kind !== 'od' && !r.query) return fail('A report needs a query.');
+    if (r.kind === 'compare' && (!r.compare || r.compare.groupBy !== r.query?.groupBy)) return fail('Both periods of a comparison need the same grouping.');
+    if (r.kind === 'od' && !r.od) return fail('A journeys report needs its filters.');
+    const existing = r.id ? c.reports.find((x) => x.id === r.id) : undefined;
+    if (!existing && c.reports.length >= 40) return fail('You can keep up to 40 reports. Delete one first.');
+    const def: SavedReport = { ...structuredClone(r), id: existing?.id ?? `rep${++c.counter}`, name, created: existing?.created ?? this.t };
+    if (existing) Object.assign(existing, def);
+    else c.reports.push(def);
+    this.changed();
+    return ok(def.id);
+  }
+
+  deleteReport(id: string): Result {
+    const c = this.state.control;
+    if (!c.reports.some((m) => m.id === id)) return fail('That report no longer exists.');
+    c.reports = c.reports.filter((m) => m.id !== id);
+    this.changed();
+    return ok(undefined);
   }
 
   takeLoan(amount: number): Result {

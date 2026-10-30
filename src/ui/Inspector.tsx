@@ -16,6 +16,8 @@ import { describeTimetable } from '../game/timetable.ts';
 import { waitingAt } from '../game/passengers.ts';
 import { distanceM, type LngLat } from '../game/world/graph.ts';
 import { POI_LABEL } from '../game/world/region.ts';
+import { RouteCheck, DiagnosticButton } from './RouteCheck.tsx';
+import { lineDiagnostics } from '../game/diagnostics.ts';
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const km = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
@@ -23,6 +25,7 @@ const km = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.r
 export function Inspector() {
   const selection = useUI((s) => s.selection);
   const draft = useUI((s) => s.draft);
+  const routeCheck = useUI((s) => s.routeCheck);
   const [shown, setShown] = useState(selection);
   const [closing, setClosing] = useState(false);
   useEffect(() => {
@@ -38,6 +41,14 @@ export function Inspector() {
       return () => clearTimeout(t);
     }
   }, [selection]); // eslint-disable-line react-hooks/exhaustive-deps
+  // a route check (interactive diagnostic) replaces the selection content; for the line being
+  // drafted there is no selection, so it opens the card on its own
+  if (routeCheck && (routeCheck.route === null || (selection?.kind === 'line' && selection.id === routeCheck.route)))
+    return (
+      <aside className={`card inspector ${draft ? 'with-tray' : ''}`} key={`check-${routeCheck.route ?? 'draft'}`} aria-label="Route check">
+        <RouteCheck target={routeCheck} />
+      </aside>
+    );
   if (!shown) return null;
   const key = `${shown.kind}-${shown.id}`;
   return (
@@ -94,6 +105,68 @@ export function statusPill(v: Vehicle): { text: string; pill: string; cls: strin
 
 // ───────────────────────────────────────────── vehicle
 
+/** Home depot, with a move to another depot (asks first, saying what will happen). */
+function DepotMove({ game, v }: { game: Game; v: Vehicle }) {
+  const [to, setTo] = useState<string | null>(null);
+  useEffect(() => setTo(null), [v.id]);
+  const depots = Object.values(game.state.depots);
+  const depot = game.state.depots[v.depot];
+  if (depots.length < 2) {
+    return (
+      <div className="row faint" style={{ fontSize: 12, minHeight: 22 }}>
+        <span><Warehouse size={13} weight="bold" /> {depot?.name ?? 'No depot'}</span>
+      </div>
+    );
+  }
+  const plan = to ? game.depotMovePlan(v.id, to) : null;
+  return (
+    <>
+      <div className="row" style={{ gap: 8, marginTop: 6 }}>
+        <select
+          className="select grow"
+          value={to ?? v.depot}
+          disabled={!!v.sell}
+          onChange={(e) => setTo(e.target.value === v.depot ? null : e.target.value)}
+          aria-label="Home depot"
+        >
+          {depots.map((d) => {
+            const used = game.depotUse(d.id);
+            const full = d.id !== v.depot && used >= d.capacity;
+            return (
+              <option key={d.id} value={d.id} disabled={full}>
+                {d.id === v.depot ? 'Based at ' : 'Move to '}{d.name} · {used}/{d.capacity} spaces{full ? ' · full' : ''}
+              </option>
+            );
+          })}
+        </select>
+      </div>
+      {plan && (
+        <div className="depot-move">
+          <div>{plan.ok ? plan.value.text : plan.error}</div>
+          <div className="row" style={{ gap: 6, marginTop: 8 }}>
+            <button
+              className="btn primary sm"
+              disabled={!plan.ok}
+              onClick={() => {
+                const name = game.state.depots[to!]?.name ?? 'the depot';
+                const r = game.moveToDepot(v.id, to!);
+                if (r.ok) {
+                  useUI.getState().notify(r.value === 'driving' ? `Bus ${v.fleetNo} is driving to ${name}` : `Bus ${v.fleetNo} is now based at ${name}`, 'good');
+                  if (r.value === 'driving') focusVehicle(v.id);
+                } else useUI.getState().notify(r.error, 'bad');
+                setTo(null);
+              }}
+            >
+              <Check size={14} weight="bold" /> Move bus
+            </button>
+            <button className="btn sm" onClick={() => setTo(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function VehicleInspector({ id }: { id: string }) {
   const game = useGameUpdates(5);
   const following = useUI((s) => s.following);
@@ -104,6 +177,7 @@ function VehicleInspector({ id }: { id: string }) {
   const m = MODEL[v.model];
   const line = v.route ? game.state.routes[v.route] : null;
   const st = statusPill(v);
+  if (v.status === 'to_depot' && game.state.depots[v.depot]) st.text = `Driving to ${game.state.depots[v.depot].name}`;
   const load = v.load / m.capacity;
   const isFollowing = following === v.id;
   const depot = game.state.depots[v.depot];
@@ -170,9 +244,7 @@ function VehicleInspector({ id }: { id: string }) {
               ))}
             </select>
           </div>
-          <div className="row faint" style={{ fontSize: 12, minHeight: 22 }}>
-            <span><Warehouse size={13} weight="bold" /> {depot?.name ?? 'No depot'}</span>
-          </div>
+          <DepotMove game={game} v={v} />
         </div>
         <div className="grid3">
           <Kpi value={pct(v.condition)} label="Condition" tone={v.condition < 0.6 ? 'coral' : v.condition < 0.8 ? 'amber' : undefined} />
@@ -231,7 +303,10 @@ function LineInspector({ id }: { id: string }) {
   const inService = buses.filter((v) => v.status === 'in_service' || v.status === 'at_stop' || v.status === 'layover' || v.status === 'to_route' || v.status === 'preparing').length;
   const spare = Object.values(game.state.vehicles).filter((v) => !v.route && !v.sell);
   const problems = [...new Set(pats.flatMap((p) => p.problems))];
-  const warnings = [...new Set(pats.flatMap((p) => p.warnings))];
+  // route warnings as structured diagnostics: each one opens a route check
+  const diags = lineDiagnostics(game, id);
+  const legDiags = diags.filter((d) => d.kind === 'detour' || d.kind === 'contraflow');
+  const busDiag = diags.find((d) => d.kind === 'insufficient-buses');
   const headway = game.headwayAt(id, 0, game.t);
   return (
     <>
@@ -257,13 +332,13 @@ function LineInspector({ id }: { id: string }) {
           <span className="v num muted">{headway ? `every ${headway} min now` : 'no service now'}</span>
         </div>
         {problems.map((p) => <div key={p} className="issue bad"><Warning size={16} weight="fill" />{p}</div>)}
-        {short && !r.suspended && (
-          <div className="issue">
-            <Warning size={16} weight="fill" />
-            Line {r.number} needs {req!.peak} bus{req!.peak > 1 ? 'es' : ''} at {req!.peakLabel} for this timetable. {assigned ? `Only ${assigned} ${assigned > 1 ? 'are' : 'is'} assigned` : 'None are assigned'}, so departures will be missed.
-          </div>
+        {short && !r.suspended && busDiag && <DiagnosticButton d={busDiag} onOpen={() => useUI.getState().openModal({ kind: 'timetable', route: id })} />}
+        {legDiags.slice(0, 2).map((d) => <DiagnosticButton key={d.id} d={d} onOpen={() => useUI.getState().openRouteCheck({ route: id, pat: d.pat ?? 0, leg: d.leg ?? 0 })} />)}
+        {legDiags.length > 2 && (
+          <button className="link dg-more" onClick={() => useUI.getState().openRouteCheck({ route: id, pat: legDiags[2].pat ?? 0, leg: legDiags[2].leg ?? 0 })}>
+            {legDiags.length - 2} more route warning{legDiags.length > 3 ? 's' : ''} on this line
+          </button>
         )}
-        {warnings.slice(0, 2).map((p) => <div key={p} className="issue info"><Path size={16} weight="bold" />{p}</div>)}
         <div className="grid3">
           <Kpi value={w.boardings.toLocaleString()} label="Riders, 24 h" />
           <Kpi value={w.ontime === null ? '–' : pct(w.ontime)} label="On time" tone={w.ontime !== null && w.ontime < 0.75 ? 'amber' : undefined} />

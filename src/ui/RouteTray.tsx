@@ -5,6 +5,7 @@ import { useGameRev } from './hooks.ts';
 import { LINE_COLOURS, ECON } from '../game/content.ts';
 import { activeSeq, commitDraft, moveStop, removeStopAt, useDraftPreview } from './routeDraft.ts';
 import { focusStop } from './camera.ts';
+import { DiagnosticButton } from './RouteCheck.tsx';
 
 const km = (k: number) => (k ? `${k.toFixed(1)} km` : '–');
 
@@ -34,6 +35,8 @@ export function RouteTray() {
   const changed = !editing || JSON.stringify([editing.stops, editing.returnStops, editing.kind, editing.via, editing.number, editing.name, editing.colour]) !== JSON.stringify([draft.stops, draft.kind === 'linear' ? draft.returnStops : null, draft.kind, draft.via, draft.number, draft.name, draft.colour]);
   const affordable = !!editing || game.state.finance.balance >= ECON.routeFee;
   const vias = Object.values(draft.via).reduce((a, v) => a + v.length, 0);
+  // route warnings as diagnostics: each opens a route check on the draft (fixes go through the draft's undo)
+  const diags = preview && n >= 2 ? preview.patterns.flatMap((p) => p.diagnostics ?? []).filter((d) => d.kind === 'detour' || d.kind === 'contraflow') : [];
   return (
     <>
       <div className="card route-side" role="region" aria-label="Line stops">
@@ -94,10 +97,10 @@ export function RouteTray() {
             <button className="link" onClick={() => edit(() => ({ via: {} }))}>Clear</button>
           </div>
         )}
-        {preview && n >= 2 && (preview.problems.length > 0 || preview.warnings.length > 0) && (
+        {preview && n >= 2 && (preview.problems.length > 0 || diags.length > 0) && (
           <div className="rs-issues">
             {preview.problems.map((p) => <div key={p} className="issue bad"><Warning size={14} weight="fill" />{p}</div>)}
-            {preview.warnings.slice(0, 3).map((p) => <div key={p} className="issue info"><Info size={14} weight="bold" />{p}</div>)}
+            {diags.slice(0, 3).map((d) => <DiagnosticButton key={d.id} d={d} size={14} onOpen={() => useUI.getState().openRouteCheck({ route: null, pat: d.pat ?? 0, leg: d.leg ?? 0 })} />)}
           </div>
         )}
       </div>

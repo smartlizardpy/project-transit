@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Cursor, Path, Graph, TrafficSignal, Fire, ListBullets, Bus, ChartLineUp, Plus, Minus, Cube, House, Info, MapPinPlus, Garage, MapTrifold, Trophy } from '@phosphor-icons/react';
+import { Cursor, Path, Graph, TrafficSignal, Fire, ListBullets, Bus, ChartLineUp, Plus, Minus, Cube, House, Info, MapPinPlus, Garage, MapTrifold, Trophy, ChartBar, Lock } from '@phosphor-icons/react';
 import { useUI, type Tool, type Panel } from '../state/store.ts';
 import { Tip } from './primitives.tsx';
 import { mapRuntime } from '../map/runtime.ts';
@@ -32,6 +32,8 @@ export function ToolRail() {
       <Tip label={label} k={k} />
     </button>
   );
+  const game = useGameUpdates(0.5);
+  const unlocked = !!game?.state.control.unlocked;
   return (
     <div className="card rail" role="toolbar" aria-label="Map tools">
       {TOOLS.map((t) => (
@@ -67,6 +69,11 @@ export function ToolRail() {
       {panelBtn('fleet', <Bus size={20} weight="bold" />, 'Fleet & depots', 'G')}
       {panelBtn('finance', <ChartLineUp size={20} weight="bold" />, 'Finances', 'M')}
       {panelBtn('company', <Trophy size={20} weight="bold" />, 'Company & goals', 'C')}
+      <button className={`rail-btn has-tip ${panel === 'network' ? 'panel-on' : ''}`} onClick={() => openPanel(panel === 'network' ? null : 'network')} aria-label="Network Control">
+        <ChartBar size={20} weight="bold" />
+        {!unlocked && <span className="nc-lockdot"><Lock size={9} weight="fill" /></span>}
+        <Tip label="Network Control" k="K" hint={unlocked ? 'Passengers, lines, fleet, reports and automation' : 'Opens after 30 operating days at level 3'} />
+      </button>
     </div>
   );
 }

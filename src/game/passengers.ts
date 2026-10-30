@@ -13,6 +13,7 @@ import type { GameState, Id, Leg, PaxGroup, Vehicle } from './types.ts';
 import { ECON, MODEL, STOP_RULES } from './content.ts';
 import { accrueFare } from './finance.ts';
 import { recordTrip } from './progress.ts';
+import { recAlight, recBoard, recFare, recGaveUp, recLeftBehind } from './analytics/record.ts';
 import { hourOfDay } from './time.ts';
 
 export const PURPOSES = ['work', 'education', 'shopping', 'leisure', 'other'] as const;
@@ -453,6 +454,7 @@ export function abandonAndReplan(game: Game) {
       if (t - g.tl > patience(game, g)) {
         list.splice(i, 1);
         g.w += t - g.tl;
+        recGaveUp(state, stop, g.legs[g.leg]?.r, g.n);
         recordTrip(game, g, false);
       }
     }
@@ -547,6 +549,7 @@ export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number): Stop
       recordTrip(game, g, true);
     }
   }
+  if (ev.alight) recAlight(state, stop, ev.alight);
   v.load = onboard.reduce((s, g) => s + g.n, 0);
   // 2. board (not at the end of a trip)
   if (!last) {
@@ -572,10 +575,12 @@ export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number): Stop
       if (headway > 12) waited = Math.min(waited, 240 + 12 * headway + Math.max(0, v.delay));
       part.w += Math.max(0, waited);
       part.dl += Math.abs(v.delay);
+      recBoard(state, stop, p.route, v, take, waited, part.leg > 0);
       if (!part.fr) {
         part.fr = p.route;
         const amt = state.company.fare * part.n;
         accrueFare(state, p.route, amt, part.n);
+        recFare(state, stop, p.route, v, amt);
       }
       part.tl = t;
       part.lb = (v.load + take) / cap;
@@ -588,6 +593,7 @@ export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number): Stop
       ev.board += take;
     }
     if (!waiting.length) delete state.pax.waiting[stop];
+    if (ev.leftBehind) recLeftBehind(state, stop, p.route, ev.leftBehind);
   }
   game.counters.boardings += ev.board;
   return ev;

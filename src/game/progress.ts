@@ -6,6 +6,7 @@ import { DAY, ECON, HOUR, MODELS } from './content.ts';
 import { dayTotals, post } from './finance.ts';
 import { distanceM, type LngLat } from './world/graph.ts';
 import type { Zone } from './world/region.ts';
+import { recJourney, recMissed, recTripDone } from './analytics/record.ts';
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 
@@ -60,6 +61,7 @@ export function recordTrip(game: Game, g: PaxGroup, completed: boolean) {
   hs.satN += g.n;
   for (let i = 0; i < 5; i++) hs.comp[i] += sc.comp[i] * g.n;
   hs.waitSum += (g.w / 60) * g.n;
+  recJourney(state, g, completed, sc);
   const route = g.fr ?? g.legs[0]?.r;
   if (route && state.routes[route]) {
     const rh = routeHour(state, route);
@@ -98,11 +100,13 @@ export function recordDeparture(state: GameState, route: Id, delaySec: number) {
     hs.ontime++;
     rh.ontime++;
   }
+  recTripDone(state, route, ok);
 }
 
 export function recordMissed(state: GameState, route: Id) {
   hourStats(state).missed++;
   routeHour(state, route).missed++;
+  recMissed(state, route);
 }
 
 export function recordLoad(state: GameState, route: Id, lf: number) {
@@ -162,11 +166,11 @@ export function window(state: GameState, hours = 24): Window {
   return w;
 }
 
-export function routeWindow(state: GameState, route: Id, hours = 24) {
-  const h0 = Math.floor(state.clock.t / HOUR) - hours + 1;
+export function routeWindow(state: GameState, route: Id, hours = 24, end = Math.floor(state.clock.t / HOUR) + 1) {
+  const h0 = end - hours;
   let boardings = 0, deps = 0, ontime = 0, missed = 0, loadSum = 0, loadN = 0, satSum = 0, satN = 0;
   for (const h of state.stats.routeHours[route] ?? []) {
-    if (h.h < h0) continue;
+    if (h.h < h0 || h.h >= end) continue;
     boardings += h.boardings;
     deps += h.deps;
     ontime += h.ontime;
@@ -497,7 +501,10 @@ export function checkObjectives(game: Game) {
       st.done = true;
       st.day = Math.floor(state.clock.t / DAY);
       if (def.reward.cash) post(state, { amt: def.reward.cash, cat: 'grant', memo: `${def.reward.label ?? 'Award'}: ${def.title}`, ref: def.id });
-      if (def.reward.rep) state.company.reputation = Math.min(100, state.company.reputation + def.reward.rep);
+      if (def.reward.rep) {
+        state.company.reputation = Math.min(100, state.company.reputation + def.reward.rep);
+        game.demand.slot = -1; // re-rate demand with the new reputation
+      }
       const parts = [def.reward.cash ? game.money(def.reward.cash) : '', def.reward.rep ? `+${def.reward.rep} reputation` : ''].filter(Boolean).join(' · ');
       notify(game, 'good', `Objective complete: ${def.title}`, parts || undefined);
       game.emit('objective', def.id);

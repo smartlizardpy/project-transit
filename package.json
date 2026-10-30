@@ -1,7 +1,7 @@
 {
   "name": "project-transit",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -23,6 +23,7 @@
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-process": "~2.4.0",
     "@tauri-apps/plugin-updater": "~2.14.1",
+    "@xyflow/react": "^12.12.0",
     "earcut": "^3.2.4",
     "maplibre-gl": "^6.16.0",
     "react": "^19.3.1",

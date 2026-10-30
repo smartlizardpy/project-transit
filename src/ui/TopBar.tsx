@@ -10,6 +10,7 @@ import { dayTotals } from '../game/finance.ts';
 import { session, useSession } from '../app/session.ts';
 import { focusDepot, focusLine, focusStop, focusVehicle, focusZone } from './camera.ts';
 import type { Game } from '../game/engine.ts';
+import { companyLevel } from '../game/control.ts';
 import type { Notification } from '../game/types.ts';
 
 export function useOutside(ref: React.RefObject<HTMLElement | null>, onClose: () => void, active: boolean) {
@@ -27,7 +28,8 @@ export function useOutside(ref: React.RefObject<HTMLElement | null>, onClose: ()
 }
 
 export function repTitle(rep: number) {
-  return rep < 25 ? 'New operator' : rep < 45 ? 'Local operator' : rep < 65 ? 'Trusted operator' : rep < 82 ? 'City operator' : 'Metropolitan operator';
+  const l = companyLevel(rep);
+  return `Level ${l.level} · ${l.title}`;
 }
 
 export function CompanyCard() {
