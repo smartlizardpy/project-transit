@@ -31,6 +31,12 @@ export interface Update {
 export const UPDATES: Update[] = [
   {
     date: '2026-10-30',
+    title: '0.3.0: Network Control and Automation Studio',
+    body: 'After 30 operating days at level 3, Network Control opens: passenger flows on the map, origin and destination tables, line and fleet figures, and reports. Automation Studio lets you build workflows from nodes that watch the network and suggest or make changes, with safety limits and a lab to test them on a copy of your company. Also new: clickable route warnings with fixes, and moving buses between depots.',
+    href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.3.0',
+  },
+  {
+    date: '2026-10-30',
     title: 'First public build: 0.2.1',
     body: 'Downloads for macOS, Windows and Linux. Installed copies update themselves. Also new: a read-only connection for AI agents to look at your saved games, and a clearer new-company form.',
     href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.2.1',
