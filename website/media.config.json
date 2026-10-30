@@ -124,9 +124,17 @@
         1600,
         1920
       ]
-    }
+    },
+    { "id": "automation-build-poster", "src": "video-automation-build-poster.jpg", "widths": [960, 1600] },
+    { "id": "automation-live-poster", "src": "video-automation-live-poster.jpg", "widths": [960, 1600] },
+    { "id": "automation-lab-poster", "src": "video-automation-lab-poster.jpg", "widths": [960, 1600] },
+    { "id": "automation-flows-poster", "src": "video-automation-flows-poster.jpg", "widths": [960, 1600] }
   ],
   "videos": [
+    { "id": "automation-build", "mp4": "video-automation-build.mp4", "webm": "video-automation-build.webm" },
+    { "id": "automation-live", "mp4": "video-automation-live.mp4", "webm": "video-automation-live.webm" },
+    { "id": "automation-lab", "mp4": "video-automation-lab.mp4", "webm": "video-automation-lab.webm" },
+    { "id": "automation-flows", "mp4": "video-automation-flows.mp4", "webm": "video-automation-flows.webm" },
     {
       "id": "hero",
       "mp4": "video-istanbul.mp4",

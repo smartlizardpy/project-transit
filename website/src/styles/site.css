@@ -893,6 +893,58 @@ a:hover {
   background: rgba(22, 28, 25, 0.92);
 }
 
+/* automation studio: clips, then the rules */
+
+.auto-grid {
+  display: grid;
+  gap: clamp(28px, 3.5vw, 44px) clamp(20px, 3vw, 36px);
+  margin-top: clamp(40px, 5vw, 64px);
+}
+
+.auto-clip {
+  align-content: start;
+  gap: 16px;
+}
+
+.auto-clip .film {
+  background: var(--card);
+}
+
+.auto-clip figcaption p,
+.auto-facts p {
+  margin-top: 6px;
+  color: var(--band-ink-2);
+}
+
+.auto-note {
+  margin-top: 20px;
+}
+
+.auto-facts {
+  display: grid;
+  gap: 28px clamp(20px, 3vw, 36px);
+  margin-top: clamp(36px, 5vw, 56px);
+  padding-top: clamp(28px, 4vw, 44px);
+  border-top: 1px solid rgba(246, 245, 239, 0.18);
+}
+
+@media (min-width: 900px) {
+  .auto-grid,
+  .auto-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.auto-unlock {
+  margin-top: 28px;
+  max-width: 62ch;
+  color: var(--band-ink-2);
+}
+
+.auto-unlock strong {
+  color: var(--band-ink);
+}
+
 .steps {
   display: grid;
   gap: 6px;

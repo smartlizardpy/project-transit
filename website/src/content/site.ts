@@ -29,6 +29,7 @@ export const STOPS = [
   { id: 'routes', name: 'Routes' },
   { id: 'living', name: 'Living city' },
   { id: 'company', name: 'Company' },
+  { id: 'automation', name: 'Automation' },
   { id: 'screenshots', name: 'Screenshots' },
   { id: 'development', name: 'Development' },
 ] as const;
