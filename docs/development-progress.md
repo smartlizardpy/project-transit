@@ -66,7 +66,7 @@ Last updated: 2026-10-30.
 | Detailed inspectors (bus, line, stop, depot, area) | ✅ | screenshots |
 | Line editor (loops, custom return, forced streets, undo/redo, warnings) | ✅ | play-through; `regressions.test.ts` (editing a line) |
 | Settings (autosave interval, edge pan, FPS) | ✅ | game menu → Settings |
-| Error and empty states | 🟡 | no-funds, no-depot, invalid stop, disconnected roads and missing tiles are all explained in the UI. Not every empty panel has been reviewed. |
+| Error and empty states | ✅ | `scripts/dev/edge-cases.mjs`: offline download error shown in the place picker; buying without a depot (banner + Place a depot); stops on service roads/water and outside the licence explained; insufficient funds states the cost and balance; disconnected roads reported by the line editor |
 | Keyboard shortcuts, fullscreen (F11), hide HUD (F10, ⇧U) | ✅ | `src/ui/keyboard.ts` |
 | Bridge rendering | ✅ | Golden Horn bridges inspected up close (metro, Galata, Atatürk); no deck walls |
 | Desktop app build | 🟡 | release build compiles; the native window was not inspected this session (screen locked) |
@@ -91,7 +91,9 @@ Last updated: 2026-10-30.
 |---|---|---|
 | İstanbul (Beyoğlu & Fatih) | ✅ | bundled tiles, works offline; dense one-way streets, bridges |
 | Durham, UK (small town) | ✅ | downloaded from OpenFreeMap; left-hand traffic, £, rural roads; line built and running (`scripts/dev/scene.mjs … 1`) |
-| Barcelona, Hamburg, Tokyo presets | 🟡 | load through the same pipeline; not play-tested this session |
+| Barcelona (Eixample grid, €) | ✅ | downloaded; line built and running; one-way grid warnings are correct |
+| Tokyo (Shibuya, ¥, left-hand traffic) | ✅ | downloaded; line built and running |
+| Hamburg preset | 🟡 | same pipeline; not run this session |
 | Any place via search (Nominatim, on Enter only) | 🟡 | search UI works in the browser; allowed in the desktop CSP |
 
 Fallbacks:
@@ -126,3 +128,15 @@ Fallbacks:
     - territory is reconciled on load.
   - Economy retune: demand +25%, driver wages 24/h, top speed 720×.
   - New tests: progression, performance, regressions.
+  - Save hardening, from a review of the save code:
+    - saves are serialised;
+    - quitting no longer drops a game whose save failed;
+    - loading another save first autosaves the current game;
+    - a failed load keeps the current game running;
+    - migrate validates the save's structure;
+    - one bad save entry no longer hides the list;
+    - IndexedDB reopens after a transient failure;
+    - the desktop window saves before closing.
+  - The offline download error is now visible in the place picker.
+  - The first-steps card no longer covers the map legend.
+  - Barcelona and Tokyo verified.

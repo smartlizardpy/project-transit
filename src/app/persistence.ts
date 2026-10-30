@@ -43,7 +43,17 @@ class DesktopPersistence implements Persistence {
   readonly kind = 'desktop' as const;
   async list() {
     const raw = await invoke<string[]>('saves_list');
-    return raw.map((s) => JSON.parse(s) as SaveMeta).sort((a, b) => b.savedAt - a.savedAt);
+    // one unreadable entry must not hide the others
+    const out: SaveMeta[] = [];
+    for (const s of raw) {
+      try {
+        const m = JSON.parse(s) as SaveMeta;
+        if (m && typeof m.id === 'string' && typeof m.savedAt === 'number') out.push(m);
+      } catch {
+        /* skip */
+      }
+    }
+    return out.sort((a, b) => b.savedAt - a.savedAt);
   }
   read(id: string) {
     return invoke<ReadResult>('save_read', { id: safeId(id) });
@@ -68,7 +78,10 @@ class BrowserPersistence implements Persistence {
         req.result.createObjectStore('data');
       };
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      req.onerror = () => {
+        this.db = null; // try again next time instead of failing forever
+        reject(req.error);
+      };
     }));
   }
 

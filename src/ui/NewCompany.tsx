@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, MagnifyingGlass, Crosshair, WifiSlash } from '@phosphor-icons/react';
+import { ArrowLeft, MagnifyingGlass, Crosshair, WifiSlash, X } from '@phosphor-icons/react';
 import { create } from 'zustand';
 import '../styles/menu.css';
 import { useSession, session } from '../app/session.ts';
@@ -42,6 +42,7 @@ function Location() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [viewName, setViewName] = useState('');
+  const loadError = useSession((s) => s.error);
   const abort = useRef<AbortController | null>(null);
   useEffect(() => {
     const h = (e: KeyboardEvent) => e.key === 'Escape' && closeFlow();
@@ -88,6 +89,12 @@ function Location() {
           <div><h2>Where will your company run?</h2><p>Step 1 of 2 · Choose a place</p></div>
         </div>
         <div className="mn-scroll">
+          {loadError && (
+            <div className="mn-error" role="alert">
+              <span>{loadError}</span>
+              <button className="close-btn" aria-label="Dismiss" onClick={() => useSession.setState({ error: null })}><X size={12} weight="bold" /></button>
+            </div>
+          )}
           <div className="label">Starting points</div>
           <div className="mn-presets">
             {PRESETS.map((p) => (

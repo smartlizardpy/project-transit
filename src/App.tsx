@@ -13,7 +13,7 @@ import { Onboarding, GameOver } from './ui/Onboarding.tsx';
 import { useKeyboard } from './ui/keyboard.ts';
 import { mapRuntime } from './map/runtime.ts';
 import { session, useSession } from './app/session.ts';
-import { toggleFullscreen } from './app/persistence.ts';
+import { isDesktop, toggleFullscreen } from './app/persistence.ts';
 import { useUI } from './state/store.ts';
 import { CompanyMark } from './ui/logos.tsx';
 import './styles/ui.css';
@@ -65,11 +65,27 @@ function TimetableModal() {
 /** Quietly save when the window is closed or hidden. */
 function useSaveOnExit() {
   useEffect(() => {
+    const playing = () => !!session.game && useSession.getState().phase === 'playing';
     const h = () => {
-      if (document.visibilityState === 'hidden' && session.game && useSession.getState().phase === 'playing') void session.save('auto');
+      if (document.visibilityState === 'hidden' && playing()) void session.save('auto');
     };
     document.addEventListener('visibilitychange', h);
-    return () => document.removeEventListener('visibilitychange', h);
+    // desktop: save before the window closes (at most a few seconds, so closing never hangs)
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    if (isDesktop())
+      void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
+        const off = await getCurrentWindow().onCloseRequested(async () => {
+          if (playing()) await Promise.race([session.save('auto'), new Promise((r) => setTimeout(r, 3000))]);
+        });
+        if (disposed) off();
+        else unlisten = off;
+      });
+    return () => {
+      disposed = true;
+      document.removeEventListener('visibilitychange', h);
+      unlisten?.();
+    };
   }, []);
 }
 

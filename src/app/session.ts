@@ -6,7 +6,7 @@ import { Game, newGameState } from '../game/engine.ts';
 import { prepareRegion } from '../game/world/geo.ts';
 import type { Region, RegionData, RegionSpec } from '../game/world/region.ts';
 import { SAVE_VERSION, type GameState } from '../game/types.ts';
-import { persistence, type SaveMeta } from './persistence.ts';
+import { persistence, safeId, type SaveMeta } from './persistence.ts';
 import type { RegionWorkerMessage } from './regionWorker.ts';
 
 export type Phase = 'menu' | 'loading' | 'setup' | 'playing';
@@ -68,7 +68,11 @@ export function saveSettings(s: AppSettings) {
 /** Upgrade older save formats. Throws with a readable message if the save is unusable. */
 export function migrate(raw: unknown): GameState {
   const s = raw as Partial<GameState> | null;
-  if (!s || typeof s !== 'object' || !s.company || !s.region || !s.clock || !s.finance) throw new Error('This save file is damaged or not a Project Transit save.');
+  const damaged = 'This save file is damaged or not a Project Transit save.';
+  if (!s || typeof s !== 'object' || !s.company || !s.region || !s.clock || !s.finance || !s.territory) throw new Error(damaged);
+  if (!s.meta || typeof s.meta.id !== 'string' || !s.meta.id) throw new Error(damaged);
+  for (const k of ['stops', 'routes', 'vehicles', 'depots'] as const) if (!s[k] || typeof s[k] !== 'object') throw new Error(damaged);
+  if (typeof s.clock.t !== 'number' || typeof s.finance.balance !== 'number' || !Array.isArray(s.territory.owned)) throw new Error(damaged);
   const v = s.version ?? 0;
   if (v > SAVE_VERSION) throw new Error('This save was made by a newer version of Project Transit.');
   // v1 is the first released format; future migrations go here in order.
@@ -85,6 +89,9 @@ class Session {
   private worker: Worker | null = null;
   private autosaveTimer = 0;
   private lastAutosave = 0;
+  /** saves run one at a time, in the order they were asked for */
+  private saveChain: Promise<unknown> = Promise.resolve();
+  private savesPending = 0;
 
   onGame(fn: GameListener): () => void {
     this.listeners.add(fn);
@@ -168,6 +175,14 @@ class Session {
   }
 
   async load(id: string) {
+    // Keep the game being replaced: it goes into its autosave slot first, unless that slot is
+    // exactly what the player chose to go back to.
+    const current = this.game;
+    if (current) {
+      current.setSpeed(0);
+      const ownAuto = safeId(`${current.state.meta.id}-auto`) === safeId(id);
+      if (!ownAuto && !(await this.save('auto'))) return;
+    }
     useSession.setState({ phase: 'loading', error: null, progress: { stage: 'Opening save', done: 0, total: 1 } });
     try {
       const { json, recovered } = await persistence().read(id);
@@ -184,7 +199,9 @@ class Session {
       this.setGame(game);
       this.startAutosave();
     } catch (e) {
-      useSession.setState({ phase: 'menu', progress: null, error: (e as Error).message });
+      // a failed load leaves the current game (if any) running
+      if (this.game) useSession.setState({ phase: 'playing', progress: null, notice: `Could not load that save: ${(e as Error).message}` });
+      else useSession.setState({ phase: 'menu', progress: null, error: (e as Error).message });
     }
   }
 
@@ -213,21 +230,33 @@ class Session {
     };
   }
 
-  async save(kind: 'manual' | 'auto' = 'manual'): Promise<boolean> {
+  /** Save the game as it is right now. Saves are written one at a time, in order. */
+  save(kind: 'manual' | 'auto' = 'manual'): Promise<boolean> {
     const g = this.game;
     const meta = this.meta(kind);
-    if (!g || !meta) return false;
+    if (!g || !meta) return Promise.resolve(false);
+    const json = g.serialize();
+    this.savesPending++;
     useSession.setState({ saving: true });
-    try {
-      await persistence().write(meta, g.serialize());
-      useSession.setState({ saving: false, lastSaved: Date.now() });
-      if (kind === 'auto') this.lastAutosave = Date.now();
-      void this.refreshSaves();
-      return true;
-    } catch (e) {
-      useSession.setState({ saving: false, notice: `Saving failed: ${(e as Error).message}` });
-      return false;
-    }
+    const run = async () => {
+      try {
+        await persistence().write(meta, json);
+        useSession.setState({ lastSaved: Date.now() });
+        if (kind === 'auto') this.lastAutosave = Date.now();
+        return true;
+      } catch (e) {
+        useSession.setState({ notice: `Saving failed: ${(e as Error).message}` });
+        return false;
+      } finally {
+        if (--this.savesPending === 0) {
+          useSession.setState({ saving: false });
+          void this.refreshSaves();
+        }
+      }
+    };
+    const result = this.saveChain.then(run, run);
+    this.saveChain = result;
+    return result;
   }
 
   private startAutosave() {
@@ -240,12 +269,15 @@ class Session {
     }, 15_000);
   }
 
-  async quitToMenu(saveFirst = true) {
-    if (saveFirst && this.game) await this.save('auto');
+  /** Leave the game. If saving first fails, the player stays in the game (and is told why). */
+  async quitToMenu(saveFirst = true): Promise<boolean> {
+    this.game?.setSpeed(0);
+    if (saveFirst && this.game && !(await this.save('auto'))) return false;
     clearInterval(this.autosaveTimer);
     this.setGame(null);
     useSession.setState({ phase: 'menu', pending: null });
     void this.refreshSaves();
+    return true;
   }
 
   async deleteSave(id: string) {
