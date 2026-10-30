@@ -56,6 +56,7 @@ pnpm preview    # serve dist/ at http://127.0.0.1:4180/project-transit/
   5. Add or edit captions in `gallery.ts`. Captions must say what is on screen.
 
   Only use images rendered by the game itself, and hide the interface (F10) for screenshots on the page: the drawings carry the interface ideas instead.
+- **Videos:** `videos` in `media.config.json` copies each clip as `<id>.mp4` (and `.webm` if given). The hero also has `variants`, smaller H.264 cuts made with ffmpeg: `hero-720.mp4` for small landscape screens, and `hero-phone.mp4` for phones. The phone cut is 1656 of the 2560 px width, starting at 58% of the spare width (524 px), so with the hero's `object-position: 58%` it frames exactly like the still. Change the crop if that position changes.
 - **Drawings:** the illustrations in `src/illustrations/` are drawn for the page in the game's colours and are labelled as drawings. Names and prices in them come from real games; keep it that way. They animate once when they scroll into view and show their finished state with reduced motion or without JavaScript.
 
 ## Deploy (GitHub Pages)

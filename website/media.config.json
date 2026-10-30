@@ -130,7 +130,18 @@
     {
       "id": "hero",
       "mp4": "video-istanbul.mp4",
-      "webm": "video-istanbul.webm"
+      "variants": [
+        {
+          "suffix": "phone",
+          "vf": "crop=1656:1440:524:0,scale=1242:1080:flags=lanczos",
+          "crf": 25
+        },
+        {
+          "suffix": "720",
+          "vf": "scale=1280:720:flags=lanczos",
+          "crf": 24
+        }
+      ]
     },
     {
       "id": "route",

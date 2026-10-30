@@ -1,54 +1,66 @@
 import { useEffect, useRef, useState } from 'react';
 import { Download, GitHub, Pause, Play } from '../components/Icons.tsx';
-import { Picture, mediaUrl } from '../components/Picture.tsx';
+import { Picture } from '../components/Picture.tsx';
 import { HERO, RELEASE, RELEASES, REPO } from '../content/site.ts';
 
-/** The hero's moving picture: a still first, then the real gameplay loop if the visitor's
- *  settings allow it (no reduced motion, no data saver). */
+/** The hero's moving picture: a still first, then the real gameplay loop. Reduced motion or
+ *  data saver keep the still until the visitor presses Play. */
 function HeroMedia() {
   const video = useRef<HTMLVideoElement>(null);
-  const [allowed, setAllowed] = useState(false);
+  const [src, setSrc] = useState<string | null>(null);
+  const [auto, setAuto] = useState(false);
   const [playing, setPlaying] = useState(false);
 
   useEffect(() => {
-    if (!HERO.video) return;
+    const v = HERO.video;
+    const box = document.querySelector('.hero-media');
+    if (!v || !box) return;
     const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const saveData = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData;
-    // phones get the still: the loop is a few megabytes and the hero is small there
+    // the file that fits the hero's shape. Phones show a slice of the 16:9 loop, so they get
+    // a cut of that slice (aspect 1.15, cut at 58% like the still's object-position) instead
+    // of the full 2560px loop; small landscape screens get 720p.
+    const { width, height } = box.getBoundingClientRect();
     const wide = window.matchMedia('(min-width: 861px)').matches;
-    setAllowed(!still && !saveData && wide);
+    setSrc(wide ? v.mp4 : width / height <= 1.15 ? v.phone : v.small);
+    setAuto(!still && !saveData);
   }, []);
+
+  // Started from script as well as by autoplay: iOS can refuse (Low Power Mode, for one),
+  // and then the still stays and the Play button is there.
+  useEffect(() => {
+    const v = video.current;
+    if (!v || !auto) return;
+    v.muted = true;
+    void v.play().catch(() => {});
+  }, [src, auto]);
 
   const toggle = () => {
     const v = video.current;
     if (!v) return;
-    if (v.paused) void v.play();
+    if (v.paused) void v.play().catch(() => {});
     else v.pause();
   };
 
   return (
     <>
       <Picture id={HERO.image} alt={HERO.alt} sizes="100vw" priority />
-      {allowed && HERO.video && (
+      {src && (
         <>
           <video
             ref={video}
             className="hero-video"
             data-playing={playing}
-            autoPlay
+            src={src}
+            autoPlay={auto}
             muted
             loop
             playsInline
-            preload="auto"
-            poster={mediaUrl(HERO.image, 1920)}
+            preload={auto ? 'auto' : 'none'}
             aria-hidden="true"
             onPlaying={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
-          >
-            {/* H.264 first: every browser plays it, while some WebKit builds stall on VP9 WebM */}
-            <source src={HERO.video.mp4} type="video/mp4" />
-            {HERO.video.webm && <source src={HERO.video.webm} type="video/webm" />}
-          </video>
+          />
           <button className="hero-video-toggle" onClick={toggle} aria-label={playing ? 'Pause the background video' : 'Play the background video'}>
             {playing ? <Pause /> : <Play />}
             {playing ? 'Pause' : 'Play'}

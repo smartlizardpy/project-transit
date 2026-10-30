@@ -5,7 +5,9 @@
 // Reads media.config.json. For each image it crops (optional), then writes
 // public/media/<id>-<width>.avif and .webp at each listed width, and records the
 // size in src/content/media.json (used for width/height attributes and srcset).
-// Videos are copied, and their poster is converted like an image.
+// Videos are copied, and their poster is converted like an image. A video's "variants"
+// are smaller H.264 cuts for small screens, made with ffmpeg (`brew install ffmpeg`):
+// { suffix, vf (ffmpeg filter), crf } writes public/media/<id>-<suffix>.mp4.
 // Also writes the social card (public/og.jpg) and the favicons from the app icon.
 // Needs ImageMagick 7 with AVIF and WebP support (`brew install imagemagick`).
 import { execFileSync } from 'node:child_process';
@@ -64,11 +66,18 @@ for (const item of config.images) {
 for (const v of config.videos ?? []) {
   if (only && v.id !== only) continue;
   for (const ext of ['mp4', 'webm']) {
+    if (!v[ext]) continue;
     const src = join(rawDir, v[ext]);
     if (existsSync(src)) {
       copyFileSync(src, join(outDir, `${v.id}.${ext}`));
       console.log(`${v.id}.${ext}: ${kb(src)} KB`);
     }
+  }
+  const src = join(rawDir, v.mp4);
+  for (const c of existsSync(src) ? (v.variants ?? []) : []) {
+    const out = join(outDir, `${v.id}-${c.suffix}.mp4`);
+    execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', src, '-vf', c.vf, '-c:v', 'libx264', '-preset', 'slow', '-crf', String(c.crf ?? 24), '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', out]);
+    console.log(`${v.id}-${c.suffix}.mp4: ${kb(out)} KB`);
   }
 }
 

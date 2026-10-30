@@ -15,11 +15,12 @@ export const RELEASE = {
 export const BASE = import.meta.env.BASE_URL;
 
 /** The hero picture and, when one has been captured, the gameplay loop that plays over it. */
-export const HERO: { image: string; alt: string; video: { mp4: string; webm?: string } | null } = {
+export const HERO: { image: string; alt: string; video: { mp4: string; small: string; phone: string } | null } = {
   image: 'hero',
   alt: 'İstanbul in Project Transit: the Golden Horn and the Galata Bridge as a pale miniature city, with three coloured bus lines and small buses crossing the bridge.',
-  // 10 s of real gameplay, rendered frame by frame from the game (scripts/capture-media.mjs)
-  video: { mp4: `${BASE}media/hero.mp4`, webm: `${BASE}media/hero.webm` },
+  // 10 s of real gameplay, rendered frame by frame from the game (scripts/capture-media.mjs):
+  // 2560x1440 for large screens, 1280x720 for small ones, and a tall cut for phones
+  video: { mp4: `${BASE}media/hero.mp4`, small: `${BASE}media/hero-720.mp4`, phone: `${BASE}media/hero-phone.mp4` },
 };
 
 /** Stops on the page's line, in order. The ids are section anchors. */
