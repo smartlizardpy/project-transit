@@ -42,7 +42,10 @@ pnpm test         # game-core tests (vitest)
    - **Finances (M):** daily results, per-line profit, the ledger, loans and the fare.
    - **Company (C):** objectives and territory.
    - **Satisfaction:** the popover in the top bar explains what passengers dislike most.
-8. **Expand.** Only your own areas are shown in full. Squares you can license next sit under a light veil with their price; everything else is blank paper. Click a veiled square (or use overlay O) to license it once you have the reputation and money. The map has no fixed edge: as you expand, more of the city loads around you (downloaded from OpenFreeMap, so this needs a connection beyond the bundled part of İstanbul). Overdraw for too long and the company becomes insolvent, then bankrupt.
+   - **Route warnings** (in the line inspector and line editor) can be clicked: the route check shows why a line makes a detour and offers fixes with a before/after comparison.
+   - **Depots:** a bus can be based at another depot from its inspector; a parked bus drives there.
+8. **Network Control (K).** Opens after 30 operating days at company level 3; analytics are recorded from day one. It shows where passengers travel, stop, line and fleet figures, comparisons, your own metrics and saved reports. **Automation Studio** builds workflows that watch the network and act through the same rules as you, in Observe, Suggest or Automatic mode. See [`docs/automation-api.md`](docs/automation-api.md).
+9. **Expand.** Only your own areas are shown in full. Squares you can license next sit under a light veil with their price; everything else is blank paper. Click a veiled square (or use overlay O) to license it once you have the reputation and money. The map has no fixed edge: as you expand, more of the city loads around you (downloaded from OpenFreeMap, so this needs a connection beyond the bundled part of İstanbul). Overdraw for too long and the company becomes insolvent, then bankrupt.
 
 The optional first-steps guide walks through steps 2–6, and you can hide it. The game autosaves; ⌘S / Ctrl+S saves now; Esc opens the game menu (save, load, settings, quit).
 
@@ -53,7 +56,7 @@ The optional first-steps guide walks through steps 2–6, and you can hide it. T
 | V / B / R / ⇧D | select / stop / line / depot tool |
 | Space, 1–4 | pause, speed |
 | N / T / P / O | network view, traffic, demand, operating areas |
-| L / G / M / C | lines, fleet, finances, company |
+| L / G / M / C / K | lines, fleet, finances, company, Network Control |
 | ⌘Z / ⇧⌘Z | undo / redo while drawing a line (right-click also undoes) |
 | WASD, Q/E, H | pan, rotate, go home |
 | F11 / F10 | fullscreen / hide the interface |

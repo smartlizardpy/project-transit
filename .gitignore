@@ -6,3 +6,5 @@ src-tauri/gen
 .DS_Store
 *.log
 test-results
+# OpenFreeMap tiles for the route-diagnostics tests: node scripts/dev/fetch-test-tiles.mjs
+src/game/test/tiles/

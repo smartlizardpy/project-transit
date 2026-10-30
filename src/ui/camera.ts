@@ -6,8 +6,11 @@ import type { LngLat } from '../game/world/graph.ts';
 
 function padding() {
   const ui = useUI.getState();
-  const panel = ui.panel ? 420 : 0;
-  return { top: 110, bottom: ui.draft ? 150 : 70, left: 90 + panel, right: ui.selection ? 400 : 60 };
+  // the Network Control panel is wider than the others (network.css: 620 px, 568 px on smaller screens)
+  const panel = ui.panel === 'network' ? (window.innerWidth <= 1440 ? 588 : 640) : ui.panel ? 420 : 0;
+  // the inspector is open for a selection or a route check (which has no selection on a draft line)
+  const side = ui.draft && ui.routeCheck ? 330 : 0;
+  return { top: 110, bottom: ui.draft ? 150 : 70, left: 90 + Math.max(panel, side), right: ui.selection || ui.routeCheck ? 400 : 60 };
 }
 
 /** World position of a vehicle (null when it is inside a depot). */
@@ -47,9 +50,14 @@ export function fitPoints(points: LngLat[], maxZoom = 16.6) {
   if (!map || !points.length) return;
   const b = new LngLatBounds();
   for (const p of points) b.extend(p);
-  const cam = map.cameraForBounds(b, { padding: padding(), bearing: map.getBearing(), maxZoom });
+  // absolutePadding: fit inside our own padding only, not on top of whatever padding the map was
+  // left with by an earlier camera move (that pushed one end of a flow off screen)
+  const cam = map.cameraForBounds(b, { padding: padding(), absolutePadding: true, bearing: map.getBearing(), maxZoom });
   if (!cam) return;
-  const zoom = Math.max(13.2, Math.min(maxZoom, (cam.zoom ?? 15.5) - 0.15));
+  // cameraForBounds fits the bounds as seen from straight above; tilted, the near side grows, so
+  // step back a little more the more the camera is tilted
+  const tilt = Math.max(map.getPitch(), 45);
+  const zoom = Math.max(13.2, Math.min(maxZoom, (cam.zoom ?? 15.5) - 0.15 - 0.5 * Math.min(1, tilt / 60)));
   map.easeTo({ center: cam.center, zoom, pitch: Math.max(map.getPitch(), 45), bearing: map.getBearing(), padding: padding(), duration: 1100 });
 }
 

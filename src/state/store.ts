@@ -10,7 +10,25 @@ export type Selection =
   | { kind: 'depot'; id: string }
   | { kind: 'zone'; id: string }
   | null;
-export type Panel = 'fleet' | 'finance' | 'lines' | 'company' | null;
+export type Panel = 'fleet' | 'finance' | 'lines' | 'company' | 'network' | null;
+export type NetworkTab = 'overview' | 'passengers' | 'stops' | 'lines' | 'fleet' | 'reports' | 'automation';
+
+/** A route check (interactive diagnostic) open in the inspector. `route` null = the line being drafted. */
+export interface RouteCheckTarget {
+  route: string | null;
+  /** pattern index (0 outbound / loop, 1 return) */
+  pat: number;
+  /** leg index: from stop `leg` to stop `leg + 1` of the pattern */
+  leg: number;
+}
+
+/** Origin–destination flows drawn on the map by Network Control (see src/map/flowsLayer.ts). */
+export interface FlowOverlay {
+  flows: { id: string; from: LngLat; to: LngLat; value: number; kind: 'observed' | 'estimated'; label: string }[];
+  /** the origin (area centroid or stop) the flows start from, drawn as a ring */
+  origin?: { at: LngLat; label: string } | null;
+  selected?: string | null;
+}
 export type Modal = { kind: 'timetable'; route: string } | { kind: 'menu' } | { kind: 'settings' } | { kind: 'save' } | { kind: 'notifications' } | null;
 
 /** A line being created or edited. Stops are game stop ids. */
@@ -46,6 +64,20 @@ interface UIState {
   following: string | null;
   draft: RouteDraft | null;
   toast: { id: number; text: string; tone?: 'info' | 'warn' | 'good' | 'bad' } | null;
+  /** Network Control: open tab */
+  networkTab: NetworkTab;
+  /** Automation Studio workspace: open, which workflow, and "peek" (collapsed to show the map) */
+  studio: { open: boolean; workflow: string | null; peek: boolean };
+  /** interactive route diagnostic open in the inspector */
+  routeCheck: RouteCheckTarget | null;
+  /** OD flows drawn on the map (null = none) */
+  flowOverlay: FlowOverlay | null;
+  /** the Network Control unlock card is showing */
+  unlockCard: boolean;
+  setNetworkTab: (t: NetworkTab) => void;
+  setStudio: (s: Partial<UIState['studio']>) => void;
+  openRouteCheck: (t: RouteCheckTarget | null) => void;
+  setFlowOverlay: (f: FlowOverlay | null) => void;
   setTool: (t: Tool) => void;
   toggleOverlay: (k: keyof UIState['overlays']) => void;
   select: (s: Selection) => void;
@@ -72,6 +104,15 @@ export const useUI = create<UIState>((set, get) => ({
   following: null,
   draft: null,
   toast: null,
+  networkTab: 'overview',
+  studio: { open: false, workflow: null, peek: false },
+  routeCheck: null,
+  flowOverlay: null,
+  unlockCard: false,
+  setNetworkTab: (networkTab) => set({ networkTab }),
+  setStudio: (s) => set({ studio: { ...get().studio, ...s } }),
+  openRouteCheck: (routeCheck) => set({ routeCheck }),
+  setFlowOverlay: (flowOverlay) => set({ flowOverlay }),
   setTool: (tool) => {
     const cur = get();
     if (cur.tool === tool) return;
@@ -107,5 +148,5 @@ export const useUI = create<UIState>((set, get) => ({
     set({ draft: { ...d, ...next, history: [...d.history, snapshotOf(d)], future: d.future.slice(0, -1) } });
   },
   notify: (text, tone = 'info') => set({ toast: { id: Date.now() + Math.random(), text, tone } }),
-  reset: () => set({ tool: 'select', selection: null, hover: null, panel: null, modal: null, following: null, draft: null }),
+  reset: () => set({ tool: 'select', selection: null, hover: null, panel: null, modal: null, following: null, draft: null, studio: { open: false, workflow: null, peek: false }, routeCheck: null, flowOverlay: null, unlockCard: false }),
 }));

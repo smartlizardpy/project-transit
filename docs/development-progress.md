@@ -103,6 +103,15 @@ Fallbacks:
 - If no tiles download at all, the app suggests İstanbul (offline).
 - Traffic is always the simulated model and is labelled as such.
 
+## Network Control and Intelligent Operations
+
+Tracked in detail in [`docs/network-control-progress.md`](network-control-progress.md), with evidence for each item.
+
+- **Network Control** unlocks after 30 operating days at company level 3. Analytics are recorded from day one and reconcile with the simulation and the ledger. The panel covers overview, passengers (observed journeys and estimated demand, drawn on the map), stops, lines, fleet, custom metrics and saved reports.
+- **Automation Studio**: workflows of typed nodes run on game time through the same commands as the player, in Observe, Suggest or Automatic mode, within safety limits, with history, traces and a Simulation Lab. Reference: [`docs/automation-api.md`](automation-api.md).
+- **Route diagnostics** (not locked): clickable route warnings with the cause, a map overlay, fixes with before/after, and undo. See [`docs/route-diagnostics.md`](route-diagnostics.md).
+- **Depot moves**: a bus can be based at another depot and drives there on the road.
+
 ## Known gaps and next steps
 
 1. **Native window visuals:** saving, closing, quitting and reopening are verified in the real app. Still to do: look at the HUD in the native window, and press ⌘Q by hand once (the test sends the same event as the menu item). Both need an unlocked screen.
@@ -185,3 +194,4 @@ Fallbacks:
       - The speed test's budget is tripled on CI only, because shared runners are slower.
       - Verified locally: a signed release build produces the `.app.tar.gz` update and its signature.
       - First release: v0.2.1. The v0.2.0 tag's run stopped in tests (the 40-day test hit its 180 s limit on the slower CI runner; CI now allows 900 s), so v0.2.0 has no release.
+      - v0.3.0: Network Control (analytics, Automation Studio, Simulation Lab), clickable route diagnostics, moving buses between depots. Details in `docs/network-control-progress.md`.

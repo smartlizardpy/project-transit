@@ -3,6 +3,8 @@
 import type { Map as MlMap, MapMouseEvent } from 'maplibre-gl';
 import type { CityLayer } from './cityLayer.ts';
 import { installOverlays } from './overlays.ts';
+import { installFlowsLayer } from './flowsLayer.ts';
+import { installDiagnosticsLayer } from './diagnosticsLayer.ts';
 import { VehicleLayer } from './vehicles3d.ts';
 import { MarkerLayer } from './markers.ts';
 import { useUI, type Selection } from '../state/store.ts';
@@ -27,6 +29,8 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 export function installController(map: MlMap, city: CityLayer): Controller {
   const overlays = installOverlays(map);
   overlays.watchMask((m) => city.setMask(m));
+  installFlowsLayer(map);
+  installDiagnosticsLayer(map);
   const container = map.getContainer();
   const vehicles = new VehicleLayer(city, container);
   const markers = new MarkerLayer(map, { stop: (id, e) => onStopClick(id, e), depot: (id) => onDepotClick(id) });

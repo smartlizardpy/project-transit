@@ -34,6 +34,7 @@ export function useKeyboard() {
       const game = session.game;
       if (!game || useSession.getState().phase !== 'playing') return;
       const ui = useUI.getState();
+      if (ui.studio.open && !ui.studio.peek) return; // Automation Studio handles its own keys
       if (ui.modal && ui.modal.kind !== 'notifications') return; // dialogs handle their own keys
       const map = mapRuntime.map;
       const k = e.key.toLowerCase();
@@ -83,6 +84,7 @@ export function useKeyboard() {
         case 'g': ui.openPanel(ui.panel === 'fleet' ? null : 'fleet'); break;
         case 'm': ui.openPanel(ui.panel === 'finance' ? null : 'finance'); break;
         case 'c': ui.openPanel(ui.panel === 'company' ? null : 'company'); break;
+        case 'k': ui.openPanel(ui.panel === 'network' ? null : 'network'); break;
         case 'f':
           if (ui.selection?.kind === 'vehicle') {
             const on = ui.following !== ui.selection.id;

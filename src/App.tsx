@@ -17,6 +17,8 @@ import { exitApp, isDesktop, toggleFullscreen } from './app/persistence.ts';
 import { useUI } from './state/store.ts';
 import { CompanyMark } from './ui/logos.tsx';
 import { UpdateBanner } from './ui/UpdateBanner.tsx';
+import { AutomationStudio } from './ui/automation/Studio.tsx';
+import { NetworkUnlock } from './ui/NetworkUnlock.tsx';
 import { installOnExit, startAutoUpdates } from './app/updates.ts';
 import './styles/ui.css';
 import './styles/game.css';
@@ -139,8 +141,10 @@ export function App() {
           <Legends />
           <MapControls />
           <Onboarding />
+          <AutomationStudio />
         </div>
       )}
+      {playing && <NetworkUnlock />}
       {playing && <TimetableModal />}
       {playing && <GameOver />}
       <StartMenu />

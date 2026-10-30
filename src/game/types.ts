@@ -4,9 +4,13 @@
 import type { LngLat } from './world/graph.ts';
 import type { RegionSpec } from './world/region.ts';
 
+import type { AnalyticsState } from './analytics/types.ts';
+import type { ControlState } from './control.ts';
+import type { AutomationState } from './automation/types.ts';
+
 export type Id = string;
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 // ─────────────────────────────────────────── company
 
@@ -102,6 +106,8 @@ export type VehiclePos =
   | { kind: 'path'; nodes: number[]; s: number; to: 'route' | 'depot' };
 
 export interface Vehicle {
+  /** last stop departure on the current trip (analytics: measured segment run times) */
+  seg?: { trip: number; i: number; t: number };
   id: Id;
   fleetNo: string;
   model: string;
@@ -161,6 +167,8 @@ export interface Trip {
   startDelay?: number;
   /** arrival delay at the final stop, seconds (set when done) */
   endDelay?: number;
+  /** an extra departure outside the timetable, and who asked for it ('player' or a workflow id) */
+  extra?: string;
 }
 
 // ─────────────────────────────────────────── passengers
@@ -337,4 +345,10 @@ export interface GameState {
   counters: { stop: number; route: number; vehicle: number; depot: number; ledger: number; trip: number; notification: number };
   settings: { autoService: boolean; serviceBelow: number };
   onboarding: { active: boolean; step: number; flags: Record<string, boolean> };
+  /** operational history, recorded from day one (save version 2) */
+  analytics: AnalyticsState;
+  /** company level progress and the Network Control unlock (save version 2) */
+  control: ControlState;
+  /** Automation Studio workflows, memory and history (save version 2) */
+  automation: AutomationState;
 }

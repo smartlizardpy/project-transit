@@ -9,6 +9,8 @@ import { ECON, MODEL, SERVICE } from './content.ts';
 import { TripState, type Id, type Trip, type Vehicle } from './types.ts';
 import { accrueCost, post } from './finance.ts';
 import { notify, recordBoardings, recordDeparture, recordLoad, recordMissed } from './progress.ts';
+import { recDepart, recMaintenance, recRun, recVehicleMinute } from './analytics/record.ts';
+import { departWanted, simEvent } from './automation/events.ts';
 import { offloadAll, serveStop, stopNeeded } from './passengers.ts';
 import { edgeBetween, routeWithFallback } from './world/graph.ts';
 import { hhmm } from './time.ts';
@@ -214,11 +216,79 @@ function assign(game: Game, c: Candidate, trip: Trip, startNode: number) {
   }
 }
 
+// ───────────────────────────────────────────── extra departures
+
+export interface ExtraOption {
+  v: Vehicle;
+  /** when the bus could be at the first stop, ready to leave */
+  ready: number;
+  from: 'depot' | 'terminus';
+  /** seconds of empty running to the first stop */
+  deadhead: number;
+}
+
+/**
+ * Could this bus run an extra trip starting at `startNode`? Only buses with nothing to do can:
+ * parked at the depot (and not due for service or being sold), or waiting at a terminus with
+ * no trip. A bus carrying passengers is never taken off its trip.
+ */
+export function extraOption(game: Game, v: Vehicle, startNode: number, now: number): ExtraOption | null {
+  if (v.sell || v.withdraw || v.wantsService || v.trip !== null || v.next !== null) return null;
+  if (v.status === 'parked' && v.pos.kind === 'depot') {
+    const d = game.state.depots[v.depot];
+    if (!d) return null;
+    const dh = game.travelSeconds(d.node, startNode);
+    return { v, ready: now + PREP + dh, from: 'depot', deadhead: dh };
+  }
+  if (v.status === 'layover' && v.load === 0) {
+    const { node } = vehicleNode(game, v);
+    const dh = game.travelSeconds(node, startNode);
+    return { v, ready: Math.max(now, v.until) + dh, from: 'terminus', deadhead: dh };
+  }
+  return null;
+}
+
+/** Give `trip` (already in the trip list) to the bus of `opt`: it prepares or drives to the start. */
+export function startExtra(game: Game, opt: ExtraOption, trip: Trip, startNode: number) {
+  assign(game, { v: opt.v, ready: opt.ready, kind: opt.from === 'depot' ? 'depot' : 'idle' }, trip, startNode);
+}
+
+
+// ───────────────────────────────────────────── moving between depots
+
+/**
+ * Make `depotId` the bus's home depot. A parked bus drives there now (an empty run on the
+ * road, like any trip to a depot); a bus that is out at work goes there the next time it
+ * returns. Callers check that the move is allowed (see Game.moveToDepot).
+ */
+export function transferDepot(game: Game, v: Vehicle, depotId: Id): 'driving' | 'later' {
+  const now = game.state.clock.t;
+  const from = game.state.depots[v.depot];
+  const to = game.state.depots[depotId];
+  if (v.status === 'parked' && v.pos.kind === 'depot') {
+    const fromNode = from?.node ?? to.node;
+    v.depot = depotId;
+    if (fromNode === to.node) return 'driving';
+    const leg = routeWithFallback(game.region.graph, fromNode, to.node, {});
+    v.pos = { kind: 'path', nodes: leg ? leg.nodes : [fromNode], s: 0, to: 'depot' };
+    game.vpaths.delete(v.id);
+    setStatus(v, 'to_depot', now);
+    return 'driving';
+  }
+  v.depot = depotId;
+  if (v.status === 'to_depot') {
+    startDeadhead(game, v, to.node, 'depot');
+    return 'driving';
+  }
+  return 'later';
+}
+
 function missTrip(game: Game, trip: Trip, why: 'late' | 'none') {
   trip.state = TripState.Missed;
   recordMissed(game.state, trip.route);
   const r = game.state.routes[trip.route];
   if (!r) return;
+  simEvent(game, 'missed', { line: r.id, lineNumber: r.number, dep: hhmm(trip.dep), trip: trip.id, reason: why });
   const last = game.missNotice.get(r.id) ?? -Infinity;
   if (game.state.clock.t - last > 2 * 3600) {
     game.missNotice.set(r.id, game.state.clock.t);
@@ -333,6 +403,7 @@ export function startMaintenance(game: Game, v: Vehicle) {
   const points = Math.max(0, (1 - v.condition) * 100);
   const cost = Math.round(v.price * m.serviceCost * (1 - v.condition) + 150);
   post(game.state, { amt: -cost, cat: 'maintenance', memo: `Service for ${v.fleetNo} (${Math.round(v.condition * 100)}% condition)`, veh: v.id, route: v.route ?? undefined });
+  recMaintenance(game.state, v, cost);
   setStatus(v, 'maintenance', now);
   v.until = now + Math.max(SERVICE.minMinutes, points * SERVICE.minutesPerPoint) * 60;
   v.wantsService = false;
@@ -357,7 +428,7 @@ function move(game: Game, v: Vehicle, p: Path, stopAt: number, dt: number): bool
     const km = ds / 1000;
     v.km += km;
     v.condition = Math.max(0, v.condition - m.wearPerKm * km);
-    accrueCost(game.state, 'fuel', v.route ?? '', km * m.energyPerKm * (m.electric ? ECON.electricPrice : ECON.fuelPrice));
+    accrueCost(game.state, 'fuel', v.route ?? v.target?.route ?? '', km * m.energyPerKm * (m.electric ? ECON.electricPrice : ECON.fuelPrice));
   }
   return r.arrived;
 }
@@ -485,6 +556,13 @@ function arriveStop(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
   v.v = 0;
   const sch = tripSchedule(game, trip);
   if (sch && v.stopIdx > 0) v.delay = now - (trip.dep + sch[v.stopIdx]);
+  // measured run time since the last stop departure (stops nobody needed are passed through)
+  const seg = v.seg;
+  if (seg && v.stopIdx > 0 && seg.trip === trip.id && seg.i < v.stopIdx) {
+    const scheduled = sch ? sch[v.stopIdx] - (seg.i === 0 ? 0 : sch[seg.i] + 22) : 0;
+    recRun(game.state, p, seg.i, v.stopIdx, now - seg.t, scheduled);
+  }
+  delete v.seg;
   const ev = serveStop(game, v, p, v.stopIdx);
   if (ev.board) recordBoardings(game.state, p.route, ev.board);
   const dwell = v.stopIdx === p.stops.length - 1 ? 8 + ev.alight * 0.8 : dwellTime(v, ev.board, ev.alight);
@@ -492,6 +570,10 @@ function arriveStop(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
   v.until = now + dwell;
   if (v.stopIdx === 0) v.until = Math.max(v.until, trip.dep);
   game.emitStop(p.stops[v.stopIdx], v.id, ev);
+  if (game.autoWants.has('arrive')) {
+    const stop = p.stops[v.stopIdx];
+    simEvent(game, 'arrive', { vehicle: v.id, fleetNo: v.fleetNo, line: p.route, lineNumber: game.state.routes[p.route]?.number ?? '', stop, stopName: game.state.stops[stop]?.name ?? '', load: v.load, occupancy: Math.round((v.load / MODEL[v.model].capacity) * 100), delay: Math.round(Math.max(0, v.delay) / 6) / 10, boarded: ev.board, alighted: ev.alight, leftBehind: ev.leftBehind, trip: trip.id });
+  }
 }
 
 function departStop(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
@@ -514,6 +596,16 @@ function departStop(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
     if (v.stopIdx === 0) trip.startDelay = v.delay;
   }
   recordLoad(game.state, p.route, v.load / MODEL[v.model].capacity);
+  recDepart(game.state, p, v.stopIdx, v, MODEL[v.model].capacity, sch ? v.delay : 0);
+  v.seg = { trip: trip.id, i: v.stopIdx, t: now };
+  if (game.autoWants.has('depart')) {
+    const occupancy = Math.round((v.load / MODEL[v.model].capacity) * 100);
+    const delay = sch ? Math.round(Math.max(0, v.delay) / 6) / 10 : 0;
+    if (departWanted(game, delay, occupancy)) {
+      const stop = p.stops[v.stopIdx];
+      simEvent(game, 'depart', { vehicle: v.id, fleetNo: v.fleetNo, line: p.route, lineNumber: game.state.routes[p.route]?.number ?? '', stop, stopName: game.state.stops[stop]?.name ?? '', load: v.load, occupancy, delay, trip: trip.id });
+    }
+  }
   v.stopIdx++;
   setStatus(v, 'in_service', now);
 }
@@ -571,7 +663,8 @@ export function minuteVehicles(game: Game) {
   const now = state.clock.t;
   const wage = ECON.driverPerHour / 60;
   for (const v of game.vehicleList()) {
-    if (STAFFED.has(v.status)) accrueCost(state, 'driver', v.route ?? '', wage);
+    recVehicleMinute(state, v);
+    if (STAFFED.has(v.status)) accrueCost(state, 'driver', v.route ?? v.target?.route ?? '', wage);
     if (MOVING.has(v.status) && v.condition < SERVICE.breakdownBelow) {
       const m = MODEL[v.model];
       const p = (SERVICE.breakdownBelow - v.condition) * 0.012 * (2 - m.reliability);
@@ -606,6 +699,7 @@ function breakDown(game: Game, v: Vehicle) {
   detachFromPattern(game, v);
   setStatus(v, 'broken', now);
   v.until = now + 40 * 60;
+  simEvent(game, 'breakdown', { vehicle: v.id, fleetNo: v.fleetNo, line: v.route, lineNumber: v.route ? game.state.routes[v.route]?.number ?? '' : '', condition: Math.round(v.condition * 100) });
   const r = v.route ? game.state.routes[v.route] : null;
   notify(game, 'bad', `${v.fleetNo} has broken down`, `${r ? `Line ${r.number}: p` : 'P'}assengers were asked to wait for the next bus. Condition was ${Math.round(v.condition * 100)}%. Regular maintenance prevents breakdowns.`, { kind: 'vehicle', id: v.id });
 }
