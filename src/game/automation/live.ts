@@ -56,6 +56,7 @@ export class LiveData {
     return {
       kind: 'line', id, number: r.number, name: r.name || `Line ${r.number}`, colour: r.colour,
       buses: buses.length, needed: req?.peak ?? 0, running: running.length,
+      capacity: buses.length ? Math.round(buses.reduce((a, v) => a + (MODEL[v.model]?.capacity ?? 0), 0) / buses.length) : null,
       occupancy: r1(occ * 100), waiting: this.waitingFor(id), delay: r1(delay),
       headway: game.headwayAt(id, 0, game.t), suspended: r.suspended,
       onTime3h: w.ontime === null ? null : r1(w.ontime * 100), load3h: w.load === null ? null : r1(w.load * 100),
@@ -95,7 +96,7 @@ export class LiveData {
     const today = s.analytics.today.stops[id];
     const lines = Object.values(s.routes).filter((r) => r.stops.includes(id) || r.returnStops?.includes(id)).map((r) => r.number);
     return {
-      kind: 'stop', id, name: st.name, waiting, longestWait: r1(oldest), lines,
+      kind: 'stop', id, name: st.name, area: this.game.geo.zone(st.zone)?.name ?? null, areaId: st.zone, waiting, longestWait: r1(oldest), lines,
       boardingsToday: today ? sum(today.b) : 0, gaveUpToday: today ? sum(today.g) : 0,
       avgWaitToday: today && today.wn ? r1(today.ws / today.wn) : null,
       gaveUpHour: gaveUpLastHour(this.game, id), leftBehindToday: today ? today.lb : 0,

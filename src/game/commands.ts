@@ -12,6 +12,7 @@ import { workEnds } from './vehicles.ts';
 
 export type Command =
   | { type: 'assign_vehicle'; vehicle: Id; route: Id | null; after?: 'trips' | 'now' }
+  | { type: 'schedule_extra'; route: Id; at: number; pat?: number; vehicle?: Id }
   | { type: 'dispatch_extra'; route: Id; pat?: number; vehicle?: Id }
   | { type: 'set_headway'; route: Id; minutes: number; band?: number | 'all'; days?: 'weekday' | 'weekend' | 'both' }
   | { type: 'suspend_line'; route: Id; suspended: boolean }
@@ -46,6 +47,7 @@ export interface CommandCheck {
 export const COMMAND_LABEL: Record<Command['type'], string> = {
   assign_vehicle: 'Move a bus to a line',
   dispatch_extra: 'Extra departure',
+  schedule_extra: 'Schedule an extra departure',
   set_headway: 'Change frequency',
   suspend_line: 'Suspend or resume a line',
   service_plan: 'Switch a service plan',
@@ -121,6 +123,18 @@ export function checkCommand(game: Game, cmd: Command): CommandCheck {
       const plan = game.extraPlan(cmd.route, { pat: cmd.pat, vehicle: cmd.vehicle });
       if (!plan.ok) return { ...base, ok: false, summary, reason: plan.error, target, key };
       return { ...base, ok: true, summary: `${summary} with ${plan.value.fleetNo}`, transition: plan.value.text, cost: plan.value.cost, target, key };
+    }
+    case 'schedule_extra': {
+      // each departure time is its own target: extras at different times never "disagree"
+      const minute = Math.round(cmd.at / 60);
+      const target = `extra:${cmd.route}:${minute}`;
+      const key = `extra_at:${cmd.pat ?? '*'}`;
+      const summary = `Extra departure at ${hhmm(cmd.at)} on ${lineName(game, cmd.route)}`;
+      const same = game.scheduledExtras(cmd.route).find((x) => Math.round((x.ask ?? x.dep) / 60) === minute && (cmd.pat === undefined || x.pat === cmd.pat));
+      if (same) return { ...base, ok: true, noop: true, summary, transition: `An extra departure at ${hhmm(same.dep)} is already scheduled on ${lineName(game, cmd.route)}.`, target, key };
+      const plan = game.scheduleExtra(cmd.route, cmd.at, { pat: cmd.pat, vehicle: cmd.vehicle });
+      if (!plan.ok) return { ...base, ok: false, summary, reason: plan.error, target, key };
+      return { ...base, ok: true, summary: `Extra departure at ${hhmm(plan.value.dep)} on ${lineName(game, cmd.route)}`, transition: plan.value.text, cost: plan.value.cost, target, key };
     }
     case 'set_headway': {
       const r = s.routes[cmd.route];
@@ -209,6 +223,11 @@ export function runCommand(game: Game, cmd: Command, src = 'player'): Result<{ c
   let r: Result<unknown>;
   switch (cmd.type) {
     case 'assign_vehicle': r = cmd.after === 'trips' ? game.handoverVehicle(cmd.vehicle, cmd.route, src) : game.assignVehicle(cmd.vehicle, cmd.route, src); break;
+    case 'schedule_extra': {
+      const x = game.scheduleExtra(cmd.route, cmd.at, { pat: cmd.pat, vehicle: cmd.vehicle, src, commit: true });
+      if (!x.ok) return x;
+      return { ok: true, value: { check, effect: x.value.text } };
+    }
     case 'dispatch_extra': {
       const x = game.dispatchExtra(cmd.route, { pat: cmd.pat, vehicle: cmd.vehicle, src });
       if (!x.ok) return x;

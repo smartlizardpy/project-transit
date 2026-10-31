@@ -6,13 +6,14 @@ import type { Mode, WfEdge, WfNode } from './types.ts';
 import { defaultConfig } from './registry.ts';
 import type { Value } from './types.ts';
 
-export type TemplateGroup = 'crowding' | 'reliability' | 'peaks' | 'fleet' | 'money' | 'city' | 'reports';
+export type TemplateGroup = 'crowding' | 'reliability' | 'peaks' | 'insight' | 'fleet' | 'money' | 'city' | 'reports';
 
 /** Template groups, in the order the gallery shows them. */
 export const TEMPLATE_GROUPS: { id: TemplateGroup; label: string; help: string }[] = [
   { id: 'crowding', label: 'Crowding and waiting', help: 'Full buses, people left behind, crowded stops.' },
   { id: 'reliability', label: 'Reliability', help: 'Late lines, missed departures, lines short of buses.' },
   { id: 'peaks', label: 'Peak hours and sharing buses', help: 'Bring buses in before a line’s peak, park them after, share them between lines that peak at different times.' },
+  { id: 'insight', label: 'Forecasts, normal days and journeys', help: 'React to what is unusual for the time of day, plan extra departures ahead from the forecast, and see where passengers travel.' },
   { id: 'fleet', label: 'Fleet and maintenance', help: 'Breakdowns, worn buses, spare buses.' },
   { id: 'money', label: 'Money and reputation', help: 'Balance and reputation.' },
   { id: 'city', label: 'Events, weather and the calendar', help: 'Matches, concerts, rain, school holidays, the airport.' },
@@ -514,6 +515,138 @@ export const TEMPLATES: Template[] = [
       const n = g.add('action.notify', 2, 0, { title: 'Today’s peak hours', body: '{value}', tone: 'info' });
       g.link(t, 'event', peaks, 'after');
       g.link(peaks, 'summary', n, 'value');
+      return g;
+    },
+  },
+  {
+    id: 'peak-extra',
+    name: 'Extra trip as each busy hour starts',
+    description: 'An hour before a line’s busiest hours start (from its riders on recent days), schedule an extra departure for the moment they start. The line’s free buses or a spare run it.',
+    mode: 'suggest',
+    group: 'peaks',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.peak', 0, 0, { at: 'start', minutes: 60, source: 'riders' });
+      const x = g.add('action.scheduleExtra', 1, 0, {});
+      g.link(t, 'line', x, 'line');
+      g.link(t, 'peak', x, 'at');
+      return g;
+    },
+  },
+  {
+    id: 'unusual-stops',
+    name: 'Stops busier than a normal day',
+    description: 'Every hour from 07:00 to 21:00: compare each stop’s boardings in the last hour with the same hour on the last four of the same weekday, and tell me where it was at least 50% busier (stops that normally see 20 or more).',
+    mode: 'automatic',
+    group: 'insight',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.every', 0, 0, { minutes: 60, from: 7, to: 21 });
+      const b = g.add('data.baseline', 1, 0, { measure: 'stop.boardings', window: 'hour', compare: 'weekday', minNormal: 20 });
+      const f = g.add('logic.filter', 2, 0, { expr: 'item.change >= 50' }, 'At least 50% busier');
+      const few = g.add('logic.take', 3, 0, { n: 3 });
+      const words = g.add('math.expr', 3, 1, { expr: "join(pluck(a, 'baseline'), '. ')" }, 'In words');
+      const n = g.add('action.notify', 4, 0, { title: 'Stops busier than normal', body: '{value}.', tone: 'info' });
+      g.link(t, 'event', b, 'after');
+      g.link(b, 'results', f, 'list');
+      g.link(f, 'list', few, 'list');
+      g.link(few, 'list', words, 'a');
+      g.link(f, 'count', n, 'when');
+      g.link(words, 'value', n, 'value');
+      return g;
+    },
+  },
+  {
+    id: 'unusual-line-extra',
+    name: 'Extra departure when a line is unusually busy',
+    description: 'Every 30 minutes from 06:00 to 21:00: find the line whose boardings in the last hour are furthest above a normal day of the same kind (at least 40% more, on lines that normally carry 20 or more), and schedule an extra departure on it in 15 minutes.',
+    mode: 'suggest',
+    group: 'insight',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.every', 0, 0, { minutes: 30, from: 6, to: 21 });
+      const b = g.add('data.baseline', 1, 0, { measure: 'line.boardings', window: 'hour', compare: 'kind', minNormal: 20 });
+      const f = g.add('logic.filter', 2, 0, { expr: 'item.change >= 40' }, 'At least 40% busier');
+      const p = g.add('logic.pick', 3, 0, { field: 'change', order: 'desc' }, 'Most unusual');
+      const x = g.add('action.scheduleExtra', 4, 0, { mode: 'in', minutes: 15 });
+      g.link(t, 'event', b, 'after');
+      g.link(b, 'results', f, 'list');
+      g.link(f, 'list', p, 'list');
+      g.link(p, 'item', x, 'line');
+      return g;
+    },
+  },
+  {
+    id: 'forecast-extra',
+    name: 'Predictive extra departures',
+    description: 'Every hour from 06:00 to 20:00: take the demand forecast for the next three hours, join it with your lines, and work out how full each line’s departures would be at its busiest hour (riders per departure against its buses’ capacity). For the line most over 90%, schedule an extra departure ten minutes into that hour. Change the formula or the threshold to your own strategy.',
+    mode: 'suggest',
+    group: 'insight',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.every', 0, 0, { minutes: 60, from: 6, to: 20 });
+      const fc = g.add('data.demandForecast', 1, 0, { hours: '3' });
+      const ln = g.add('data.lines', 1, 1, {});
+      const j = g.add('logic.join', 2, 0, { fieldA: 'id', fieldB: 'id', as: 'now' }, 'Forecast with each line');
+      const full = g.add('math.map', 3, 0, { expr: 'round(pct(item.busiestPerDeparture, item.now.capacity))' }, 'How full at its busiest hour (%)');
+      const over = g.add('logic.filter', 4, 0, { expr: 'item.value >= 90' }, 'Over 90%?');
+      const p = g.add('logic.pick', 5, 0, { field: 'value', order: 'desc' }, 'Fullest');
+      const when = g.add('math.expr', 5, 1, { expr: 'max(15, a.busiestIn + 10)' }, 'Minutes from now');
+      const x = g.add('action.scheduleExtra', 6, 0, { mode: 'in' });
+      g.link(t, 'event', fc, 'after');
+      g.link(t, 'event', ln, 'after');
+      g.link(fc, 'lines', j, 'a');
+      g.link(ln, 'lines', j, 'b');
+      g.link(j, 'list', full, 'list');
+      g.link(full, 'list', over, 'list');
+      g.link(over, 'list', p, 'list');
+      g.link(p, 'item', when, 'a');
+      g.link(p, 'item', x, 'line');
+      g.link(when, 'value', x, 'at');
+      return g;
+    },
+  },
+  {
+    id: 'journeys-report',
+    name: 'Where passengers travel',
+    description: 'Every morning at 05:00: the three busiest journeys by area (from one area to another, or within one) on the last seven days of the same kind as today, with how many a day and how long they waited.',
+    mode: 'automatic',
+    group: 'insight',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.time', 0, 0, { time: '05:00' });
+      const od = g.add('data.journeys', 1, 0, { level: 'zone', days: '7', dayType: 'same', limit: 3 });
+      const each = g.add('math.map', 2, 0, { expr: "concat(item.label, ': ', item.journeys, ' a day, ', coalesce(item.waitMin, 0), ' min wait')" }, 'Each in words');
+      const words = g.add('math.expr', 3, 0, { expr: "join(pluck(a, 'value'), '. ')" }, 'Together');
+      const n = g.add('action.notify', 4, 0, { title: 'Where passengers travel', body: '{value}.', tone: 'info' });
+      g.link(t, 'event', od, 'after');
+      g.link(od, 'flows', each, 'list');
+      g.link(each, 'list', words, 'a');
+      g.link(od, 'total', n, 'when');
+      g.link(words, 'value', n, 'value');
+      return g;
+    },
+  },
+  {
+    id: 'free-by-depot',
+    name: 'Where buses are free at midday',
+    description: 'On weekdays at 10:00: the buses their lines do not need for the next hour, counted by depot. Useful before lending buses to another line or sending some for maintenance.',
+    mode: 'automatic',
+    group: 'fleet',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.time', 0, 0, { time: '10:00', days: 'weekdays' });
+      const free = g.add('data.buses', 1, 0, { which: 'notNeeded' });
+      const grp = g.add('logic.groupBy', 2, 0, { field: 'depotName', op: 'count' }, 'By depot');
+      const each = g.add('math.map', 3, 0, { expr: "concat(item.name, ' ', item.count)" }, 'Each in words');
+      const words = g.add('math.expr', 4, 0, { expr: "join(pluck(a, 'value'), ', ')" }, 'Together');
+      const n = g.add('action.notify', 5, 0, { title: 'Buses free until 11:00', body: '{value}.', tone: 'info' });
+      g.link(t, 'event', free, 'after');
+      g.link(free, 'buses', grp, 'list');
+      g.link(grp, 'groups', each, 'list');
+      g.link(each, 'list', words, 'a');
+      g.link(grp, 'count', n, 'when');
+      g.link(words, 'value', n, 'value');
       return g;
     },
   },

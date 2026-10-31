@@ -202,6 +202,10 @@ export interface Trip {
   endDelay?: number;
   /** an extra departure outside the timetable, and who asked for it ('player' or a workflow id) */
   extra?: string;
+  /** a scheduled extra departure: the bus asked for (it may also be a spare bus) */
+  want?: Id;
+  /** a scheduled extra departure moved off a timetable departure: the time asked for */
+  ask?: number;
 }
 
 // ─────────────────────────────────────────── passengers

@@ -864,7 +864,8 @@ export class Game {
     const list = this.state.trips[id] ?? [];
     const t = this.t;
     this.state.trips[id] = list.filter((x) => {
-      const drop = x.state === TripState.Planned && x.dep > t;
+      // scheduled extra departures stay: they are not part of the timetable
+      const drop = x.state === TripState.Planned && x.dep > t && !x.extra;
       if (drop) this.tripIndex.delete(x.id);
       return !drop;
     });
@@ -1354,6 +1355,87 @@ export class Game {
       minutes: Math.round(tripSec / 60), waiting: waitingOn(pat), cost, first, last,
       text: `${opt.v.fleetNo} ${opt.from === 'depot' ? 'leaves the depot' : 'leaves the terminus'} and runs an extra line ${r.number} trip from ${first} at ${hhmm(dep)} to ${last} (${Math.round(tripSec / 60)} min)${spare ? ', then returns to the depot' : ', then carries on with the timetable'}.`,
     });
+  }
+
+  /** Extra departures scheduled on a line that have not left yet (a bus may already be on its way). */
+  scheduledExtras(route: Id): Trip[] {
+    return (this.state.trips[route] ?? []).filter((x) => x.extra && (x.state === TripState.Planned || x.state === TripState.Assigned) && x.dep > this.t);
+  }
+
+  /** Cancel a scheduled extra departure that no bus has been given yet. */
+  cancelExtra(route: Id, tripId: number): Result {
+    const list = this.state.trips[route] ?? [];
+    const trip = list.find((x) => x.id === tripId);
+    if (!trip || !trip.extra) return fail('That extra departure no longer exists.');
+    if (trip.state !== TripState.Planned) return fail(`A bus is already on its way to run the ${hhmm(trip.dep)} extra departure.`);
+    this.state.trips[route] = list.filter((x) => x !== trip);
+    this.tripIndex.delete(trip.id);
+    // an automation does not schedule it again for 24 game hours
+    this.notePlayerChange(`extra:${route}:${Math.round((trip.ask ?? trip.dep) / 60)}`, 'schedule_extra', 'cancelled');
+    this.changed();
+    return ok(undefined);
+  }
+
+  /**
+   * Check, and with `commit` create, an extra departure at a set time later today or tomorrow
+   * (up to 24 hours ahead). When it is due, the bus asked for runs it (one on this line or a spare),
+   * or else one of the line's free buses or a spare. If no bus is free it is dropped and the player
+   * is told; it never counts as a missed departure.
+   */
+  scheduleExtra(route: Id, at: number, opts: { pat?: number; vehicle?: Id; src?: string; commit?: boolean } = {}): Result<{ trip: number; dep: number; pat: number; first: string; last: string; minutes: number; cost: number; text: string }> {
+    const err = this.requireActive();
+    if (err) return fail(err);
+    const s = this.state;
+    const r = s.routes[route];
+    if (!r) return fail('That line no longer exists.');
+    if (r.suspended) return fail(`Line ${r.number} is suspended.`);
+    const pats = (this.patterns.get(route) ?? []).filter((p) => p.valid);
+    if (!pats.length) return fail(`Line ${r.number} has no drivable route.`);
+    const now = this.t;
+    const asked = Math.round(at / 60) * 60;
+    let dep = asked;
+    if (dep < now + 10 * 60) return fail(`An extra departure needs at least 10 minutes’ notice (the earliest is ${hhmm(now + 10 * 60)}).`);
+    if (dep > now + DAY) return fail('An extra departure can be scheduled up to 24 hours ahead.');
+    if (this.scheduledExtras(route).length >= 12) return fail(`Line ${r.number} already has 12 extra departures scheduled.`);
+    let pat = pats[0];
+    if (opts.pat !== undefined) {
+      const p = pats.find((x) => x.index === opts.pat);
+      if (!p) return fail('That direction does not exist on this line.');
+      pat = p;
+    } else if (pats.length > 1) {
+      // the direction with the most people waiting along it now
+      const waitingOn = (p: Pattern) => p.stops.slice(0, -1).reduce((n, id) => n + waitingAt(s, id), 0);
+      pat = [...pats].sort((a, b) => waitingOn(b) - waitingOn(a) || a.index - b.index)[0];
+    }
+    let fleetNo = '';
+    if (opts.vehicle) {
+      const v = s.vehicles[opts.vehicle];
+      if (!v) return fail('That bus no longer exists.');
+      if (v.sell) return fail(`${v.fleetNo} is being sold.`);
+      if (v.route && v.route !== route) return fail(`${v.fleetNo} runs on line ${s.routes[v.route]?.number ?? '?'}. Use one of line ${r.number}’s buses or a spare.`);
+      fleetNo = v.fleetNo;
+    }
+    const list = (s.trips[route] ??= []);
+    // not at the same minute as another departure in that direction (it would be taken for it)
+    while (list.some((x) => x.pat === pat.index && x.dep === dep)) dep += 60;
+    const sch = this.schedule(route, pat.index, dep);
+    const minutes = Math.round((sch ? sch[sch.length - 1] : pat.path.length / 6) / 60);
+    const moved = dep !== asked ? ` (${hhmm(asked)} is already a departure)` : '';
+    const first = s.stops[pat.stops[0]]?.name ?? 'the first stop';
+    const last = s.stops[pat.stops[pat.stops.length - 1]]?.name ?? 'the last stop';
+    const day = Math.floor(dep / DAY) === Math.floor(now / DAY) ? '' : ' tomorrow';
+    // estimate: driver time for the trip and getting there, and energy for the distance
+    const m = MODEL[(opts.vehicle && s.vehicles[opts.vehicle]?.model) || r.vehicles.map((id) => s.vehicles[id]?.model).find(Boolean) || 'city12'];
+    const km = pat.path.length / 1000 + 3;
+    const cost = Math.round(((minutes + 20) / 60) * ECON.driverPerHour + km * m.energyPerKm * (m.electric ? ECON.electricPrice : ECON.fuelPrice));
+    const text = `Line ${r.number} runs an extra trip from ${first} at ${hhmm(dep)}${day}${moved} to ${last} (${minutes} min) with ${fleetNo || 'one of its free buses or a spare'}. If no bus is free then, it is dropped and you are told; it never counts as a missed departure.`;
+    if (!opts.commit) return ok({ trip: 0, dep, pat: pat.index, first, last, minutes, cost, text });
+    const trip: Trip = { id: ++s.counters.trip, route, pat: pat.index, dep, veh: null, state: TripState.Planned, extra: opts.src ?? 'player', ...(opts.vehicle ? { want: opts.vehicle } : {}), ...(dep !== asked ? { ask: asked } : {}) };
+    list.push(trip);
+    list.sort((a, b) => a.dep - b.dep || a.pat - b.pat);
+    this.tripIndex.set(trip.id, trip);
+    this.changed();
+    return ok({ trip: trip.id, dep, pat: pat.index, first, last, minutes, cost, text });
   }
 
   /** Run the extra departure `extraPlan` describes. `src`: 'player' or the workflow that asked. */

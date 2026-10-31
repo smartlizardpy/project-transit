@@ -162,6 +162,7 @@ export function dispatch(game: Game) {
     const trips = state.trips[r.id];
     if (!trips?.length) continue;
     const fleet = r.vehicles.map((id) => state.vehicles[id]).filter((v): v is Vehicle => !!v && v.route === r.id);
+    let extras: { trip: Trip; startNode: number; tol: number }[] | null = null;
     for (const trip of trips) {
       if (trip.state !== TripState.Planned) continue;
       if (trip.dep > now + LOOKAHEAD) break;
@@ -169,6 +170,11 @@ export function dispatch(game: Game) {
       const startNode = patternStartNode(game, r.id, trip.pat);
       if (r.suspended || startNode < 0) {
         if (now > trip.dep + tol) trip.state = TripState.Missed;
+        continue;
+      }
+      // extra departures come after the timetable: they only use buses it does not need
+      if (trip.extra) {
+        (extras ??= []).push({ trip, startNode, tol });
         continue;
       }
       let onLine: Candidate | null = null, depot: Candidate | null = null;
@@ -187,6 +193,10 @@ export function dispatch(game: Game) {
       if (pick) assign(game, pick, trip, startNode);
       else if (now > trip.dep + tol) missTrip(game, trip, onLine || depot ? 'late' : 'none');
     }
+    for (const x of extras ?? []) {
+      if (runExtra(game, r.id, fleet, x.trip, x.startNode, now, x.tol) === 'none' && now > x.trip.dep + x.tol) missTrip(game, x.trip, 'none');
+    }
+    extras = null;
   }
 }
 
@@ -283,7 +293,49 @@ export function transferDepot(game: Game, v: Vehicle, depotId: Id): 'driving' | 
   return 'later';
 }
 
+/**
+ * A planned extra departure: the bus asked for, or else the line's free bus or a spare that can be
+ * there soonest. A bus is free when it has no trip and none to come, so the timetable (dispatched
+ * first, up to 75 minutes ahead) never loses a bus to an extra. 'wait': not time to set off yet.
+ */
+function runExtra(game: Game, route: Id, fleet: Vehicle[], trip: Trip, startNode: number, now: number, tol: number): 'started' | 'wait' | 'none' {
+  const option = (v: Vehicle) => (v.handover || v.sell ? null : extraOption(game, v, startNode, now));
+  let best: ExtraOption | null = null;
+  if (trip.want) {
+    const w = game.state.vehicles[trip.want];
+    const usable = !!w && (w.route === route || w.route === null) && !w.handover && !w.sell;
+    const o = usable ? option(w) : null;
+    if (o && o.ready <= trip.dep + tol) best = o;
+    // it may still come free: until 20 minutes before, wait for it rather than take another bus
+    else if (usable && now < trip.dep - 20 * 60) return 'wait';
+  }
+  if (!best) {
+    // the line's own buses when they are about as quick as a spare
+    const score = (o: ExtraOption) => o.ready + (o.v.route === null ? 120 : 0);
+    for (const v of fleet) {
+      const o = option(v);
+      if (o && (!best || score(o) < score(best))) best = o;
+    }
+    for (const v of game.vehicleList()) {
+      if (v.route !== null) continue;
+      const o = option(v);
+      if (o && (!best || score(o) < score(best))) best = o;
+    }
+  }
+  if (!best || best.ready > trip.dep + tol) return 'none';
+  if (best.ready + 180 < trip.dep) return 'wait';
+  startExtra(game, best, trip, startNode);
+  return 'started';
+}
+
 function missTrip(game: Game, trip: Trip, why: 'late' | 'none') {
+  if (trip.extra) {
+    // an extra departure is not in the timetable: dropping it is not a missed departure
+    trip.state = TripState.Missed;
+    const r = game.state.routes[trip.route];
+    if (r) notify(game, 'info', `Extra departure at ${hhmm(trip.dep)} on line ${r.number} dropped`, 'No bus was free to run it. It does not count as a missed departure.', { kind: 'route', id: r.id });
+    return;
+  }
   trip.state = TripState.Missed;
   recordMissed(game.state, trip.route);
   const r = game.state.routes[trip.route];

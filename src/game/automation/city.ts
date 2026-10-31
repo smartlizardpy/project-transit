@@ -233,13 +233,15 @@ export function demandForecast(game: Game, hours: number, line?: Id): ForecastOu
       const riders = h.lines.get(id) ?? 0;
       const from = Math.max(h.t, game.t), to = h.t + HOUR;
       const deps = trips.filter((x) => x.dep >= from && x.dep < to).length;
-      return { time: hhmm(h.t), riders: Math.round(riders), departures: deps, perDeparture: deps ? r1(riders / deps) : null } as Rec;
+      return { time: hhmm(h.t), in: Math.round((from - game.t) / 60), riders: Math.round(riders), departures: deps, perDeparture: deps ? r1(riders / deps) : null } as Rec;
     });
     const best = per.reduce<Rec | null>((a, h) => (!a || (h.riders as number) > (a.riders as number) ? h : a), null);
     const riders = Math.round(f.reduce((a, h) => a + (h.lines.get(id) ?? 0), 0));
     return {
       kind: 'line', id, number: r.number, name: r.name ?? `Line ${r.number}`, label: `Line ${r.number}`, value: riders, riders,
       busiestHour: best ? best.time : null, busiest: best ? best.riders : 0, hours: per, estimate: true,
+      // minutes until that hour (0: it is this hour) and riders for each departure then
+      busiestIn: best ? best.in : null, busiestPerDeparture: best ? best.perDeparture : null,
     } as Rec;
   });
   lines.sort((a, b) => (b.riders as number) - (a.riders as number) || String(a.id).localeCompare(String(b.id)));

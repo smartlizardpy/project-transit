@@ -9,7 +9,9 @@ import type { Command } from '../commands.ts';
 import type { Game } from '../engine.ts';
 import type { LiveData, Rec } from './live.ts';
 import { compile, truthy, type EValue } from '../expr.ts';
-import { aggregate, estimatedDemand, MEASURE, type GroupBy } from '../analytics/query.ts';
+import { aggregate, estimatedDemand, MEASURE, odMatrix, type GroupBy } from '../analytics/query.ts';
+import { BANDS } from '../analytics/types.ts';
+import { BASE_COMPARE, BASE_MEASURE, BASE_OPTIONS, BASE_WINDOWS, baselineText, compareBaseline } from './baseline.ts';
 import { extraOption } from '../vehicles.ts';
 import { DAY, HOUR } from '../content.ts';
 import { hhmm, minutesLabel } from '../time.ts';
@@ -119,6 +121,17 @@ export interface NodeDef {
 const num = (v: Value | undefined): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'boolean' ? (v ? 1 : 0) : null);
 const str = (v: Value | undefined) => (v === null || v === undefined ? '' : typeof v === 'object' ? '' : String(v));
 const isRec = (v: Value | undefined): v is Rec => !!v && typeof v === 'object' && !Array.isArray(v);
+/** A field of a record; a dotted name reads inside it (`match.riders`). */
+const fieldOf = (x: Value | undefined, path: string): Value | undefined => {
+  let cur: Value | undefined = x;
+  for (const part of path.split('.')) {
+    if (!isRec(cur) || !Object.hasOwn(cur, part)) return undefined;
+    cur = cur[part];
+  }
+  return cur;
+};
+/** A value used to match or group items: a record by its id, numbers and text as text. */
+const keyOf = (v: Value | undefined): string | null => (v === undefined || v === null ? null : isRec(v) ? (typeof v.id === 'string' ? v.id : null) : Array.isArray(v) ? null : String(v));
 const idOf = (v: Value | undefined, kind: string): string | null => {
   if (typeof v === 'string' && v) return v;
   if (isRec(v) && (v.kind === kind || kind === 'any') && typeof v.id === 'string') return v.id;
@@ -362,9 +375,11 @@ export const NODES: NodeDef[] = [
       const e = ctx.event;
       const peak: Rec = { kind: 'peak', id: `${str(e.line)}:${str(e.from)}`, line: e.line ?? null, lineNumber: e.lineNumber ?? null, name: `Line ${str(e.lineNumber)} ${str(e.period)}`, from: e.from ?? null, to: e.to ?? null, period: e.period ?? null, need: e.need ?? null, has: e.has ?? null, riders: e.riders ?? null, source: e.peakSource ?? null };
       const n = num(e.buses) ?? 0;
-      const what = e.at === 'end'
+      if (!e.period) return { out: { event: e, line: OFF, peak: OFF, buses: OFF }, note: 'No line has peak hours today.' };
+      const example = e.example ? 'No line has peak hours today, so this test uses an example. ' : '';
+      const what = example + (e.at === 'end'
         ? `Line ${str(e.lineNumber)}’s peak ${str(e.period)} has ended: it can spare ${n} bus${n === 1 ? '' : 'es'} now.`
-        : `Line ${str(e.lineNumber)}’s peak ${str(e.period)} is coming: it needs ${str(e.need)} buses and has ${str(e.has)} working${n ? `, ${n} short` : ''}.`;
+        : `Line ${str(e.lineNumber)}’s peak ${str(e.period)} is coming: it needs ${str(e.need)} buses and has ${str(e.has)} working${n ? `, ${n} short` : ''}.`);
       return { out: { event: e, line: triggerEntity(ctx).line, peak, buses: n }, note: what };
     },
   },
@@ -734,6 +749,149 @@ export const NODES: NodeDef[] = [
     },
   },
 
+  {
+    type: 'data.journeys', category: 'data', label: 'Passenger journeys',
+    description: 'Where your passengers travel: recorded journeys from one stop or area to another (origin to destination), a day on average, with how many gave up, the average journey and wait, how many changed bus and the lines they used. Narrow it to journeys from or to a stop, on a line, on the same kind of day as today or at one time of day.',
+    inputs: [
+      afterIn,
+      { id: 'from', label: 'From', type: 'any', optional: true, help: 'A stop or an area (or nothing: from anywhere).' },
+      { id: 'to', label: 'To', type: 'any', optional: true, help: 'A stop or an area (or nothing: to anywhere).' },
+      { id: 'line', label: 'Using line', type: 'line', optional: true },
+    ],
+    outputs: [
+      { id: 'flows', label: 'Journeys', type: 'list', help: 'Busiest first. Each: from, to, journeys (a day), gaveUp, journeyMin, waitMin, changedPct, usual (the lines most took), lines, and between areas `within` (starts and ends in the same area: filter with not item.within).' },
+      { id: 'top', label: 'Busiest', type: 'record' },
+      { id: 'origins', label: 'Where they start', type: 'list', help: 'Stops or areas, busiest first. A stop here can be connected wherever a stop is wanted.' },
+      { id: 'destinations', label: 'Where they go', type: 'list' },
+      { id: 'total', label: 'Journeys a day', type: 'number' },
+    ],
+    config: [
+      { id: 'level', label: 'Between', kind: 'select', default: 'zone', options: [{ value: 'zone', label: 'Areas' }, { value: 'stop', label: 'Stops' }] },
+      { id: 'from', label: 'From stop', kind: 'stop', default: '', allowAny: true, help: 'Between areas, this means the stop’s area. Leave empty for anywhere.' },
+      { id: 'to', label: 'To stop', kind: 'stop', default: '', allowAny: true },
+      lineCfg('Using line', true),
+      { id: 'days', label: 'Days', kind: 'select', default: '7', options: [{ value: '1', label: 'Yesterday' }, { value: '7', label: 'The last 7 days' }, { value: '28', label: 'The last 28 days' }, { value: '0', label: 'Today so far' }] },
+      { id: 'dayType', label: 'Kind of day', kind: 'select', default: 'same', options: [{ value: 'same', label: 'The same kind as today (weekday or weekend)' }, { value: 'all', label: 'Every day' }, { value: 'weekday', label: 'Weekdays' }, { value: 'weekend', label: 'Weekends' }] },
+      { id: 'band', label: 'Setting off', kind: 'select', default: 'all', options: [{ value: 'all', label: 'At any time' }, ...BANDS.map((b, i) => ({ value: String(i), label: `${b.label} (${b.short})` }))] },
+      { id: 'limit', label: 'Busiest', kind: 'number', default: 10, min: 1, max: 50, unit: 'journeys' },
+    ],
+    run: (ctx, inp, cfg) => {
+      const game = ctx.game, s = game.state;
+      const level = str(cfg.level) === 'stop' ? 'stop' : 'zone';
+      // a stop or an area, connected or chosen
+      const place = (v: Value | undefined, setting: string): { stop?: string; zone?: string } | null => {
+        if (isRec(v) && v.kind === 'area' && typeof v.id === 'string') return { zone: v.id };
+        const id = idOf(v, 'stop') ?? (v === undefined ? setting || null : null);
+        if (!id) return null;
+        const st = s.stops[id];
+        if (!st) throw new Error('That stop no longer exists.');
+        return { stop: id, zone: st.zone };
+      };
+      const from = place(inp.from, str(cfg.from)), to = place(inp.to, str(cfg.to));
+      const line = idOf(inp.line, 'line') ?? (str(cfg.line) || null);
+      const today = Math.floor(game.t / DAY);
+      const n = Number(cfg.days ?? 7);
+      const wd = (s.clock.startWeekday + today) % 7;
+      const dt = str(cfg.dayType) || 'same';
+      const dayType = (dt === 'same' ? (wd >= 5 ? 'weekend' : 'weekday') : dt) as 'all' | 'weekday' | 'weekend';
+      const band = str(cfg.band) === 'all' || cfg.band === undefined ? null : Number(cfg.band);
+      ctx.spend(300);
+      const res = odMatrix(game, {
+        level, dayType, days: n === 0 ? { from: today, to: today } : { last: n }, includeToday: n === 0,
+        bands: band === null ? [] : [band], lines: line ? [line] : [],
+        origin: from ? (level === 'zone' ? from.zone : from.stop) ?? null : null,
+        destination: to ? (level === 'zone' ? to.zone : to.stop) ?? null : null,
+      });
+      // an area asked for between stops: keep the stops in it
+      const inZone = (stopId: string, z?: string) => !z || s.stops[stopId]?.zone === z;
+      const flows0 = level === 'stop' ? res.flows.filter((f) => (!from || from.stop || inZone(f.o, from.zone)) && (!to || to.stop || inZone(f.d, to.zone))) : res.flows;
+      const days = Math.max(1, res.coverage.detailed.length + (res.coverage.today ? 1 : 0));
+      const r1x = (x: number) => Math.round(x * 10) / 10;
+      const limit = Math.max(1, Math.min(50, num(cfg.limit) || 10));
+      const flows: Rec[] = flows0.slice(0, limit).map((f) => {
+        const top = f.itineraries[0];
+        // between areas, trips that start and end in the same area are shown as "Within …"
+        const within = level === 'zone' && f.o === f.d;
+        const label = within ? `Within ${f.oLabel}` : `${f.oLabel} → ${f.dLabel}`;
+        const lines = top ? top.sig.split('.').filter((_, i) => i % 2 === 0).map((id) => s.routes[id]?.number ?? s.analytics.names.r[id]?.n ?? '?') : [];
+        return {
+          kind: 'flow', id: f.key, from: f.oLabel, to: f.dLabel, fromId: f.o, toId: f.d, label, name: label, within,
+          journeys: r1x(f.journeys / days), gaveUp: r1x(f.abandoned / days), value: r1x(f.journeys / days),
+          journeyMin: f.journeyMin === null ? null : r1x(f.journeyMin), waitMin: f.waitMin === null ? null : r1x(f.waitMin),
+          changedPct: f.journeys ? Math.round((f.transfers / f.journeys) * 100) : 0, usual: top?.label ?? null, lines,
+        };
+      });
+      const kind = level === 'stop' ? 'stop' : 'area';
+      const ends = (list: { id: string; label: string; journeys: number }[]) => list.slice(0, 10).map((x) => ({ kind, id: x.id, name: x.label, journeys: r1x(x.journeys / days), value: r1x(x.journeys / days) }));
+      const total = r1x(flows0.reduce((a, f) => a + f.journeys, 0) / days);
+      const gave = r1x(flows0.reduce((a, f) => a + f.abandoned, 0) / days);
+      const first = flows[0];
+      const scope = `${n === 0 ? 'Today so far' : n === 1 ? 'Yesterday' : `The last ${n} days`}${dayType === 'all' ? '' : ` (${dayType}s only)`}`;
+      const round = (x: number) => (x >= 10 ? Math.round(x) : x).toLocaleString('en-GB');
+      const note = first
+        ? `${scope}: about ${round(total)} journeys a day${level === 'zone' ? ', by area' : ' between stops'}${gave ? `, and ${round(gave)} gave up` : ''}. Busiest: ${str(first.label)}, ${round(Number(first.journeys))} a day${first.waitMin !== null ? `, ${str(first.waitMin)} min wait` : ''}.`
+        : `${scope}: ${res.notes.find((x) => x.startsWith('No recorded')) ?? 'no journeys match.'}`;
+      return { out: { flows, top: first ?? OFF, origins: ends(res.origins), destinations: ends(res.destinations), total }, note };
+    },
+  },
+  {
+    type: 'data.baseline', category: 'data', label: 'Compare with a normal day',
+    description: 'Is a figure unusual for the time of day? Compares the last hour (or three, or today so far) with the same hours on comparable recorded days: the same day of the week, the same kind of day, or every day last week. E.g. 140 boardings at a stop 17:00–18:00 against 92 on a normal Saturday is 52% more. With no line or stop chosen it compares each one, most unusual first.',
+    inputs: [afterIn, { id: 'item', label: 'Line or stop', type: 'any', optional: true, list: true, help: 'A line or a stop, or a list of them. Unconnected: the one chosen below, or every one.' }],
+    outputs: [
+      { id: 'change', label: '% above normal', type: 'number', help: 'Below normal is negative. Nothing when it is normally zero.' },
+      { id: 'now', label: 'Now', type: 'number' },
+      { id: 'normal', label: 'Normal', type: 'number' },
+      { id: 'results', label: 'Each one', type: 'list', help: 'Most above normal first. Each is the line or stop with now, normal, change and compared (days).' },
+      { id: 'first', label: 'Most above normal', type: 'record' },
+      { id: 'text', label: 'In words', type: 'text' },
+    ],
+    config: [
+      { id: 'measure', label: 'Figure', kind: 'select', default: 'stop.boardings', options: BASE_OPTIONS },
+      lineCfg('Line', true),
+      { id: 'stop', label: 'Stop', kind: 'stop', default: '', allowAny: true, help: 'For stop figures. Leave the line or stop empty to compare every one.' },
+      { id: 'window', label: 'Over', kind: 'select', default: 'hour', options: BASE_WINDOWS },
+      { id: 'compare', label: 'Against', kind: 'select', default: 'weekday', options: BASE_COMPARE },
+      { id: 'minNormal', label: 'Skip when normally below', kind: 'number', default: 0, min: 0, max: 10000, help: 'Leaves out small figures, where a few extra people look like a big change: e.g. 10 skips a stop that normally sees 2 boardings and now sees 6 (+200%).' },
+    ],
+    run: (ctx, inp, cfg) => {
+      const game = ctx.game, s = game.state;
+      const mid = str(cfg.measure);
+      const m = BASE_MEASURE[mid];
+      if (!m) throw new Error('Choose a figure.');
+      const win = str(cfg.window) || 'hour', cmp = str(cfg.compare) || 'weekday';
+      const floor = num(cfg.minNormal) ?? 0;
+      let ids: (string | null)[];
+      if (m.scope === 'network') ids = [null];
+      else if (inp.item !== undefined && inp.item !== null) {
+        ids = items(inp.item, 200).map((x) => (m.scope === 'line' ? idOf(x, 'line') : idOf(x, 'stop')));
+        if (ids.some((x) => !x)) throw new Error(`This figure is for ${m.scope === 'line' ? 'lines: connect a line (or a bus, which stands for its line)' : 'stops: connect a stop'}.`);
+      } else {
+        const one = m.scope === 'line' ? str(cfg.line) : str(cfg.stop);
+        if (one) ids = [one];
+        else if (m.scope === 'line') ids = Object.keys(s.routes);
+        else ids = [...new Set(Object.values(s.routes).flatMap((r) => [...r.stops, ...(r.returnStops ?? [])]))].slice(0, 300);
+      }
+      ctx.spend(ids.length * 4);
+      const results: Rec[] = [];
+      for (const id of ids) {
+        const base: Rec | null = id === null ? { kind: 'network', id: 'network', name: 'The whole network' } : m.scope === 'line' ? ctx.live.line(id) : ctx.live.stop(id);
+        if (!base) throw new Error(`That ${m.scope} no longer exists.`);
+        const r = compareBaseline(game, mid, id, win, cmp);
+        if (r.normal !== null && r.normal < floor) continue;
+        const name = m.scope === 'line' ? `Line ${str(base.number)}` : str(base.name);
+        // the comparison first: the debugger shows the first fields of a record
+        results.push({ kind: base.kind, id: base.id, name: base.name ?? name, now: r.value, normal: r.normal, change: r.change, compared: r.days, hours: r.hours, baseline: baselineText(game, mid, name, r), ...base });
+      }
+      results.sort((a, b) => (num(b.change) ?? -Infinity) - (num(a.change) ?? -Infinity));
+      const first = results[0];
+      if (!first) return { out: { change: OFF, now: OFF, normal: OFF, results: [], first: OFF, text: 'Nothing to compare.' }, note: floor ? `None normally reaches ${floor}.` : 'Nothing to compare.' };
+      const above = results.filter((x) => (num(x.change) ?? 0) > 0).length;
+      const text = results.length === 1 ? str(first.baseline) : `${str(first.baseline)}. ${above} of ${results.length} are above normal.`;
+      return { out: { change: first.change, now: first.now, normal: first.normal, results, first, text }, note: text };
+    },
+  },
+
   // ── logic
   {
     type: 'logic.compare', category: 'logic', label: 'Compare', description: 'Is a number above, below or equal to another (or a threshold)?',
@@ -808,7 +966,7 @@ export const NODES: NodeDef[] = [
     run: (ctx, inp, cfg) => {
       const list = Array.isArray(inp.list) ? [...inp.list] : [];
       const f = str(cfg.field), dir = str(cfg.order) === 'asc' ? 1 : -1;
-      const val = (x: Value) => (isRec(x) ? x[f] : null);
+      const val = (x: Value) => fieldOf(x, f) ?? null;
       ctx.spend(list.length);
       list.sort((a, b) => {
         const x = val(a), y = val(b);
@@ -842,11 +1000,98 @@ export const NODES: NodeDef[] = [
       let best: Rec | null = null, bv = 0;
       for (const x of list) {
         if (!isRec(x)) continue;
-        const v = num(x[f]);
+        const v = num(fieldOf(x, f));
         if (v === null) continue;
         if (!best || (low ? v < bv : v > bv)) { best = x; bv = v; }
       }
       return best ? { out: { item: best, value: bv, found: true }, note: `${fmt(best)}: ${f} ${fmt(bv)}.` } : { out: { item: OFF, value: OFF, found: false }, note: list.length ? `No item has a figure “${f}”.` : 'The list is empty.' };
+    },
+  },
+  {
+    type: 'logic.groupBy', category: 'logic', label: 'Group by',
+    description: 'Sorts the items of a list into groups that share a field, e.g. buses by line or depot, stops by area, journeys by where they go. Each group has its key, how many items it has, the items, and a total, average, smallest or largest of another field. Biggest group first. A group of buses by line stands for that line.',
+    inputs: [{ id: 'list', label: 'List', type: 'list' }],
+    outputs: [{ id: 'groups', label: 'Groups', type: 'list', help: 'Each: key, name, count, value, items.' }, { id: 'largest', label: 'Biggest group', type: 'record' }, { id: 'count', label: 'How many groups', type: 'number' }],
+    config: [
+      { id: 'field', label: 'Group by field', kind: 'text', default: 'line', help: 'e.g. line, depot, area, status, to. A dotted name reads inside a record: match.line.' },
+      { id: 'op', label: 'For each group', kind: 'select', default: 'count', options: [{ value: 'count', label: 'Count the items' }, { value: 'sum', label: 'Total of a field' }, { value: 'avg', label: 'Average of a field' }, { value: 'min', label: 'Smallest of a field' }, { value: 'max', label: 'Largest of a field' }] },
+      { id: 'of', label: 'Of field', kind: 'text', default: 'load', help: 'For a total, average, smallest or largest.' },
+    ],
+    run: (ctx, inp, cfg) => {
+      const list = Array.isArray(inp.list) ? inp.list : [];
+      const f = str(cfg.field), op = str(cfg.op) || 'count', of = str(cfg.of);
+      if (!f) throw new Error('Name the field to group by.');
+      ctx.spend(list.length * 2);
+      const s = ctx.game.state;
+      const groups = new Map<string, { key: Value; items: Value[] }>();
+      for (const x of list) {
+        const raw = fieldOf(x, f);
+        const k = keyOf(raw) ?? '';
+        let g = groups.get(k);
+        if (!g) {
+          if (groups.size >= 100) continue;
+          groups.set(k, (g = { key: raw === undefined ? null : isRec(raw) ? (raw.id as Value) : raw, items: [] }));
+        }
+        g.items.push(x);
+      }
+      const out: Rec[] = [...groups.entries()].map(([k, g]) => {
+        const vals = g.items.map((x) => num(fieldOf(x, of))).filter((v): v is number => v !== null);
+        const value = op === 'count' ? g.items.length : !vals.length ? null : op === 'sum' ? vals.reduce((a, b) => a + b, 0) : op === 'avg' ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : op === 'min' ? Math.min(...vals) : Math.max(...vals);
+        // a key that is one of your lines, depots or stops: named, and a line group stands for its line
+        const r = s.routes[k], d = s.depots[k], st = s.stops[k];
+        const name = !k ? 'None' : r ? `Line ${r.number}` : d ? d.name : st ? st.name : k;
+        return { kind: 'group', id: k || 'none', key: g.key, name, count: g.items.length, value, items: g.items, ...(r ? { line: k, lineNumber: r.number } : {}), ...(d ? { depot: k } : {}) };
+      });
+      out.sort((a, b) => (num(b.value) ?? -Infinity) - (num(a.value) ?? -Infinity) || Number(b.count) - Number(a.count));
+      const what = op === 'count' ? '' : ` (${op === 'sum' ? 'total' : op === 'avg' ? 'average' : op === 'min' ? 'smallest' : 'largest'} ${of})`;
+      const shown = out.slice(0, 4).map((g) => `${str(g.name)} ${fmt(g.value)}`).join(', ');
+      return {
+        out: { groups: out, largest: out[0] ?? OFF, count: out.length },
+        note: out.length ? `${out.length} group${out.length === 1 ? '' : 's'} by ${f}${what}: ${shown}${out.length > 4 ? ', …' : ''}.${groups.size >= 100 ? ' At most 100 groups.' : ''}` : 'The list is empty.',
+      };
+    },
+  },
+  {
+    type: 'logic.join', category: 'logic', label: 'Join lists',
+    description: 'Matches the items of two lists on a shared field and adds each match to the item of list A, under one name: e.g. your lines (id) with a demand forecast (id), then item.match.riders. Combines figures from different blocks so you can filter, sort or calculate with both.',
+    inputs: [{ id: 'a', label: 'List A', type: 'list' }, { id: 'b', label: 'List B', type: 'list' }],
+    outputs: [{ id: 'list', label: 'Joined', type: 'list' }, { id: 'unmatched', label: 'A without a match', type: 'list' }, { id: 'count', label: 'Matched', type: 'number' }],
+    config: [
+      { id: 'fieldA', label: 'Field in A', kind: 'text', default: 'id' },
+      { id: 'fieldB', label: 'Matches field in B', kind: 'text', default: 'id', help: 'e.g. A: buses by line, B: lines by id. A record in a field matches by its id.' },
+      { id: 'as', label: 'Add the match as', kind: 'text', default: 'match', help: 'The field each item of A gets, holding its match from B. Read it with a dotted name, e.g. match.riders.' },
+      { id: 'keep', label: 'Keep', kind: 'select', default: 'matched', options: [{ value: 'matched', label: 'Only items of A with a match' }, { value: 'all', label: 'Every item of A (no match: nothing)' }] },
+    ],
+    run: (ctx, inp, cfg) => {
+      const a = Array.isArray(inp.a) ? inp.a : [], b = Array.isArray(inp.b) ? inp.b : [];
+      const fa = str(cfg.fieldA) || 'id', fb = str(cfg.fieldB) || 'id', as = str(cfg.as).trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(as) || as === 'kind' || as === 'id') throw new Error('Name the field for the match: one word, not kind or id.');
+      ctx.spend(a.length + b.length);
+      const index = new Map<string, Value>();
+      let twice = 0;
+      for (const y of b) {
+        const k = keyOf(fieldOf(y, fb));
+        if (k === null) continue;
+        if (index.has(k)) twice++;
+        else index.set(k, y);
+      }
+      const joined: Value[] = [], unmatched: Value[] = [];
+      for (const x of a) {
+        const k = keyOf(fieldOf(x, fa));
+        const y = k === null ? undefined : index.get(k);
+        if (y === undefined) {
+          unmatched.push(x);
+          if (str(cfg.keep) === 'all') joined.push(isRec(x) ? { kind: x.kind ?? null, id: x.id ?? null, [as]: null, ...x, [as]: null } : { item: x, [as]: null });
+          continue;
+        }
+        // the match near the front, where the debugger shows it; it wins over a field of the same name
+        joined.push(isRec(x) ? { kind: x.kind ?? null, id: x.id ?? null, [as]: y, ...x, [as]: y } : { item: x, [as]: y });
+      }
+      const matched = a.length - unmatched.length;
+      return {
+        out: { list: joined, unmatched, count: matched },
+        note: `${matched} of ${a.length} matched on ${fa} = ${fb}.${unmatched.length ? ` ${unmatched.length} without a match${str(cfg.keep) === 'all' ? ' kept, with nothing as their match' : ' left out'}.` : ''}${twice ? ` ${twice} item${twice === 1 ? '' : 's'} of B shared a key with an earlier one: the first was used.` : ''}`,
+      };
     },
   },
   {
@@ -900,7 +1145,7 @@ export const NODES: NodeDef[] = [
       const list = Array.isArray(inp.list) ? inp.list : [];
       const f = str(cfg.field), op = str(cfg.op);
       ctx.spend(list.length);
-      const vals = list.map((x) => (isRec(x) ? num(x[f]) : num(x))).filter((x): x is number => x !== null);
+      const vals = list.map((x) => (isRec(x) ? num(fieldOf(x, f)) : num(x))).filter((x): x is number => x !== null);
       const v = op === 'count' ? list.length : !vals.length ? null : op === 'sum' ? vals.reduce((a, b) => a + b, 0) : op === 'avg' ? vals.reduce((a, b) => a + b, 0) / vals.length : op === 'min' ? Math.min(...vals) : Math.max(...vals);
       return { out: { value: v }, note: `${op} of ${f} over ${list.length} item${list.length === 1 ? '' : 's'} = ${fmt(v)}` };
     },
@@ -908,7 +1153,7 @@ export const NODES: NodeDef[] = [
   {
     type: 'math.field', category: 'math', label: 'Get field', description: 'Reads one field of a record, e.g. a line’s occupancy.',
     inputs: [{ id: 'record', label: 'Record', type: 'record' }], outputs: [{ id: 'value', label: 'Value', type: 'any' }], config: [{ id: 'field', label: 'Field', kind: 'text', default: 'occupancy' }],
-    run: (_ctx, inp, cfg) => { const f = str(cfg.field); const v = isRec(inp.record) && Object.hasOwn(inp.record, f) ? inp.record[f] : null; return { out: { value: v }, note: `${f} = ${fmt(v)}` }; },
+    run: (_ctx, inp, cfg) => { const f = str(cfg.field); const v = fieldOf(inp.record, f) ?? null; return { out: { value: v }, note: `${f} = ${fmt(v)}` }; },
   },
   {
     type: 'math.map', category: 'math', label: 'Calculate for each', description: 'Adds a field `value` to every item of a list from an expression with `item`.',
@@ -994,6 +1239,50 @@ export const NODES: NodeDef[] = [
       if (!lines.length) throw new Error('Choose or connect a line.');
       const bus = idOf(inp.bus, 'vehicle') ?? undefined;
       return actionOut(lines.map((route) => ctx.act({ type: 'dispatch_extra', route, vehicle: bus })));
+    },
+  },
+  {
+    type: 'action.scheduleExtra', category: 'action', label: 'Schedule extra departure',
+    description: 'Plans an extra trip on a line for a set time later, up to 24 hours ahead: e.g. 10 minutes before a peak starts or a match ends. When it is due, the bus connected runs it if it is free then, or else one of the line’s free buses or a spare. If no bus is free it is dropped and you are told; it never counts as a missed departure. Timetable changes keep it, and you can cancel it on the line.',
+    inputs: [
+      whenIn,
+      { id: 'line', label: 'Line', type: 'line', optional: true, list: true },
+      { id: 'at', label: 'Time', type: 'any', optional: true, help: 'A time such as "17:30" (the next one), a number of minutes from now, or a peak (its start). Unconnected: the setting.' },
+      { id: 'bus', label: 'Bus', type: 'vehicle', optional: true },
+    ],
+    outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }],
+    config: [
+      lineCfg(),
+      { id: 'mode', label: 'When', kind: 'select', default: 'at', options: [{ value: 'at', label: 'At a time of day' }, { value: 'in', label: 'In a number of minutes' }] },
+      { id: 'time', label: 'At', kind: 'time', default: '17:00' },
+      { id: 'minutes', label: 'In', kind: 'number', default: 30, min: 10, max: 1440, step: 5, unit: 'min' },
+      { id: 'shift', label: 'Earlier (−) or later (+) by', kind: 'number', default: 0, min: -180, max: 180, step: 5, unit: 'min', help: 'Moves the time: e.g. −10 with a peak connected leaves ten minutes before it starts.' },
+      { id: 'dir', label: 'Direction', kind: 'select', default: 'auto', options: [{ value: 'auto', label: 'Where most people are waiting when it is planned' }, { value: '0', label: 'Outward (first stop to last)' }, { value: '1', label: 'Return' }] },
+    ],
+    action: { impact: 'low' },
+    run: (ctx, inp, cfg) => {
+      if (!go(inp)) return { out: { result: OFF, done: false }, note: 'Condition was false: no departure scheduled.' };
+      const lines = inp.line !== undefined ? items(inp.line).map((x) => idOf(x, 'line')).filter((x): x is string => !!x) : [str(cfg.line)].filter(Boolean);
+      if (!lines.length) throw new Error('Choose or connect a line.');
+      const t = ctx.game.t;
+      // the next time of day hh:mm (today, or tomorrow once it has passed)
+      const nextClock = (txt: string) => {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(txt.trim());
+        if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) throw new Error(`“${txt}” is not a time like 17:30.`);
+        const at = Math.floor(t / DAY) * DAY + Number(m[1]) * HOUR + Number(m[2]) * 60;
+        return at <= t ? at + DAY : at;
+      };
+      const v = inp.at;
+      let at: number;
+      if (typeof v === 'number') at = t + v * 60;
+      else if (typeof v === 'string' && v) at = nextClock(v);
+      else if (isRec(v) && typeof v.from === 'string') at = nextClock(v.from);
+      else if (v !== undefined && v !== null) throw new Error('Connect a time such as "17:30", a number of minutes, or a peak.');
+      else at = str(cfg.mode) === 'in' ? t + (num(cfg.minutes) ?? 30) * 60 : nextClock(str(cfg.time) || '17:00');
+      at += (num(cfg.shift) ?? 0) * 60;
+      const pat = str(cfg.dir) === '0' ? 0 : str(cfg.dir) === '1' ? 1 : undefined;
+      const bus = idOf(inp.bus, 'vehicle') ?? undefined;
+      return actionOut(lines.map((route) => ctx.act({ type: 'schedule_extra', route, at, ...(pat === undefined ? {} : { pat }), ...(bus ? { vehicle: bus } : {}) })));
     },
   },
   {

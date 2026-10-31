@@ -17,7 +17,7 @@ import { checkCommand, runCommand, type Command } from '../commands.ts';
 import { DAY, HOUR, MODEL } from '../content.ts';
 import { dayTotals } from '../finance.ts';
 import { hhmm, serviceDayOf, weekdayOf } from '../time.ts';
-import { linePeaks, peakEvent, peakFireTime, nextPeakFire, timetablePeaks } from './peaks.ts';
+import { linePeaks, nowMinute, peakEvent, peakFireTime, nextPeakFire, timetablePeaks, type Peak } from './peaks.ts';
 import { notify } from '../progress.ts';
 import { waitingAt } from '../passengers.ts';
 import { dayMatches, eventKindMatches, forecastMatches, linesNearEvent, weatherChangeMatches, weatherRecs } from './city.ts';
@@ -388,6 +388,8 @@ function describeKey(game: Game, key: string): string {
   if (k === 'headway') return `set every ${key.split(':').pop()} min`;
   if (k === 'suspended') return v === 'true' ? 'suspended it' : 'resumed it';
   if (k === 'fare') return `set the fare to ${v}`;
+  if (k === 'cancelled') return 'cancelled it';
+  if (k === 'extra_at') return 'scheduled it';
   return key;
 }
 
@@ -802,6 +804,15 @@ export function sampleEvent(game: Game, node: Workflow['nodes'][number]): Rec {
       return null;
     })();
     if (any) Object.assign(base, peakEvent(game, any.line, any.peak, at), { source: 'test', sample: true });
+    else {
+      // no line has peak hours today: an example peak an hour from now, so a test run can go through
+      const r = (line ? s.routes[line] : null) ?? Object.values(s.routes)[0];
+      if (r) {
+        const from = Math.ceil(nowMinute(game) / 60) * 60 + 60;
+        const pk: Peak = { line: r.id, source: 'timetable', from, to: from + 120, need: Math.max(1, game.requirement(r.id)?.peak ?? r.vehicles.length), riders: null };
+        Object.assign(base, peakEvent(game, r.id, pk, at), { source: 'test', sample: true, example: true });
+      }
+    }
   }
   // weather and events: the real forecast, weather and next event in the game
   if (node.type === 'trigger.forecast') {

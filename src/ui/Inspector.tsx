@@ -13,7 +13,7 @@ import { MODEL, ECON, STOP_RULES } from '../game/content.ts';
 import { STATUS_LABEL } from '../game/vehicles.ts';
 import { routeWindow, routeMoney, licenceInfo } from '../game/progress.ts';
 import { describeTimetable } from '../game/timetable.ts';
-import { serviceDayOf } from '../game/time.ts';
+import { hhmm, serviceDayOf } from '../game/time.ts';
 import { occupied, waitingAt } from '../game/passengers.ts';
 import type { LngLat } from '../game/world/graph.ts';
 import { PLACE_LABEL, placeSignificance, walkDistanceM } from '../game/world/places.ts';
@@ -322,6 +322,7 @@ function LineInspector({ id }: { id: string }) {
   const legDiags = diags.filter((d) => d.kind === 'detour' || d.kind === 'contraflow');
   const busDiag = diags.find((d) => d.kind === 'insufficient-buses');
   const headway = game.headwayAt(id, 0, game.t);
+  const extras = game.scheduledExtras(id).slice(0, 8);
   return (
     <>
       <div className="p-head">
@@ -374,6 +375,37 @@ function LineInspector({ id }: { id: string }) {
           <div className="t" style={{ fontWeight: 700 }}>{describeTimetable({ ...r.timetable, [weekend ? 'weekend' : 'weekday']: todayPlan.plan }, weekend)}</div>
           {todayPlan.planId && <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>Today this is the "{todayPlan.name}" plan, not the normal timetable.</div>}
           {req && <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>Needs {req.peak} bus{req.peak === 1 ? '' : 'es'} at peak · round trip ≈ {Math.round(Math.max(0, ...req.bands.map((b) => b.cycle)))} min incl. layover</div>}
+          {extras.length > 0 && (
+            <>
+              <div className="label" style={{ marginTop: 10, marginBottom: 4 }}>Extra departures planned</div>
+              <div className="mini-list">
+                {extras.map((x) => {
+                  const pat = pats.find((p) => p.index === x.pat);
+                  const from = pat ? game.state.stops[pat.stops[0]]?.name : null;
+                  const by = x.extra && x.extra !== 'player' ? game.state.automation.workflows[x.extra]?.name : null;
+                  const bus = x.veh ? game.state.vehicles[x.veh] : null;
+                  return (
+                    <div className="mini-row" key={x.id}>
+                      <div className="grow" style={{ minWidth: 0, padding: '3px 0' }}>
+                        <div className="t"><span className="num">{hhmm(x.dep)}</span>{from ? `from ${from}` : ''}</div>
+                        {(bus || by) && (
+                          <div className="faint" style={{ fontSize: 11.5 }}>
+                            {[bus ? `#${bus.fleetNo} on its way` : '', by ? `Planned by “${by}”` : ''].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
+                      </div>
+                      {!bus && (
+                        <button className="icon-btn sm has-tip" onClick={() => run(game.cancelExtra(id, x.id), `Extra departure at ${hhmm(x.dep)} cancelled`)} aria-label="Cancel extra departure">
+                          <X size={13} weight="bold" />
+                          <Tip label="Cancel" hint="Automations do not plan it again for 24 hours" side="left" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
         <div className="section">
           <div className="row" style={{ minHeight: 0, marginBottom: 6 }}>

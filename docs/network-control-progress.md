@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-31 (peak hours and sharing buses).
+Last updated: 2026-10-31 (blocks for building your own strategies).
 
 ## A. Foundations: save version 2, analytics recording, unlock ✅
 
@@ -137,6 +137,24 @@ The owner could not build flows like "compare lines' peak hours" or "park a free
 | Screenshots of the new blocks in the real UI (`scripts/capture-peaks.mjs`, 4 checks) | ✅ | `automation-peaks-gallery.png`, `automation-peaks-bring-in.png` (live: "Next 06:00: line 1, peak 07:00–09:00"), `automation-peaks-report.png` (a test run: "Line 1: 07:00–09:00 and 16:00–18:00 (3 buses)") |
 
 The demo company's timetables ran the same all day, so they had no timetable peaks. The capture script first gives its busiest line a weekday timetable of every 20 minutes, every 10 minutes 07:00–09:00 and 16:00–18:00, as a player would; everything after that is the engine's real state. Lines 2 and 3 have no peaks and the report leaves them out.
+
+## I. Blocks for building your own strategies (requested 2026-10-31) 🟡
+
+The owner asked for blocks that make Automation Studio a programming environment rather than a set of recipes, and named five to do first: Group By, Join Datasets, Origin–Destination Query, Compare With Baseline and Schedule Extra Service. Several others on their list already existed (place information, demand forecast, events, weather, service plans for timetable profiles). 🟡 until the owner has played it.
+
+| Item | Status | Evidence |
+|---|---|---|
+| **Schedule extra departure**: an extra trip at a time of day or in N minutes (10 min to 24 h ahead), with a shift, from text, minutes or a peak; the bus asked for, else a free line bus or a spare; dropped with a notice (not a missed departure) when no bus is free; kept through timetable changes and saves | ✅ | `automation-programming.test.ts` "runs at the set time…", "takes a time as text, minutes, or a peak…" |
+| Extras never take a bus the timetable needs: the timetable is dispatched first and an extra only uses a free bus | ✅ | test "only uses a free bus…": against the same game without the extra, the line misses exactly the same departures |
+| Planned extras on the line panel, with who asked and the bus on its way; cancelling one blocks automations re-planning it for 24 h; each time is its own target, so two workflows planning different times do not "disagree" | ✅ | tests "checks notice and range, and two workflows…", "…a cancelled one is not scheduled again" |
+| **Compare with a normal day**: 10 figures for lines, stops and the network over the last hour, three hours or today, against the same weekday, the same kind of day or last week; every line or stop, most unusual first | ✅ | test "compares the last hour with the same hour…" (worked by hand on recorded days), "as a block…" |
+| **Passenger journeys**: recorded origin–destination journeys between stops or areas, a day on average, by kind of day, time band, line, or from or to a stop or area | ✅ | test "lists recorded journeys between areas and stops…" |
+| **Group by** and **Join lists**, and dotted field names (`match.riders`) in Sort, Pick, Summarise, Group by, Join and Get field | ✅ | test "groups buses by line…, and joins two lists…" |
+| Six starter workflows: *Extra trip as each busy hour starts*, *Stops busier than a normal day*, *Extra departure when a line is unusually busy*, *Predictive extra departures* (the owner's worked example), *Where passengers travel*, *Where buses are free at midday* | ✅ | every template validates and test-runs (existing test); the predictive one measured: 48.8 boardings per departure forecast for 07:00 on 34-place buses, 144%, so an extra at 07:10 |
+| Screenshots in the real UI (`scripts/capture-programming.mjs`, 6 checks, no page errors) | ✅ | `automation-programming-gallery.png`, `automation-programming-predictive.png` (a test run: forecast, join "3 of 3 matched on id = id", formula, filter), `automation-programming-line-extras.png` (the line panel: "06:45 from Eminönü, planned by …"), `automation-programming-journeys.png` (a test run: "about 327 journeys a day, by area… Busiest: Within Tünel, 123 a day") |
+
+In the demo company the forecast is low (about 41 boardings on the network in the next three hours), so *Predictive extra departures* finds no line over 90% and plans nothing; its screenshot shows that test run as it is. The extra on the line panel was planned by a two-block workflow the capture script makes (Manual trigger → Schedule extra departure in 45 minutes) and runs for real.
+| Not built yet from the owner's list: nearby stops, route between two points, coverage, transfer finder, occupancy of one departure, missed connections, wait until, queue, optimise allocation, hold, adjust or short-turn a departure, temporary detour, route proposals | ⬜ | each needs its own simulation support first (the owner asked not to fake actions) |
 
 ## Mandatory scenarios
 
