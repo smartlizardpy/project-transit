@@ -40,8 +40,10 @@ describe('a working bus line on real Istanbul streets', () => {
 
     expect(done).toBeGreaterThan(10);
     // a 7-stop line in the first hours of the morning; destinations compete across the whole
-    // map, so this is a floor that shows journeys complete, not a ridership target
-    expect(game.counters.completed).toBeGreaterThan(25);
+    // map, so this is a floor that shows journeys complete, not a ridership target (since the
+    // trust constant replaced the share cap, short trips on this zig-zag chain win fewer riders:
+    // 23 in these four hours)
+    expect(game.counters.completed).toBeGreaterThan(15);
     expect(game.audit()).toEqual([]);
     expect(reconcile(game.state).ok).toBe(true);
 

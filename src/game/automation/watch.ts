@@ -14,6 +14,7 @@ import { companyLevel } from '../control.ts';
 import { dayTotals } from '../finance.ts';
 import { nextPeakFire, periodLabel } from './peaks.ts';
 import { gapOptions, lineGaps } from './ops.ts';
+import { waitingAt } from '../passengers.ts';
 
 export type Scope = 'line' | 'stop' | 'bus' | 'company';
 
@@ -151,7 +152,7 @@ function stopValue(game: Game, id: Id, f: string): number | null {
   const s = game.state;
   if (!s.stops[id]) return null;
   switch (f) {
-    case 'stop.waiting': return (s.pax.waiting[id] ?? []).reduce((a, g) => a + g.n, 0);
+    case 'stop.waiting': return waitingAt(s, id);
     case 'stop.longestWait': return r1((s.pax.waiting[id] ?? []).reduce((a, g) => Math.max(a, (s.clock.t - g.tl) / 60), 0));
     case 'stop.gaveUpHour': return gaveUpLastHour(game, id);
   }
@@ -441,7 +442,7 @@ function condItems(game: Game, node: WfNode): { items: { key: string }[]; readin
       const line = typeof c.line === 'string' && c.line ? s.routes[c.line] : null;
       const ids = line ? [...new Set([...line.stops, ...(line.returnStops ?? [])])] : Object.keys(s.stops);
       let top = 0, name = '';
-      for (const id of ids) { const w = (s.pax.waiting[id] ?? []).reduce((x, g) => x + g.n, 0); if (w > top) { top = w; name = s.stops[id]?.name ?? ''; } }
+      for (const id of ids) { const w = waitingAt(s, id); if (w > top) { top = w; name = s.stops[id]?.name ?? ''; } }
       return { items: ids.map((key) => ({ key })), reading: top ? `Most: ${top} at ${name} · ` : 'Nobody waiting · ' };
     }
     case 'trigger.gaveUp': {

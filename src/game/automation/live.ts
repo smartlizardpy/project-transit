@@ -90,6 +90,7 @@ export class LiveData {
     if (!st) return null;
     let waiting = 0, oldest = 0;
     for (const g of s.pax.waiting[id] ?? []) {
+      if (g.tl > s.clock.t) continue; // still walking here to change lines
       waiting += g.n;
       oldest = Math.max(oldest, (s.clock.t - g.tl) / 60);
     }

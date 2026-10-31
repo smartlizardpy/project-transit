@@ -251,6 +251,8 @@ export interface Leg {
   r: Id;
   p: number;
   a: Id;
+  /** where this leg is boarded, when it is not where the last leg got off: a walk between nearby stops */
+  b?: Id;
 }
 
 export interface PaxGroup {

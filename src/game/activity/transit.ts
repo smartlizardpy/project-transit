@@ -4,7 +4,8 @@
 // A journey by existing transit is a walk to a station, a wait set by the mode, the ride along
 // the network (TransitNet, built from the map's tracks), any changes, and a walk at the end.
 // Service levels are game settings, labelled "assumed": nothing here comes from a timetable.
-// The network does not combine with your buses yet (phase 7); here it competes with them.
+// It competes with your buses, and since phase 7 it also combines with them: a bus to a stop
+// near a station, a walk across, and on by train (`toZone`).
 
 import { NO_WEATHER, type WeatherEffect } from './conditions.ts';
 import type { TransitNet } from '../world/region.ts';
@@ -55,6 +56,8 @@ export interface TransitSkim {
   count: number;
   /** the best journey between any two zones (events: from an attendee's zone to the venue's), cached */
   between: (i: number, j: number) => Path | null;
+  /** the best journey from boarding at station `s` to zone `j` (walk at the far end only), cached */
+  toZone: (s: number, j: number) => Path | null;
   /** closed links (rail disruptions) this skim was built without */
   closed: string;
 }
@@ -195,7 +198,7 @@ export function buildTransitSkim(net: TransitNet | undefined, zs: ActivityZones,
   const E = m.tours.length;
   const skim: TransitSkim = {
     walk: new Float32Array(E).fill(Infinity), ivt: new Float32Array(E).fill(Infinity), wait: new Float32Array(E), changes: new Uint8Array(E), modes: new Uint8Array(E), count: 0,
-    between: () => null, closed: closed.join(','),
+    between: () => null, toZone: () => null, closed: closed.join(','),
   };
   if (!net || net.stations.length < 2 || !net.links.length) return skim;
   const paths = stationPaths(net, new Set(closed));
@@ -232,6 +235,24 @@ export function buildTransitSkim(net: TransitNet | undefined, zs: ActivityZones,
     return r;
   };
   skim.between = between;
+  const fromStation: (Path | null | undefined)[] = new Array(net.stations.length * Z);
+  skim.toZone = (st: number, j: number): Path | null => {
+    const key = st * Z + j;
+    let r = fromStation[key];
+    if (r !== undefined) return r;
+    let bc = Infinity;
+    r = null;
+    for (const b of access[j] ?? []) {
+      if (b.s === st) continue;
+      const p = paths[st]?.[b.s];
+      if (!p || !Number.isFinite(p.ivt)) continue;
+      const w = b.w + p.walk;
+      const c = PICK.walk * w + p.ivt + PICK.wait * p.wait + PICK.change * p.changes;
+      if (c < bc) (bc = c), (r = { ...p, walk: w });
+    }
+    fromStation[key] = r;
+    return r;
+  };
   for (let e = 0; e < E; e++) {
     const p = between(m.o[e], m.d[e]);
     if (!p) continue;

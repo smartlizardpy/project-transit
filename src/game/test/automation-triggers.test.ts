@@ -316,6 +316,8 @@ describe('starter workflows', () => {
 
   it('moves a bus from a quiet line to a busy one only when the quiet line can spare it', () => {
     const game = newGame({ seed: 21, extraFunds: 900_000 });
+    // an established company (as in scenario 3): its busy line fills above 80% in the evening
+    game.state.company.reputation = 60;
     const busy = crowdedLine(game);
     const quiet = buildLine(game, { from: [28.95, 41.02], buses: 4, stops: 5, headway: 30 });
     const id = fromTemplate(game, 'rebalance');
@@ -323,7 +325,7 @@ describe('starter workflows', () => {
     game.updateWorkflow(id.value, { enabled: true, mode: 'automatic' });
     runTo(game, 1, 10);
     const moved = game.state.automation.runs.filter((r) => r.wf === id.value).flatMap((r) => r.actions).filter((a) => a.outcome === 'executed' || a.outcome === 'deferred');
-    expect(moved.length).toBeGreaterThan(0); // measured: one bus, at 17:00 on the first day
+    expect(moved.length).toBeGreaterThan(0);
     for (const a of moved) expect(a.cmd).toMatchObject({ type: 'assign_vehicle', route: busy.route });
     // never below what the quiet line's timetable needs at the time
     expect(game.state.routes[quiet.route].vehicles.length).toBeGreaterThanOrEqual(1);

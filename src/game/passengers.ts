@@ -10,78 +10,19 @@
 import type { Game } from './engine.ts';
 import type { Pattern } from './network.ts';
 import type { GameState, Id, Leg, PaxGroup, Vehicle } from './types.ts';
-import { ECON, MODEL, STOP_RULES } from './content.ts';
+import { MODEL } from './content.ts';
 import { accrueFare } from './finance.ts';
 import { recordTrip } from './progress.ts';
 import { recAlight, recBoard, recFare, recGaveUp, recLeftBehind } from './analytics/record.ts';
 import { hourOfDay } from './time.ts';
+import { distanceM } from './world/graph.ts';
 import { ActivityModel, returnMinutes, returnShareByHour, type ChoiceContext, type DayEstimate } from './activity/model.ts';
-import { KIND, KINDS, KIND_COUNT, TRAVELLERS } from './activity/params.ts';
+import { KIND, KINDS, KIND_COUNT, TRAVELLERS, trustMinutes } from './activity/params.ts';
 import { eventReturnMinutes } from './events.ts';
 import { hashString, unit } from './hash.ts';
 
-export const PURPOSES = ['work', 'education', 'shopping', 'leisure', 'other'] as const;
-/**
- * Outbound trips per resident per day, by purpose (return trips are modelled separately).
- * With returns this is about 2.7 trips per person per day by all modes, typical for a city.
- */
-const RATE = [0.5, 0.19, 0.27, 0.25, 0.15];
-/** distance decay length per purpose, metres */
-const DECAY = [3600, 2600, 1800, 2600, 3000];
-/** non-home-based trip makers per job, and visitors per unit of shopping/leisure attraction */
-const NHB_PER_JOB = 0.3;
-const VISITORS = 0.12;
 /** minimum stop-to-stop distance for a bus trip (shorter journeys are walked) */
 const MIN_TRIP_M = 380;
-
-const gauss = (x: number, mu: number, s: number) => Math.exp(-((x - mu) ** 2) / (2 * s * s));
-
-function norm(a: number[]) {
-  const s = a.reduce((x, y) => x + y, 0) || 1;
-  return a.map((v) => v / s);
-}
-
-function shape(f: (h: number) => number) {
-  return norm(Array.from({ length: 24 }, (_, h) => f(h + 0.5)));
-}
-
-/** [purpose][hour] share of daily outbound and return trips. */
-const PROFILE = {
-  weekday: {
-    out: [
-      shape((h) => gauss(h, 7.9, 1.0) + 0.12 * gauss(h, 13, 3)),
-      shape((h) => gauss(h, 7.7, 0.7) + 0.25 * gauss(h, 13, 1.5)),
-      shape((h) => gauss(h, 11.5, 2.2) + 0.7 * gauss(h, 17.5, 1.8)),
-      shape((h) => 0.4 * gauss(h, 12, 2.5) + gauss(h, 19.5, 2)),
-      shape((h) => gauss(h, 10.5, 2.4) + 0.4 * gauss(h, 15, 2)),
-    ],
-    back: [
-      shape((h) => gauss(h, 17.9, 1.3) + 0.12 * gauss(h, 14, 3)),
-      shape((h) => gauss(h, 15.3, 1.2) + 0.4 * gauss(h, 13, 1.2)),
-      shape((h) => gauss(h, 13.5, 2.2) + 0.8 * gauss(h, 19, 1.7)),
-      shape((h) => 0.4 * gauss(h, 15, 2.5) + gauss(h, 22.3, 1.6)),
-      shape((h) => gauss(h, 13, 2.4) + 0.4 * gauss(h, 17, 2)),
-    ],
-  },
-  weekend: {
-    out: [
-      shape((h) => gauss(h, 9.5, 1.8)),
-      shape((h) => gauss(h, 10, 2)),
-      shape((h) => gauss(h, 12.5, 2.6)),
-      shape((h) => gauss(h, 13, 3) + 0.8 * gauss(h, 20, 2)),
-      shape((h) => gauss(h, 12, 3)),
-    ],
-    back: [
-      shape((h) => gauss(h, 16.5, 2.2)),
-      shape((h) => gauss(h, 15, 2)),
-      shape((h) => gauss(h, 16.5, 2.6)),
-      shape((h) => gauss(h, 18, 3) + gauss(h, 23, 1.6)),
-      shape((h) => gauss(h, 16, 3)),
-    ],
-  },
-};
-/** weekend volume relative to weekdays, per purpose */
-const WEEKEND_SCALE = [0.32, 0.05, 1.35, 1.4, 0.7];
 
 /** One hour of a line forecast: expected boardings per line, and journeys (`total`, of which `home` are on the way back). */
 export interface LineForecastHour {
@@ -101,7 +42,18 @@ export interface Itinerary {
   ivt: number;
   wait: number;
   transfers: number;
+  /** minutes walked between stops at a change (0: the change is at one stop) */
+  walk: number;
 }
+
+/** Stops this close (straight line) count as one place to change: people walk between them. */
+export const WALK_CHANGE_M = 300;
+/** Generalised-time weight of a minute walked at a change, and its walking speed (m/min) and street detour. */
+const CHANGE_WALK = { weight: 1.5, speed: 75, detour: 1.25 };
+/** Walking minutes between two stops `metres` apart in a straight line. */
+export const changeWalkMin = (metres: number) => (metres * CHANGE_WALK.detour) / CHANGE_WALK.speed;
+/** For each served stop, the other served stops within WALK_CHANGE_M and the walk to them in minutes. */
+export type WalkLinks = { s: number; min: number }[][];
 
 export interface PatternService {
   pattern: Pattern;
@@ -113,45 +65,26 @@ export interface PatternService {
   available: boolean;
 }
 
-/** The most of a journey's travellers your network can win at this reputation (kept until phase 7). */
-const networkCap = (reputation: number) => 0.6 * (0.7 + 0.6 * (reputation / 100));
 
 /** registry categories that count as transport hubs */
 const STATION_CATEGORIES = new Set(['airport', 'rail_station', 'metro_station', 'ferry_pier', 'tram_stop', 'bus_station', 'cable_car']);
 
-/**
- * Which demand model runs. 'activity' is the City Activity Engine (docs/city-activity-engine-plan.md);
- * 'legacy' is the earlier gravity model between stops, kept only so calibration can compare the two
- * while the engine is developed. The switch is removed before release.
- */
-export type DemandEngine = 'activity' | 'legacy';
-let ENGINE: DemandEngine = 'activity';
-export function setDemandEngine(e: DemandEngine) {
-  ENGINE = e;
-}
-
 export class DemandModel {
-  readonly engine: DemandEngine = ENGINE;
   /** served stops in index order */
   stops: Id[] = [];
   index = new Map<Id, number>();
-  prod = new Float64Array(0);
-  attr: Float64Array[] = [];
   /** straight-line distance between served stops, metres */
   dist = new Float32Array(0);
-  /** base daily outbound trips per pair per purpose, pair-major (earlier model) */
-  base = new Float32Array(0);
-  private legacyPairs: Int32Array = new Int32Array(0);
+  /** walking changes between nearby served stops */
+  walk: WalkLinks = [];
   /** pairs with demand this hour (o*S+d) */
   pairs: Int32Array = new Int32Array(0);
   /** itineraries for the current slot */
   itin = new Map<number, Itinerary>();
   /** per-minute generation rate per pair index in `pairs`, for the current slot */
   rate: Float32Array = new Float32Array(0);
-  /** per pair, the share of each tour kind (activity engine; null for the earlier model) */
-  kmix: Float32Array | null = null;
-  /** potential trips per stop per day (both directions), for UI (earlier model) */
-  stopPotential = new Map<Id, number>();
+  /** per pair, the share of each tour kind */
+  kmix: Float32Array = new Float32Array(0);
   /** stations and piers of the Place Registry within reach of each served stop */
   hubs = new Map<Id, { id: string; name: string; category: string; tier: number }[]>();
   /** the City Activity Engine: zones, tours and travel choice */
@@ -172,6 +105,11 @@ export class DemandModel {
     const xy = this.stops.map((id) => game.geo.xy(state.stops[id].lngLat));
     this.dist = new Float32Array(S * S);
     for (let o = 0; o < S; o++) for (let d = 0; d < S; d++) if (o !== d) this.dist[o * S + d] = Math.hypot(xy[o][0] - xy[d][0], xy[o][1] - xy[d][1]);
+    this.walk = Array.from({ length: S }, (_, o) => {
+      const out: { s: number; min: number }[] = [];
+      for (let d = 0; d < S; d++) if (d !== o && this.dist[o * S + d] <= WALK_CHANGE_M) out.push({ s: d, min: changeWalkMin(this.dist[o * S + d]) });
+      return out.sort((a, b) => a.min - b.min || a.s - b.s).slice(0, 4);
+    });
     // stations and piers each stop serves (shown on stop cards; their travellers are modelled as gateways)
     this.hubs.clear();
     for (const id of this.stops) {
@@ -180,29 +118,23 @@ export class DemandModel {
         .map((q) => ({ id: q.place.id, name: q.place.name, category: q.place.category, tier: q.place.scale.tier }));
       if (list.length) this.hubs.set(id, list);
     }
-    if (this.engine === 'legacy') this.rebuildLegacy(game, xy);
-    else this.activity.rebuildAccess(game, xy);
+    this.activity.rebuildAccess(game, xy);
     this.dirty = false;
     this.slot = -1;
   }
 
   /** Recompute itineraries and generation rates for the hour containing t. */
   refresh(game: Game, t: number) {
-    if (this.dirty || (this.engine === 'activity' && this.activity.stale(game))) this.rebuild(game);
+    if (this.dirty || this.activity.stale(game)) this.rebuild(game);
     this.slot = Math.floor(t / 3600);
     this.services = game.patternServices(t, this.index);
-    this.itin = computeItineraries(this.stops.length, this.services);
-    if (this.engine === 'legacy') {
-      this.kmix = null;
-      this.refreshLegacy(game, t);
-      return;
-    }
+    this.itin = computeItineraries(this.stops.length, this.services, this.walk);
     const out = this.activity.rates(game, t, {
       S: this.stops.length,
       itin: this.itin,
       dist: this.dist,
       fare: game.state.company.fare,
-      smax: networkCap(game.state.company.reputation),
+      trust: trustMinutes(game.state.company.reputation),
       traffic: game.traffic.profile(hourOfDay(t), game.isWeekend(t)) * (game.trafficIntensity ?? 1),
       quality: game.routeQuality(),
       wx: game.weatherEffectAt(t),
@@ -217,7 +149,6 @@ export class DemandModel {
    * Each hour uses the lines running then. Reading it changes nothing the simulation uses.
    */
   estimateDay(game: Game, inScope: (z: number) => boolean): DayEstimate | null {
-    if (this.engine !== 'activity') return null;
     if (this.dirty || this.activity.stale(game)) this.rebuild(game);
     const S = this.stops.length;
     const day0 = Math.floor(game.t / 86400) * 86400;
@@ -225,10 +156,10 @@ export class DemandModel {
     const quality = game.routeQuality();
     const hours: ChoiceContext[] = Array.from({ length: 24 }, (_, h) => ({
       S,
-      itin: S ? computeItineraries(S, game.patternServices(day0 + h * 3600, this.index)) : new Map(),
+      itin: S ? computeItineraries(S, game.patternServices(day0 + h * 3600, this.index), this.walk) : new Map(),
       dist: this.dist,
       fare: game.state.company.fare,
-      smax: networkCap(game.state.company.reputation),
+      trust: trustMinutes(game.state.company.reputation),
       traffic: game.traffic.profile(h, weekend) * (game.trafficIntensity ?? 1),
       quality,
       wx: game.weatherEffectAt(day0 + h * 3600),
@@ -244,7 +175,6 @@ export class DemandModel {
    * what is left of it. An estimate for automation; reading it changes nothing the simulation uses.
    */
   forecastLines(game: Game, t: number, hours: number): LineForecastHour[] | null {
-    if (this.engine !== 'activity') return null;
     if (this.dirty || this.activity.stale(game)) this.rebuild(game);
     const S = this.stops.length;
     const h0 = Math.floor(t / 3600) * 3600;
@@ -266,7 +196,7 @@ export class DemandModel {
       const lines = new Map<Id, number>();
       let started = 0, home = 0;
       if (S) {
-        const itin = computeItineraries(S, game.patternServices(at, this.index));
+        const itin = computeItineraries(S, game.patternServices(at, this.index), this.walk);
         // people out now who are due home this hour, from where they got off
         const m0 = Math.floor(Math.max(t, at) / 60), m1 = Math.floor((at + 3600) / 60);
         for (const [key, arr] of away) {
@@ -280,7 +210,7 @@ export class DemandModel {
         const r = this.activity.forecastRates(game, at, {
           S, itin, dist: this.dist,
           fare: game.state.company.fare,
-          smax: networkCap(game.state.company.reputation),
+          trust: trustMinutes(game.state.company.reputation),
           traffic: game.traffic.profile(hourOfDay(at), game.isWeekend(at)) * (game.trafficIntensity ?? 1),
           quality,
           wx: game.weatherEffectAt(at),
@@ -308,152 +238,14 @@ export class DemandModel {
   }
 
   /** The earlier model: catchments and a gravity matrix between served stops (development switch only). */
-  private rebuildLegacy(game: Game, xy: [number, number][]) {
-    const { state, region } = game;
-    const S = this.stops.length;
-    const g = region.demand;
-    const R = STOP_RULES.catchmentM;
-    // catchment weights per cell, shared between stops that cover the same cell
-    const cellStops = new Map<number, { s: number; w: number }[]>();
-    xy.forEach(([x, y], s) => {
-      const c0x = Math.floor((x - R - g.x0) / g.cell), c1x = Math.floor((x + R - g.x0) / g.cell);
-      const c0y = Math.floor((y - R - g.y0) / g.cell), c1y = Math.floor((y + R - g.y0) / g.cell);
-      for (let cy = Math.max(0, c0y); cy <= Math.min(g.h - 1, c1y); cy++)
-        for (let cx = Math.max(0, c0x); cx <= Math.min(g.w - 1, c1x); cx++) {
-          const d = Math.hypot(g.x0 + (cx + 0.5) * g.cell - x, g.y0 + (cy + 0.5) * g.cell - y);
-          if (d > R) continue;
-          const w = Math.pow(1 - d / R, 0.7) + 0.05;
-          const k = cy * g.w + cx;
-          const l = cellStops.get(k);
-          if (l) l.push({ s, w });
-          else cellStops.set(k, [{ s, w }]);
-        }
-    });
-    this.prod = new Float64Array(S);
-    this.attr = PURPOSES.map(() => new Float64Array(S));
-    const attrCell = (p: number, k: number) => (p === 0 ? g.jobs[k] : p === 1 ? g.education[k] : p === 2 ? g.shopping[k] : p === 3 ? g.leisure[k] + g.residents[k] * 0.04 : g.other[k]);
-    for (const [k, list] of cellStops) {
-      const total = list.reduce((a, b) => a + b.w, 0);
-      for (const { s, w } of list) {
-        // share of the cell that walks to this stop; the uncovered remainder walks elsewhere
-        const share = (w / total) * Math.min(1, total);
-        // home-based trips from residents, plus trips made from workplaces (lunch, business,
-        // errands) and by visitors to shops and attractions
-        this.prod[s] += (g.residents[k] + g.jobs[k] * NHB_PER_JOB + (g.shopping[k] + g.leisure[k]) * VISITORS) * share;
-        for (let p = 0; p < PURPOSES.length; p++) this.attr[p][s] += attrCell(p, k) * share;
-      }
-    }
-    // transport hubs: people arriving by train, metro, tram or ferry continue by bus, and
-    // people head for the hub to travel on. Both scale with the hub's size.
-    this.stops.forEach((id, s) => {
-      let w = 0;
-      for (const q of game.geo.poisNear(state.stops[id].lngLat, 320)) {
-        if (q.p.kind !== 'station' && q.p.kind !== 'ferry') continue;
-        w += q.p.weight * (1 - q.d / 450);
-      }
-      if (w > 0) {
-        this.prod[s] += w * 1.4;
-        for (let p = 0; p < PURPOSES.length; p++) this.attr[p][s] += w * (p === 4 ? 0.9 : 0.25);
-      }
-    });
-    // destination competition: all activity in the region, distance-weighted
-    const den = PURPOSES.map(() => new Float64Array(S));
-    for (let cy = 0; cy < g.h; cy++)
-      for (let cx = 0; cx < g.w; cx++) {
-        const k = cy * g.w + cx;
-        const a = [attrCell(0, k), attrCell(1, k), attrCell(2, k), attrCell(3, k), attrCell(4, k)];
-        if (!a[0] && !a[1] && !a[2] && !a[3] && !a[4]) continue;
-        const px = g.x0 + (cx + 0.5) * g.cell, py = g.y0 + (cy + 0.5) * g.cell;
-        for (let s = 0; s < S; s++) {
-          const d = Math.hypot(px - xy[s][0], py - xy[s][1]);
-          for (let p = 0; p < 5; p++) if (a[p]) den[p][s] += a[p] * Math.exp(-d / DECAY[p]);
-        }
-      }
-    this.base = new Float32Array(S * S * 5);
-    const pairs: number[] = [];
-    this.stopPotential.clear();
-    for (let o = 0; o < S; o++)
-      for (let d = 0; d < S; d++) {
-        if (o === d) continue;
-        const dist = this.dist[o * S + d];
-        if (dist < MIN_TRIP_M) continue;
-        let any = false;
-        for (let p = 0; p < 5; p++) {
-          const v = den[p][o] > 0 ? (this.prod[o] * RATE[p] * this.attr[p][d] * Math.exp(-dist / DECAY[p])) / den[p][o] : 0;
-          this.base[(o * S + d) * 5 + p] = v;
-          if (v > 1e-4) any = true;
-        }
-        if (any) pairs.push(o * S + d);
-      }
-    // keep pairs where either direction has potential
-    const set = new Set(pairs);
-    for (const k of [...set]) {
-      const o = Math.floor(k / S), d = k % S;
-      set.add(d * S + o);
-    }
-    this.legacyPairs = Int32Array.from([...set].sort((a, b) => a - b));
-    for (const k of this.legacyPairs) {
-      const o = Math.floor(k / S), d = k % S;
-      let v = 0;
-      for (let p = 0; p < 5; p++) v += this.base[k * 5 + p] + this.base[(d * S + o) * 5 + p];
-      this.stopPotential.set(this.stops[o], (this.stopPotential.get(this.stops[o]) ?? 0) + v);
-    }
-  }
-
-
-  /** The earlier model's hourly rates (development switch only). */
-  private refreshLegacy(game: Game, t: number) {
-    const S = this.stops.length;
-    const weekend = game.isWeekend(t);
-    const hour = Math.floor(hourOfDay(t));
-    const fare = game.state.company.fare;
-    const smax = networkCap(game.state.company.reputation);
-    // share of travellers with a car or taxi as their alternative; the rest would walk
-    const pCar = Math.max(0.25, Math.min(0.6, 0.62 - 0.3 * (game.trafficIntensity ?? 1)));
-    const traffic = game.traffic.profile(hourOfDay(t), weekend) * (game.trafficIntensity ?? 1);
-    const prof = weekend ? PROFILE.weekend : PROFILE.weekday;
-    const quality = game.routeQuality();
-    this.pairs = this.legacyPairs;
-    this.rate = new Float32Array(this.pairs.length);
-    for (let i = 0; i < this.pairs.length; i++) {
-      const k = this.pairs[i];
-      const it = this.itin.get(k);
-      if (!it) continue;
-      const o = Math.floor(k / S), d = k % S;
-      const rev = d * S + o;
-      let daily = 0;
-      for (let p = 0; p < 5; p++) {
-        const sc = weekend ? WEEKEND_SCALE[p] : 1;
-        daily += (this.base[k * 5 + p] * prof.out[p][hour] + this.base[rev * 5 + p] * prof.back[p][hour]) * sc;
-      }
-      if (daily <= 0) continue;
-      const dist = this.dist[k];
-      // generalised time of the bus journey (minutes) including fare, crowding and reliability
-      let gt = it.gt + (fare - ECON.referenceFare) / 0.15 + 3.5; // + walking to and from stops
-      for (const leg of it.legs) {
-        const q = quality.get(leg.r);
-        if (!q) continue;
-        gt += Math.max(0, q.load - 0.75) * 30 + Math.max(0, 0.9 - q.ontime) * 18;
-      }
-      // the best alternative: walking, or other modes that also suffer from traffic
-      const walk = (dist * 1.25) / 75;
-      const car = 9 + dist / 330 + traffic * (dist / 450);
-      const logit = (alt: number) => 1 / (1 + Math.exp((gt - alt) / 5.5));
-      const share = smax * (pCar * logit(Math.min(walk, car)) + (1 - pCar) * logit(walk));
-      this.rate[i] = (daily * share) / 60;
-    }
-  }
-
-  potentialFor(stop: Id): number {
-    return this.stopPotential.get(stop) ?? 0;
-  }
 }
 
 /**
- * Best itinerary between every pair of served stops, allowing one transfer.
- * Generalised time = 1.8 × expected wait + in-vehicle time + 6 min per transfer.
+ * Best itinerary between every pair of served stops, allowing one transfer, at the same stop or
+ * by walking to a stop nearby (`walk`). Generalised time = 1.8 × expected wait + in-vehicle time
+ * + 6 min per transfer + 1.5 × minutes walked at the change.
  */
-export function computeItineraries(S: number, services: PatternService[]): Map<number, Itinerary> {
+export function computeItineraries(S: number, services: PatternService[], walk: WalkLinks = []): Map<number, Itinerary> {
   const best = new Map<number, Itinerary>();
   const expWait = (h: number) => (h <= 12 ? h / 2 : 4 + h / 8);
   // stop → services that call there (with positions)
@@ -497,38 +289,45 @@ export function computeItineraries(S: number, services: PatternService[]): Map<n
       list.sort((a, b) => a.gt - b.gt);
       const b0 = list[0];
       const alt = list.slice(1).filter((x) => x.gt <= b0.gt + 4 && (x.leg.r !== b0.leg.r || x.leg.p !== b0.leg.p)).map((x) => x.leg);
-      best.set(o * S + d, { gt: b0.gt, legs: [b0.leg], alt, ivt: b0.ivt, wait: b0.wait, transfers: 0 });
+      best.set(o * S + d, { gt: b0.gt, legs: [b0.leg], alt, ivt: b0.ivt, wait: b0.wait, transfers: 0, walk: 0 });
     }
-    // one transfer
+    // one transfer: at the stop the first bus reaches, or after a short walk to a stop nearby
     for (let x = 0; x < S; x++) {
       const via = firstVia[x];
       if (!via) continue;
       const g1 = firstLeg[x];
       const sv1 = services[via.svc];
-      for (const { svc, pos } of at[x]) {
-        if (svc === via.svc) continue;
-        const sv = services[svc];
-        if (sv.pattern.route === sv1.pattern.route && sv.pattern.index === sv1.pattern.index) continue;
-        const w = expWait(sv.headway);
-        for (let j = pos + 1; j < sv.sIdx.length; j++) {
-          const d = sv.sIdx[j];
-          if (d < 0 || d === o || d === x) continue;
-          const ivt2 = sv.tmin[j] - sv.tmin[pos];
-          const gt = g1 + 6 + 1.8 * w + ivt2;
-          const cur = best.get(o * S + d);
-          if (cur && cur.gt <= gt) continue;
-          const ivt1 = sv1.tmin[via.to] - sv1.tmin[via.pos];
-          best.set(o * S + d, {
-            gt,
-            legs: [
-              { r: sv1.pattern.route, p: sv1.pattern.index, a: sv1.pattern.stops[via.to] },
-              { r: sv.pattern.route, p: sv.pattern.index, a: sv.pattern.stops[j] },
-            ],
-            alt: [],
-            ivt: ivt1 + ivt2,
-            wait: expWait(sv1.headway) + w,
-            transfers: 1,
-          });
+      const from = sv1.pattern.stops[via.to];
+      const changes = [{ s: x, min: 0 }, ...(walk[x] ?? [])];
+      for (const ch of changes) {
+        const y = ch.s;
+        if (y === o) continue;
+        for (const { svc, pos } of at[y]) {
+          if (svc === via.svc) continue;
+          const sv = services[svc];
+          if (sv.pattern.route === sv1.pattern.route && sv.pattern.index === sv1.pattern.index) continue;
+          const w = expWait(sv.headway);
+          const board = sv.pattern.stops[pos];
+          for (let j = pos + 1; j < sv.sIdx.length; j++) {
+            const d = sv.sIdx[j];
+            if (d < 0 || d === o || d === x || d === y) continue;
+            const ivt2 = sv.tmin[j] - sv.tmin[pos];
+            const gt = g1 + 6 + CHANGE_WALK.weight * ch.min + 1.8 * w + ivt2;
+            const cur = best.get(o * S + d);
+            if (cur && cur.gt <= gt) continue;
+            const ivt1 = sv1.tmin[via.to] - sv1.tmin[via.pos];
+            const second: Leg = { r: sv.pattern.route, p: sv.pattern.index, a: sv.pattern.stops[j] };
+            if (board !== from) second.b = board;
+            best.set(o * S + d, {
+              gt,
+              legs: [{ r: sv1.pattern.route, p: sv1.pattern.index, a: from }, second],
+              alt: [],
+              ivt: ivt1 + ivt2,
+              wait: expWait(sv1.headway) + w,
+              transfers: 1,
+              walk: ch.min,
+            });
+          }
         }
       }
     }
@@ -546,7 +345,10 @@ const sameKind = (x: PaxGroup, g: PaxGroup) => x.k === g.k && x.pu === g.pu && !
 function addWaiting(state: GameState, stop: Id, g: PaxGroup) {
   const list = (state.pax.waiting[stop] ??= []);
   const key = legKey(g);
+  const t = state.clock.t;
   for (const x of list) {
+    // people still walking over from another stop stay apart from those already there
+    if (x.tl > t !== g.tl > t) continue;
     if (x.d === g.d && legKey(x) === key && x.leg === g.leg && Math.abs(x.tl - g.tl) < BUCKET && x.fr === g.fr && sameKind(x, g)) {
       mergeInto(x, g);
       return;
@@ -782,7 +584,7 @@ export function stopNeeded(game: Game, v: Vehicle, p: Pattern, idx: number): boo
   if (idx === 0 || idx === p.stops.length - 1) return true;
   for (const g of game.state.pax.onboard[v.id] ?? []) if (g.legs[g.leg].a === stop) return true;
   if (occupied(v) >= MODEL[v.model].capacity - 0.5) return false;
-  for (const g of game.state.pax.waiting[stop] ?? []) if (wantsThisBus(g, p, idx)) return true;
+  for (const g of game.state.pax.waiting[stop] ?? []) if (g.tl <= game.state.clock.t && wantsThisBus(g, p, idx)) return true;
   return false;
 }
 
@@ -820,8 +622,15 @@ export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number, opts:
       replan(game, g, stop);
     } else if (g.leg + 1 < g.legs.length) {
       g.leg++;
-      g.tl = t;
-      addWaiting(state, stop, g);
+      const next = g.legs[g.leg].b;
+      if (next && next !== stop && state.stops[next]) {
+        // a walk to a stop nearby: they can board there once they have walked it
+        g.tl = t + Math.round(changeWalkMin(distanceM(state.stops[stop].lngLat, state.stops[next].lngLat)) * 60);
+        addWaiting(state, next, g);
+      } else {
+        g.tl = t;
+        addWaiting(state, stop, g);
+      }
     } else {
       arrive(game, g);
     }
@@ -832,7 +641,8 @@ export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number, opts:
   // 2. board (not at the end of a trip)
   if (!last) {
     const waiting = state.pax.waiting[stop] ?? [];
-    const cands = waiting.filter((g) => wantsThisBus(g, p, idx)).sort((a, b) => a.tl - b.tl);
+    // (people still walking over from another stop, tl ahead, cannot board yet)
+    const cands = waiting.filter((g) => g.tl <= t && wantsThisBus(g, p, idx)).sort((a, b) => a.tl - b.tl);
     // room in commuter places: a traveller with luggage takes more than one
     let room = cap - v.sp;
     const headway = game.headwayAt(p.route, p.index, t) ?? 10;
@@ -898,9 +708,11 @@ export function offloadAll(game: Game, v: Vehicle, stop: Id | null) {
   v.sp = 0;
 }
 
+/** People waiting at the stop now (not those still walking to it to change lines). */
 export function waitingAt(state: GameState, stop: Id): number {
   let n = 0;
-  for (const g of state.pax.waiting[stop] ?? []) n += g.n;
+  const t = state.clock.t;
+  for (const g of state.pax.waiting[stop] ?? []) if (g.tl <= t) n += g.n;
   return n;
 }
 

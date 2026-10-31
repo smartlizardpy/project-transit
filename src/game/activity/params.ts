@@ -183,11 +183,29 @@ export const CHOICE = {
   valueOfTime: 0.15,
   /** generalised minutes of being stranded without a way home (a taxi found late) */
   stranded: 15,
-  /** your network: a constant for awareness and trust, tuned with the calibration scenarios */
-  networkConst: 0.5,
+  /**
+   * your network: awareness and trust, as minutes added to each journey leg on it. It falls as
+   * your reputation rises (straight between these, at reputation 0 and 100). It replaced the cap
+   * on your network's share in phase 7; tuned with the calibration scenarios.
+   */
+  trust: { at0: 6.75, at100: 2.25 },
   /** existing transit (metro, tram, rail, ferry): a constant for its fare and comfort, minutes (assumed) */
   transitConst: 6,
 };
+
+/** Minutes of awareness and trust added to each journey leg on your network at this reputation. */
+export function trustMinutes(reputation: number): number {
+  const r = Math.max(0, Math.min(100, reputation)) / 100;
+  return CHOICE.trust.at0 + (CHOICE.trust.at100 - CHOICE.trust.at0) * r;
+}
+
+/**
+ * Nested choice (plan 7.5, phase 7): public transport (your network and the city's metro, tram,
+ * rail and ferries), active modes (walking and cycling) and private ones (car and taxi). Modes in
+ * one nest are closer substitutes, so a better bus line draws more from the metro than from cars.
+ * Each nest's scale as a share of the logit scale (1: no nesting; lower: closer substitutes).
+ */
+export const NESTS = { transport: 0.6, active: 0.8, private: 0.8 };
 
 // ───────────────────────────────────────────── weather (plan 9.2)
 //

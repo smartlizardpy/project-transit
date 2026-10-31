@@ -12,7 +12,8 @@ import { TripState, type Id, type Trip, type Vehicle } from '../types.ts';
 import { hhmm } from '../time.ts';
 import { startTime, tripSchedule, vehicleXY } from '../vehicles.ts';
 import { arrivalsAt, vehicleStops } from '../eta.ts';
-import { freeSpeed, nearestNode, route as routeLeg, type LngLat } from '../world/graph.ts';
+import { distanceM, freeSpeed, nearestNode, route as routeLeg, type LngLat } from '../world/graph.ts';
+import { changeWalkMin, waitingAt } from '../passengers.ts';
 import { demandForecast } from './city.ts';
 import { upcomingTrips } from '../operations.ts';
 
@@ -101,7 +102,7 @@ export function nearbyStops(game: Game, at: LngLat, walkM: number, limit = 20): 
     return {
       kind: 'stop', id, name: st.name, label: st.name, distance: Math.round(m), walk: Math.round(m * WALK_FACTOR), walkMin: r1((m * WALK_FACTOR) / WALK_M_PER_MIN),
       lines: ls.map((r) => s.routes[r].number), lineIds: ls, served: ls.length > 0,
-      waiting: (s.pax.waiting[id] ?? []).reduce((a, g) => a + g.n, 0), lng: st.lngLat[0], lat: st.lngLat[1],
+      waiting: waitingAt(s, id), lng: st.lngLat[0], lat: st.lngLat[1],
     };
   });
 }
@@ -384,22 +385,24 @@ export function missedConnections(game: Game, line: Id | null, horizonMin: numbe
     if (v.trip === null || (v.status !== 'in_service' && v.status !== 'at_stop') || v.pos.kind !== 'pattern') continue;
     if (line && v.pos.route !== line) continue;
     const route = v.pos.route;
-    const groups = new Map<string, { a: Id; r: Id; p: number; n: number }>();
+    const groups = new Map<string, { a: Id; b: Id; r: Id; p: number; n: number }>();
     for (const g of s.pax.onboard[v.id] ?? []) {
       const cur = g.legs[g.leg], next = g.legs[g.leg + 1];
       if (!cur || !next || next.r === route) continue;
-      const k = `${cur.a}|${next.r}|${next.p}`;
+      const k = `${cur.a}|${next.b ?? cur.a}|${next.r}|${next.p}`;
       const x = groups.get(k);
       if (x) x.n += g.n;
-      else groups.set(k, { a: cur.a, r: next.r, p: next.p, n: g.n });
+      else groups.set(k, { a: cur.a, b: next.b ?? cur.a, r: next.r, p: next.p, n: g.n });
     }
     if (!groups.size) continue;
     const etas = vehicleStops(game, v);
     for (const c of groups.values()) {
       const at = etas.find((x) => x.stop === c.a && x.index >= v.stopIdx);
       if (!at || at.eta > now + horizonMin * 60) continue;
-      const ready = at.eta + 30; // getting off and across to the other bus
-      const deps = arrivalsAt(game, c.a, 16, 2 * HOUR).filter((x) => x.route === c.r && x.pat === c.p && !x.terminates && x.eta >= now);
+      // getting off and across to the other bus, or walking to the stop nearby they change at
+      const walk = c.b !== c.a && s.stops[c.a] && s.stops[c.b] ? Math.round(changeWalkMin(distanceM(s.stops[c.a].lngLat, s.stops[c.b].lngLat)) * 60) : 0;
+      const ready = at.eta + 30 + walk;
+      const deps = arrivalsAt(game, c.b, 16, 2 * HOUR).filter((x) => x.route === c.r && x.pat === c.p && !x.terminates && x.eta >= now);
       const before = deps.filter((x) => x.eta < ready && x.eta >= ready - 10 * 60).at(-1);
       const after = deps.find((x) => x.eta >= ready);
       const target = before ?? after;
@@ -408,9 +411,9 @@ export function missedConnections(game: Game, line: Id | null, horizonMin: numbe
       const to = s.routes[c.r];
       const connecting = target.veh ? s.vehicles[target.veh] : null;
       out.push({
-        kind: 'connection', id: `${v.id}:${c.a}:${c.r}`, label: `${v.fleetNo} → line ${to?.number ?? '?'} at ${s.stops[c.a]?.name ?? ''}`,
+        kind: 'connection', id: `${v.id}:${c.a}:${c.r}`, label: `${v.fleetNo} → line ${to?.number ?? '?'} at ${s.stops[c.b]?.name ?? ''}`,
         vehicle: v.id, fleetNo: v.fleetNo, line: route, lineNumber: s.routes[route]?.number ?? '',
-        stop: c.a, stopName: s.stops[c.a]?.name ?? '', arrive: hhmm(at.eta), in: Math.round((at.eta - now) / 60), people: c.n,
+        stop: c.a, stopName: s.stops[c.a]?.name ?? '', changeAt: c.b, changeAtName: s.stops[c.b]?.name ?? '', walkMin: r1(walk / 60), arrive: hhmm(at.eta), in: Math.round((at.eta - now) / 60), people: c.n,
         toLine: c.r, toLineNumber: to?.number ?? '', departs: hhmm(target.eta), connectingBus: connecting?.id ?? null, connectingFleetNo: connecting?.fleetNo ?? null,
         margin: r1(margin), missed: !!before, holdNeeded: before ? Math.ceil(-margin) : 0,
         waitIfMissed: before && after ? r1((after.eta - ready) / 60) : null, estimate: true,

@@ -1,15 +1,17 @@
-// Performance guard rail: a big network (10 lines, ~70 buses over many zones) must simulate far faster than
-// the fastest game speed demands.
+// Performance guard rails: a big network (10 lines, ~70 buses over many zones) must simulate far faster than
+// the fastest game speed demands, and the hourly choice of the activity model must stay within its budget.
+// This file runs on its own after the other test files (vitest.config.ts), so other tests do not share the CPU.
 import { describe, expect, it } from 'vitest';
-import { newGame, stopsAlong } from './helpers.ts';
+import { buildLine, newGame, stopsAlong } from './helpers.ts';
 import { flatTimetable, sustainableHeadway } from '../timetable.ts';
 import { arrivalsAt } from '../eta.ts';
 import { distanceM, type LngLat } from '../world/graph.ts';
-import { SPEEDS } from '../content.ts';
+import { HOUR, SPEEDS } from '../content.ts';
 
 // shared CI machines are a few times slower than a desktop; the strict budget applies locally
 const BUDGET_MS_PER_REAL_SECOND = process.env.CI ? 360 : 120;
 const SPEED = SPEEDS[SPEEDS.length - 1];
+const BUDGET_HOURLY_MS = process.env.CI ? 90 : 30;
 
 describe('performance', () => {
   it('a 10-line / 70-bus network at the 08:00 peak keeps up with the fastest speed', () => {
@@ -87,4 +89,26 @@ describe('performance', () => {
     expect(serMs).toBeLessThan(500);
     expect(arrMs).toBeLessThan(25);
   });
+
+  it('the hourly choice takes at most 30 ms on about 400 zones and 100 stops', () => {
+    const game = newGame({ seed: 5, extraFunds: 5_000_000 });
+    const starts: LngLat[] = [[28.9784, 41.0369], [28.9745, 41.0255], [28.96, 41.014], [28.985, 41.045], [28.95, 41.02], [28.9935, 41.067], [28.97, 41.045], [29.005, 41.042], [28.955, 41.03], [28.982, 41.06]];
+    for (const s of starts) {
+      const line = buildLine(game, { from: s, stops: 13, buses: 1, headway: 15 });
+      game.expandDepot(line.depot); // room for the next lines' buses
+    }
+    game.run(3 * HOUR);
+    const dm = game.demand;
+    expect(dm.activity.zones!.list.length).toBeGreaterThanOrEqual(350);
+    expect(dm.stops.length).toBeGreaterThanOrEqual(80);
+    const ms: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      const t0 = performance.now();
+      dm.refresh(game, game.t);
+      ms.push(performance.now() - t0);
+    }
+    ms.sort((a, b) => a - b);
+    console.log(`PERF hourly choice ms (7 runs, sorted)=${ms.map((x) => x.toFixed(1)).join(' ')} (budget ${BUDGET_HOURLY_MS})`);
+    expect(ms[3]).toBeLessThanOrEqual(BUDGET_HOURLY_MS);
+  }, 120_000);
 });

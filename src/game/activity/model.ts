@@ -17,7 +17,7 @@ import { ECON } from '../content.ts';
 import { Grid } from '../world/places.ts';
 import { buildActivityZones, zonesKey, type ActivityZones } from './zones.ts';
 import { distributeTours, type TourMatrix } from './od.ts';
-import { CHOICE, KIND, KINDS, KIND_COUNT, STAY_HOME, TRAVELLERS, crowding, type Curve, type TravellerType } from './params.ts';
+import { CHOICE, KIND, KINDS, KIND_COUNT, NESTS, STAY_HOME, TRAVELLERS, crowding, type Curve, type TravellerType } from './params.ts';
 import { EVENT, EVENT_TEMPLATES, arriveShare, returnShareFrom, type GameEvent } from '../events.ts';
 import { dayTiming, PROFILE, type DayTiming } from './profiles.ts';
 import { buildTransitSkim, transitLeg, transitPathLeg, transitWaitFactor, type TransitSkim } from './transit.ts';
@@ -47,6 +47,8 @@ interface Skim {
   /** the lines used, for checking the way home */
   routes: Id[];
   rkey: string;
+  /** a number for `rkey` within one hour's costs (for caching the way home) */
+  rid: number;
 }
 
 export interface ChoiceContext {
@@ -54,8 +56,8 @@ export interface ChoiceContext {
   itin: Map<number, Itinerary>;
   dist: Float32Array;
   fare: number;
-  /** reputation cap on your network's share (kept until phase 7) */
-  smax: number;
+  /** awareness and trust: minutes added to each journey leg on your network (trustMinutes) */
+  trust: number;
   traffic: number;
   quality: Map<Id, { load: number; ontime: number }>;
   /** this hour's weather (none: a mild dry hour) */
@@ -81,6 +83,18 @@ export interface EventSetup {
 }
 
 const NEAR_STOP_M = 450;
+/** Your stops this close (straight line) to a station are where people change to existing transit on foot. */
+const FEED_M = 300;
+/** A stop of yours near a station: its index in `feeds`, the stop, the station and the walk between them (minutes). */
+interface Feed { id: number; x: number; st: number; w: number }
+/** Stops near a station tried per stop: the ones your network reaches quickest. */
+const FEED_TRY = 2;
+/** Commuter minutes by which a change to the train may lose to the train all the way and still be offered. */
+const FEED_DOMINATED = 15;
+const NONE: AccessGroup[] = [];
+const NO_NEAR: { s: number; extra: number }[] = [];
+/** One pass with no stop at the destination end (only the change to existing transit is possible). */
+const NO_STOP: (AccessGroup | null)[] = [null];
 const MIN_TRIP_M = 380;
 const HORIZON = 36;
 
@@ -153,40 +167,141 @@ export function otherModes(d: number, ty: TravellerType, traffic: number, parkin
   return { walk, bike, car, taxi };
 }
 
-/** Multinomial logit share of the first option among all (generalised minutes, lower is better). */
-function logitFirst(lam: number, first: number, ...rest: number[]): number {
-  let m = first;
-  for (const r of rest) if (r < m) m = r;
-  if (!Number.isFinite(m)) return 0;
-  const e0 = Number.isFinite(first) ? Math.exp(-(first - m) / lam) : 0;
-  let s = e0;
-  for (const r of rest) if (Number.isFinite(r)) s += Math.exp(-(r - m) / lam);
-  return s > 0 ? e0 / s : 0;
+/**
+ * Nested logit shares of the modes (generalised minutes, lower is better; Infinity: not
+ * available), in MODES order: walk, bike, car, taxi, your network, existing transit, and when
+ * `out` has a seventh place, your network to a station and on by existing transit (`feed`). The
+ * nests are NESTS: active (walk, bike), private (car, taxi) and public transport (the rest).
+ * Each mode's weight within its nest uses the nest's scale; each nest's weight is its inclusive
+ * value, so with every nest scale at 1 this is the plain multinomial logit.
+ */
+function nestedInto(out: Float64Array, walk: number, bike: number, car: number, taxi: number, net: number, transit: number, wt: number, lam: number, feed = Infinity) {
+  const m = Math.min(walk, bike, car, taxi, net, transit, feed);
+  if (!Number.isFinite(m)) return;
+  const la = lam * NESTS.active, lp = lam * NESTS.private, lt = lam * NESTS.transport;
+  const e = (x: number, l: number) => (Number.isFinite(x) ? Math.exp(-(x - m) / l) : 0);
+  const ew = e(walk, la), eb = e(bike, la), ec = e(car, lp), et = e(taxi, lp), en = e(net, lt), ex = e(transit, lt), ef = e(feed, lt);
+  const sa = ew + eb, sp = ec + et, st = en + ex + ef;
+  const na = sa > 0 ? sa ** NESTS.active : 0, np = sp > 0 ? sp ** NESTS.private : 0, nt = st > 0 ? st ** NESTS.transport : 0;
+  const all = na + np + nt;
+  if (!(all > 0)) return;
+  const fa = sa > 0 ? (wt * na) / all / sa : 0, fp = sp > 0 ? (wt * np) / all / sp : 0, ft = st > 0 ? (wt * nt) / all / st : 0;
+  out[0] += fa * ew;
+  out[1] += fa * eb;
+  out[2] += fp * ec;
+  out[3] += fp * et;
+  out[4] += ft * en;
+  out[5] += ft * ex;
+  if (out.length > 6) out[6] += ft * ef;
+}
+
+/** The six mode shares for these generalised minutes (MODES order), with the car available. For tests and the docs. */
+export function modeShares(walk: number, bike: number, car: number, taxi: number, net: number, transit: number, lam = CHOICE.scale): number[] {
+  const out = new Float64Array(6);
+  nestedInto(out, walk, bike, car, taxi, net, transit, 1, lam);
+  return [...out];
+}
+
+/**
+ * The parts of the nested choice that do not depend on your network, for one kind of trip:
+ * the reference minutes, the transport nest's scale, existing transit's weight in that nest, the
+ * weights of the active and private nests (`na`; `npCar` with a car, `npNoCar` without) and each
+ * mode's part of its nest (walk `fw`, bike `fb`; car `fcCar` and taxi `ftCar` with a car, taxi
+ * alone without), with `withCar`/`noCar` the two nests together. Filled by `othersInto`.
+ */
+interface Others {
+  ok: boolean; m: number; lt: number; ex: number; withCar: number; noCar: number;
+  na: number; npCar: number; npNoCar: number; fw: number; fb: number; fcCar: number; ftCar: number;
+}
+const newOthers = (): Others => ({ ok: false, m: 0, lt: 1, ex: 0, withCar: 0, noCar: 0, na: 0, npCar: 0, npNoCar: 0, fw: 0, fb: 0, fcCar: 0, ftCar: 0 });
+function othersInto(o: Others, lam: number, walk: number, bike: number, car: number, taxi: number, transit: number) {
+  const m = Math.min(walk, bike, car, taxi, transit);
+  o.ok = Number.isFinite(m);
+  if (!o.ok) return o;
+  const la = lam * NESTS.active, lp = lam * NESTS.private;
+  o.m = m;
+  o.lt = lam * NESTS.transport;
+  const e = (x: number, l: number) => (Number.isFinite(x) ? Math.exp(-(x - m) / l) : 0);
+  const ew = e(walk, la), eb = e(bike, la);
+  const sa = ew + eb;
+  o.na = sa > 0 ? sa ** NESTS.active : 0;
+  o.fw = sa > 0 ? ew / sa : 0;
+  o.fb = sa > 0 ? eb / sa : 0;
+  const ec = e(car, lp), et = e(taxi, lp);
+  const sp = ec + et;
+  o.npCar = sp > 0 ? sp ** NESTS.private : 0;
+  o.fcCar = sp > 0 ? ec / sp : 0;
+  o.ftCar = sp > 0 ? et / sp : 0;
+  o.npNoCar = et > 0 ? et ** NESTS.private : 0;
+  o.withCar = o.na + o.npCar;
+  o.noCar = o.na + o.npNoCar;
+  o.ex = e(transit, o.lt);
+  return o;
+}
+
+/**
+ * All the shares (MODES order, then the change to the train in the seventh place) over people
+ * with and without a car: the same as sharesInto, from `othersInto` and the transport-nest
+ * weights of your network (`en`) and of the change to the train (`ef`), both from ptWeight.
+ */
+function sharesFrom(out: Float64Array, o: Others, en: number, ef: number, carShare: number) {
+  out.fill(0);
+  if (!o.ok) return;
+  const st = en + o.ex + ef;
+  const nt = st > 0 ? st ** NESTS.transport : 0;
+  const part = (w: number, np: number, fc: number, ft: number) => {
+    const all = o.na + np + nt;
+    if (!(w > 0) || !(all > 0)) return;
+    const a = (w * o.na) / all, p = (w * np) / all, t = st > 0 ? (w * nt) / all / st : 0;
+    out[0] += a * o.fw;
+    out[1] += a * o.fb;
+    out[2] += p * fc;
+    out[3] += p * ft;
+    out[4] += t * en;
+    out[5] += t * o.ex;
+    out[6] += t * ef;
+  };
+  part(carShare, o.npCar, o.fcCar, o.ftCar);
+  part(1 - carShare, o.npNoCar, 0, 1);
+}
+const pt = { net: 0, feed: 0 };
+/** The weight in the transport nest of generalised minutes `x` (Infinity: 0), given `othersInto`. */
+const ptWeight = (o: Others, x: number) => (o.ok && Number.isFinite(x) ? Math.exp(-(x - o.m) / o.lt) : 0);
+/**
+ * Shares of your network alone and of your network then existing transit, over people with and
+ * without a car (`carShare`), given the other modes (`othersInto`) and the change to the train's
+ * weight (`ef`, from ptWeight). The same nested logit as nestedInto, with only the terms that
+ * change from stop to stop worked out; reused, read at once.
+ */
+function ptShares(o: Others, net: number, ef: number, carShare: number) {
+  pt.net = pt.feed = 0;
+  if (!o.ok) return pt;
+  const en = Number.isFinite(net) ? Math.exp(-(net - o.m) / o.lt) : 0;
+  const st = en + o.ex + ef;
+  if (!(st > 0) || !(en + ef > 0)) return pt;
+  const nt = st ** NESTS.transport;
+  const nest = carShare * (nt / (o.withCar + nt)) + (1 - carShare) * (nt / (o.noCar + nt));
+  pt.net = (nest * en) / st;
+  pt.feed = (nest * ef) / st;
+  return pt;
+}
+
+const one = new Float64Array(7);
+/** Shares (nested logit, as in nestedInto) of your network alone [4] and your network then existing transit [6]; reused, read at once. */
+function networkShares(lam: number, net: number, feed: number, walk: number, bike: number, car: number, taxi: number, transit: number): Float64Array {
+  one.fill(0);
+  nestedInto(one, walk, bike, car, taxi, net, transit, 1, lam, feed);
+  return one;
 }
 
 /** Whole-tour generalised minutes of the modes other than your network. */
 interface TourModes { walk: number; bike: number; car: number; taxi: number; transit: number }
 
 /** Writes the shares of walk, bike, car, taxi, your network and existing transit into `out` (with and without a car). */
-function sharesInto(out: Float64Array, net: number, o: TourModes, carShare: number, lam: number) {
+function sharesInto(out: Float64Array, net: number, o: TourModes, carShare: number, lam: number, feed = Infinity) {
   out.fill(0);
-  addShares(out, net, o.walk, o.bike, o.car, o.taxi, o.transit, carShare, lam);
-  addShares(out, net, o.walk, o.bike, Infinity, o.taxi, o.transit, 1 - carShare, lam);
-}
-
-function addShares(out: Float64Array, net: number, walk: number, bike: number, car: number, taxi: number, transit: number, wt: number, lam: number) {
-  if (!(wt > 0)) return;
-  const m = Math.min(walk, bike, car, taxi, net, transit);
-  if (!Number.isFinite(m)) return;
-  const e = (x: number) => (Number.isFinite(x) ? Math.exp(-(x - m) / lam) : 0);
-  const ew = e(walk), eb = e(bike), ec = e(car), et = e(taxi), en = e(net), ex = e(transit);
-  const sum = ew + eb + ec + et + en + ex;
-  out[0] += (wt * ew) / sum;
-  out[1] += (wt * eb) / sum;
-  out[2] += (wt * ec) / sum;
-  out[3] += (wt * et) / sum;
-  out[4] += (wt * en) / sum;
-  out[5] += (wt * ex) / sum;
+  if (carShare > 0) nestedInto(out, o.walk, o.bike, o.car, o.taxi, net, o.transit, carShare, lam, feed);
+  if (carShare < 1) nestedInto(out, o.walk, o.bike, Infinity, o.taxi, net, o.transit, 1 - carShare, lam, feed);
 }
 
 /** The modes of the estimate, in its column order ('transit': the city's metro, tram, rail and ferries). */
@@ -217,6 +332,8 @@ export class ActivityModel {
   /** the skim with every link open (kept while a disruption lasts) */
   private transitOpen: TransitSkim | null = null;
   private day: { n: number; timing: DayTiming } | null = null;
+  /** your stops within FEED_M of a station of the city's transit: the stop, the station and the walk between (minutes) */
+  feeds: Feed[] = [];
   /** your stops' positions and a grid over them (from the last rebuild), for walks to venues */
   private stopXY: [number, number][] = [];
   private stopGrid = new Grid<number>(300);
@@ -277,6 +394,13 @@ export class ActivityModel {
     this.stopXY = xy;
     this.stopGrid = grid;
     this.eventCache.clear();
+    this.feeds = [];
+    (game.region.transit?.stations ?? []).forEach((st, i) => {
+      for (const x of grid.near(st.x, st.y, FEED_M)) {
+        const d = Math.hypot(xy[x][0] - st.x, xy[x][1] - st.y);
+        if (d <= FEED_M) this.feeds.push({ id: this.feeds.length, x, st: i, w: Math.max(1, (d * CHOICE.detour) / CHOICE.walkSpeed) });
+      }
+    });
     const nearest = (x: number, y: number): { s: number; d: number } | null => {
       let best = -1, bd = Infinity;
       for (const s of grid.near(x, y, R)) {
@@ -366,25 +490,32 @@ export class ActivityModel {
    */
   private networkCost(game: Game, t0: number, ctx: ChoiceContext) {
     const { S, itin, dist } = ctx;
-    const skims = new Map<number, Skim | null>();
+    // per stop pair (an array while that stays small)
+    const flat = S <= 400;
+    const skimArr: (Skim | null | undefined)[] = flat ? new Array(S * S) : [];
+    const skimMap = new Map<number, Skim | null>();
     const skim = (a: number, b: number): Skim | null => {
       const key = a * S + b;
-      let sk = skims.get(key);
+      let sk = flat ? skimArr[key] : skimMap.get(key);
       if (sk !== undefined) return sk;
       sk = null;
       let best = Infinity;
-      const as = [{ s: a, extra: 0 }, ...(this.near[a] ?? [])], bs = [{ s: b, extra: 0 }, ...(this.near[b] ?? [])];
-      for (const x of as)
-        for (const y of bs) {
-          if (x.s === y.s || dist[x.s * S + y.s] < MIN_TRIP_M) continue;
-          const it = itin.get(x.s * S + y.s);
+      // the two stops, or a neighbour of either a short walk away
+      const na = this.near[a] ?? NO_NEAR, nb = this.near[b] ?? NO_NEAR;
+      for (let ia = -1; ia < na.length; ia++) {
+        const xs = ia < 0 ? a : na[ia].s, xe = ia < 0 ? 0 : na[ia].extra;
+        for (let ib = -1; ib < nb.length; ib++) {
+          const ys = ib < 0 ? b : nb[ib].s, ye = ib < 0 ? 0 : nb[ib].extra;
+          if (xs === ys || dist[xs * S + ys] < MIN_TRIP_M) continue;
+          const it = itin.get(xs * S + ys);
           if (!it) continue;
-          const c = it.gt + 1.5 * (x.extra + y.extra);
+          const c = it.gt + 1.5 * (xe + ye);
           if (c < best) {
             best = c;
-            sk = { pair: x.s * S + y.s, it, extra: x.extra + y.extra, ivt: 0, rel: 0, routes: [], rkey: '' };
+            sk = { pair: xs * S + ys, it, extra: xe + ye, ivt: 0, rel: 0, routes: [], rkey: '', rid: 0 };
           }
         }
+      }
       if (sk) {
         let load = 0, rel = 0;
         const routes = new Set<Id>();
@@ -398,8 +529,12 @@ export class ActivityModel {
         sk.rel = rel;
         sk.routes = [...routes].sort();
         sk.rkey = sk.routes.join(',');
+        let rid = rids.get(sk.rkey);
+        if (rid === undefined) rids.set(sk.rkey, (rid = rids.size));
+        sk.rid = rid;
       }
-      skims.set(key, sk);
+      if (flat) skimArr[key] = sk;
+      else skimMap.set(key, sk);
       return sk;
     };
     // the way home: headways per line for the coming hours
@@ -413,9 +548,12 @@ export class ActivityModel {
       return a;
     };
     const home = new Map<string, { avail: number; wait: number }>();
+    const homeK: ({ avail: number; wait: number } | undefined)[] = [];
+    const rids = new Map<string, number>();
     const wayHome = (sk: Skim, k: number, ret?: number[], rkey = '') => {
-      const key = `${sk.rkey}|${k}|${rkey}`;
-      let v = home.get(key);
+      // the usual return times by kind: a numeric key; an event's own return times: by name
+      const key = ret ? `${sk.rkey}|${k}|${rkey}` : null;
+      let v = key ? home.get(key) : homeK[sk.rid * KIND_COUNT + k];
       if (!v) {
         let avail = 0, wait = 0;
         const share = ret ?? RETURN_SHARE[k];
@@ -436,24 +574,35 @@ export class ActivityModel {
           wait += share[off] * w;
         }
         v = { avail, wait: avail > 0 ? wait / avail : 0 };
-        home.set(key, v);
+        if (key) home.set(key, v);
+        else homeK[sk.rid * KIND_COUNT + k] = v;
       }
       return v;
     };
     const fareMin = (ctx.fare - ECON.referenceFare) / 0.15;
     // the weather: walking to the stop and waiting weigh more (the way home is taken to be the same)
     const wx = ctx.wx ?? NO_WEATHER;
+    // one result, filled on each call: read it before the next call (or copy it)
+    const res = { pair: 0, out: 0, tour: 0, avail: 1 };
     /** null: no itinerary between the two stops (or their neighbours) this hour */
     /** `ret`, `rkey`: when people come home, by hour from now (events), and a key for it */
     return (sa: number, sb: number, k: number, ty: TravellerType, wa: number, wb: number, strandedLeg: number, ret?: number[], rkey?: string) => {
       const sk = skim(sa, sb);
       if (!sk) return null;
       const it = sk.it;
-      const base = ty.walk * wx.walk * (wa + wb + sk.extra) + sk.ivt + ty.change * it.transfers + ty.fare * fareMin + ty.rel * sk.rel + CHOICE.networkConst;
+      const base = ty.walk * wx.walk * (wa + wb + sk.extra + (it.walk ?? 0)) + sk.ivt + ty.change * it.transfers + ty.fare * fareMin + ty.rel * sk.rel + ctx.trust;
       const out = base + ty.wait * wx.wait * it.wait;
-      if (KINDS[k].oneWay) return { pair: sk.pair, out, tour: out, avail: 1 };
+      res.pair = sk.pair;
+      res.out = out;
+      if (KINDS[k].oneWay) {
+        res.tour = out;
+        res.avail = 1;
+        return res;
+      }
       const h = wayHome(sk, k, ret, rkey);
-      return { pair: sk.pair, out, tour: out + h.avail * (base + ty.wait * wx.wait * h.wait) + (1 - h.avail) * strandedLeg, avail: h.avail };
+      res.tour = out + h.avail * (base + ty.wait * wx.wait * h.wait) + (1 - h.avail) * strandedLeg;
+      res.avail = h.avail;
+      return res;
     };
   }
 
@@ -468,6 +617,68 @@ export class ActivityModel {
     }
   }
 
+  /**
+   * For an hour's itineraries. `from(a)`: the (at most FEED_TRY) stops near a station that served
+   * stop `a` reaches quickest by your network, with the walk to the station. `best(a, j)`: of those,
+   * where the change to the city's transit gets to zone `j` quickest (commuter weights), or null.
+   * Both cached for the hour.
+   */
+  private feeder(ctx: ChoiceContext) {
+    const fromCache = new Map<number, Feed[]>();
+    const Z = this.zones!.list.length;
+    /** per (stop, zone): the feed's id + 1, 0 for none, -1 not worked out yet; and its commuter minutes */
+    const cache = new Int32Array(ctx.S * Z).fill(-1);
+    const minutes = new Float32Array(ctx.S * Z);
+    const tr = this.transit!;
+    const from = (a: number) => {
+      let list = fromCache.get(a);
+      if (list) return list;
+      const scored: { f: Feed; c: number }[] = [];
+      for (const f of this.feeds) {
+        if (f.x === a) continue;
+        const it = ctx.itin.get(a * ctx.S + f.x);
+        if (it) scored.push({ f, c: it.gt + 1.5 * f.w });
+      }
+      scored.sort((x, y) => x.c - y.c || x.f.x - y.f.x || x.f.st - y.f.st);
+      list = scored.slice(0, FEED_TRY).map((x) => x.f);
+      fromCache.set(a, list);
+      return list;
+    };
+    const best = (a: number, j: number): Feed | null => {
+      const key = a * Z + j;
+      const v = cache[key];
+      if (v >= 0) return v ? this.feeds[v - 1] : null;
+      let hit: Feed | null = null;
+      let bc = Infinity;
+      for (const f of from(a)) {
+        const p = tr.toZone(f.st, j);
+        if (!p) continue;
+        const c = ctx.itin.get(a * ctx.S + f.x)!.gt + 1.5 * f.w + 1.2 * p.walk + p.ivt + 1.6 * p.wait + 13 * p.changes;
+        if (c < bc) (bc = c), (hit = f);
+      }
+      cache[key] = hit ? hit.id + 1 : 0;
+      minutes[key] = bc;
+      return hit;
+    };
+    // A change to the train is offered only where it is not clearly worse than the train all the
+    // way (FEED_DOMINATED commuter minutes more, a share well under 1%): mostly not near stations.
+    // `worth(i, j)`: for some stop near zone i, a change to the train that reaches zone j and is
+    // worth offering (the last zone pair asked is kept: tour entries come by origin, then destination).
+    let lastI = -1, lastJ = -1, last = false;
+    const worth = (i: number, j: number) => {
+      if (i === lastI && j === lastJ) return last;
+      lastI = i;
+      lastJ = j;
+      let bestFeed = Infinity;
+      for (const a of this.access[i]) if (best(a.s, j)) bestFeed = Math.min(bestFeed, minutes[a.s * Z + j] + 1.2 * Math.min(a.wp, a.wa));
+      const p = Number.isFinite(bestFeed) ? tr.between(i, j) : null;
+      const direct = p ? 1.2 * p.walk + p.ivt + 1.6 * p.wait + 13 * p.changes : Infinity;
+      last = bestFeed < direct + FEED_DOMINATED;
+      return last;
+    };
+    return { from, best, worth };
+  }
+
   /** Per-minute rates on your network for the hour starting at `t0`. */
   rates(game: Game, t0: number, ctx: ChoiceContext): RateOut {
     const zs = this.ensureZones(game);
@@ -480,15 +691,35 @@ export class ActivityModel {
     const K = KIND_COUNT;
     const wx = ctx.wx ?? NO_WEATHER;
     const cost = this.networkCost(game, t0, ctx);
+    const feeder = this.feeds.length ? this.feeder(ctx) : null;
+    const feedOf = new Int8Array(zs.list.length).fill(-1);
+    /** whether some stop near zone i reaches a stop near a station */
+    const feedAt = (i: number) => {
+      if (feedOf[i] < 0) feedOf[i] = feeder && this.access[i].some((a) => feeder.from(a.s).length > 0) ? 1 : 0;
+      return feedOf[i] === 1;
+    };
     const out = new Map<number, { r: number; mix: Float64Array }>();
+    const put = (pair: number, k: number, r: number) => {
+      let o = out.get(pair);
+      if (!o) out.set(pair, (o = { r: 0, mix: new Float64Array(K) }));
+      o.r += r;
+      o.mix[k] += r;
+    };
+    const oth = newOthers();
+    // per zone: the bus part of a change to the train, by origin stop (its place in the zone's
+    // list), stop near a station and kind; `busAt` holds the zone + 1 where filled (-1: none)
+    const F = Math.max(1, this.feeds.length);
+    const busAt = new Int32Array(4 * F * K), busPair = new Int32Array(4 * F * K), busTour = new Float64Array(4 * F * K), busAvail = new Float64Array(4 * F * K);
     for (const i of this.reach) {
       const gi = this.access[i];
       for (let e = m.start[i]; e < m.start[i + 1]; e++) {
         const j = m.d[e];
-        const gj = this.access[j];
-        if (!gj?.length) continue;
         const k = m.k[e];
         const kind = KINDS[k];
+        // your network, and your network to a station then on by train (not for trips that start at the activity end)
+        const gj = this.access[j] ?? NONE;
+        const feedable = !kind.toHome && wf > 0 && feedAt(i);
+        if (!gj.length && !feedable) continue;
         // timing and volume follow the profile of the activity end (the airport for arrivals)
         const act = kind.toHome ? i : j;
         const pk = zs.profile[act] * K + k;
@@ -496,6 +727,8 @@ export class ActivityModel {
         // delayed flights: arrivals held back, then bunched (flight disruptions)
         if (kind.toHome && flights.size) th *= flights.get(zs.list[i].place ?? '') ?? 1;
         if (!(th > 1e-4)) continue;
+        const feeds = feedable && feeder!.worth(i, j);
+        if (!gj.length && !feeds) continue;
         const ty = TRAVELLERS[kind.type];
         const d = m.dist[e];
         const zi = zs.list[i], zj = zs.list[j];
@@ -506,26 +739,42 @@ export class ActivityModel {
         const mult = kind.oneWay ? 1 : 2;
         const strandedLeg = others.taxi + CHOICE.stranded;
         const tr = transitTour(transitLeg(this.transit!, e, ty, wf, wx), k, hour, strandedLeg);
-        for (const a of gi) {
+        othersInto(oth, lam, mult * others.walk, mult * others.bike, carShare > 0 ? mult * others.car : Infinity, mult * others.taxi, tr);
+        for (let ai = 0; ai < gi.length; ai++) {
+          const a = gi[ai];
           // origin side: homes for tours from home, activity for tours from work, hotels or stations
           const sa = hs * a.sp + (1 - hs) * a.sa;
           if (!(sa > 0)) continue;
           const wa = a.sp + a.sa > 0 ? (hs * a.sp * a.wp + (1 - hs) * a.sa * a.wa) / (hs * a.sp + (1 - hs) * a.sa) : 0;
-          for (const b of gj) {
-            const sb = kind.toHome ? b.sp : b.sa;
+          const f = feeds ? feeder!.best(a.s, j) : null;
+          // the bus part (the same for every destination from here: kept for this zone), then the
+          // change to the train (each way on a round trip) and the train
+          let fPair = -1, feedTour = Infinity;
+          if (f) {
+            const key = (ai * F + f.id) * K + k;
+            if (busAt[key] !== i + 1) {
+              const c = cost(a.s, f.x, k, ty, wa, f.w, 0);
+              busAt[key] = i + 1;
+              busPair[key] = c ? c.pair : -1;
+              busTour[key] = c ? c.tour : Infinity;
+              busAvail[key] = c ? c.avail : 0;
+            }
+            fPair = busPair[key];
+            if (fPair >= 0) feedTour = busTour[key] + (1 - busAvail[key]) * strandedLeg + mult * ty.change + transitTour(transitPathLeg(this.transit!.toZone(f.st, j), ty, wf, wx), k, hour, strandedLeg);
+          }
+          if (!gj.length && !Number.isFinite(feedTour)) continue;
+          const ef = ptWeight(oth, feedTour);
+          for (const b of gj.length ? gj : NO_STOP) {
+            const sb = !b ? 1 : kind.toHome ? b.sp : b.sa;
             if (!(sb > 0)) continue;
-            const c = cost(a.s, b.s, k, ty, wa, kind.toHome ? b.wp : b.wa, strandedLeg);
-            if (!c) continue;
-            const withCar = logitFirst(lam, c.tour, mult * others.walk, mult * others.bike, mult * others.car, mult * others.taxi, tr);
-            const noCar = logitFirst(lam, c.tour, mult * others.walk, mult * others.bike, mult * others.taxi, tr);
-            const p = ctx.smax * (carShare * withCar + (1 - carShare) * noCar);
-            if (!(p > 0)) continue;
-            const made = kind.optional ? (1 - STAY_HOME * (1 - p)) / (1 - STAY_HOME) : 1;
-            const r = (th * sa * sb * p * made) / 60;
-            let o = out.get(c.pair);
-            if (!o) out.set(c.pair, (o = { r: 0, mix: new Float64Array(K) }));
-            o.r += r;
-            o.mix[k] += r;
+            const c = b ? cost(a.s, b.s, k, ty, wa, kind.toHome ? b.wp : b.wa, strandedLeg) : null;
+            if (!c && !Number.isFinite(feedTour)) continue;
+            const x = ptShares(oth, c ? c.tour : Infinity, ef, carShare);
+            const p = x.net, pf = x.feed;
+            if (!(p + pf > 0)) continue;
+            const made = kind.optional ? (1 - STAY_HOME * (1 - p - pf)) / (1 - STAY_HOME) : 1;
+            if (c && p > 0) put(c.pair, k, (th * sa * sb * p * made) / 60);
+            if (fPair >= 0 && pf > 0) put(fPair, k, (th * sa * sb * pf * made) / 60);
           }
         }
       }
@@ -589,9 +838,9 @@ export class ActivityModel {
           for (const b of set.stops) {
             const c = cost(a.s, b.s, k, ty, wa, b.w, strandedLeg, ret, ev.id);
             if (!c) continue;
-            const withCar = logitFirst(lam, c.tour, 2 * others.walk, 2 * others.bike, 2 * others.car, 2 * others.taxi, tr);
-            const noCar = logitFirst(lam, c.tour, 2 * others.walk, 2 * others.bike, 2 * others.taxi, tr);
-            const p = ctx.smax * (carShare * withCar + (1 - carShare) * noCar);
+            const withCar = carShare > 0 ? networkShares(lam, c.tour, Infinity, 2 * others.walk, 2 * others.bike, 2 * others.car, 2 * others.taxi, tr)[4] : 0;
+            const noCar = carShare < 1 ? networkShares(lam, c.tour, Infinity, 2 * others.walk, 2 * others.bike, Infinity, 2 * others.taxi, tr)[4] : 0;
+            const p = carShare * withCar + (1 - carShare) * noCar;
             if (!(p > 0)) continue;
             const r = (th * sa * b.share * p) / 60;
             let x = out.get(c.pair);
@@ -685,7 +934,7 @@ export class ActivityModel {
       a[x] += v;
     };
     const costs = hours.map((ctx, h) => (ctx.itin.size ? this.networkCost(game, day0 + h * 3600, ctx) : null));
-    const smax = hours[0]?.smax ?? 0;
+    const feeders = hours.map((ctx) => (ctx.itin.size && this.feeds.length ? this.feeder(ctx) : null));
     const reach = new Uint8Array(Z);
     for (const z of this.reach) reach[z] = 1;
     // each profile and kind's busiest starting hour
@@ -736,10 +985,38 @@ export class ActivityModel {
       }
     const qg = Array.from({ length: G }, () => new Float64Array(MODES.length));
     const tg: TourModes[] = Array.from({ length: G }, () => ({ walk: 0, bike: 0, car: 0, taxi: 0, transit: 0 }));
-    const qh = new Float64Array(MODES.length), s = new Float64Array(MODES.length);
+    // the seventh place: your network to a station, then on by existing transit (counted with your network)
+    const s = new Float64Array(MODES.length + 1);
+    const oth = newOthers();
+    // per origin zone: the bus part of a change to the train by hour, origin stop (its place in the
+    // zone's list), stop near a station and kind; `busAt` holds the zone + 1 where filled
+    const F = Math.max(1, this.feeds.length);
+    const busAt = new Int32Array(24 * 4 * F * K), busTour = new Float64Array(24 * 4 * F * K), busAvail = new Float64Array(24 * 4 * F * K);
+    // the zone pair being summed (tour entries come by origin, then destination): trips each way
+    // by mode and whether your network links it, written to `trips` and `served` once per pair
+    let pi = -1, pj = -1, linkIJ = false, linkJI = false;
+    const ij = new Float64Array(MODES.length), ji = new Float64Array(MODES.length);
+    const flush = () => {
+      if (pi < 0) return;
+      for (let x = 0; x < MODES.length; x++) {
+        add(pi, pj, x, ij[x]);
+        add(pj, pi, x, ji[x]);
+      }
+      if (linkIJ) served.add(pi * Z + pj);
+      if (linkJI) served.add(pj * Z + pi);
+      ij.fill(0);
+      ji.fill(0);
+      linkIJ = linkJI = false;
+      pi = -1;
+    };
     for (let i = 0; i < Z; i++) {
       for (let e = m.start[i]; e < m.start[i + 1]; e++) {
         const j = m.d[e];
+        if (i !== pi || j !== pj) {
+          flush();
+          pi = i;
+          pj = j;
+        }
         if (!inScope(i) && !inScope(j)) continue;
         const k = m.k[e];
         const kind = KINDS[k];
@@ -771,50 +1048,81 @@ export class ActivityModel {
           const daily = base * (gA[x] + park * gP[x] + beach * gB[x]);
           if (!(daily > 1e-6)) continue;
           for (const y of OTHER) {
-            add(i, j, y, daily * qg[g][y]);
-            if (!kind.oneWay) add(j, i, y, daily * qg[g][y]);
+            ij[y] += daily * qg[g][y];
+            if (!kind.oneWay) ji[y] += daily * qg[g][y];
           }
         }
-        if (!reach[i] || !reach[j]) continue;
+        if (!reach[i]) continue;
+        const gj = reach[j] ? this.access[j] : NONE;
+        const feedable = !kind.toHome && this.feeds.length > 0;
+        if (!gj.length && !feedable) continue;
         // then, hour by hour, the people who live or go near your stops reconsider
         const hs = zs.homeShare[i * K + k];
         for (let h = 0; h < 24; h++) {
           const cost = costs[h];
           const th = base * day.share[pk * 24 + h] * tripFactor(wxH[h], k, park, beach, mall === 1);
           if (!cost || !(th > 1e-5)) continue;
+          const twf = transitWaitFactor(h);
+          // the same changes to the train as the simulation offers that hour (rates)
+          const fd = feedable && twf > 0 ? feeders[h] : null;
+          const feedsH = !!fd && fd.worth(i, j);
+          if (!gj.length && !feedsH) continue;
           const g = groupOf[h];
           // the baseline's transit time is at the busiest hour; this hour's may differ
-          const tourH: TourModes = { ...tg[g], transit: trAt(h, wxH[h]) };
-          sharesInto(qh, Infinity, tourH, carShare, lam);
-          for (const a of this.access[i]) {
+          const t = tg[g];
+          othersInto(oth, lam, t.walk, t.bike, carShare > 0 ? t.car : Infinity, t.taxi, trAt(h, wxH[h]));
+          for (let ai = 0; ai < this.access[i].length; ai++) {
+            const a = this.access[i][ai];
             const sa = hs * a.sp + (1 - hs) * a.sa;
             if (!(sa > 0)) continue;
             const wa = (hs * a.sp * a.wp + (1 - hs) * a.sa * a.wa) / (hs * a.sp + (1 - hs) * a.sa);
-            for (const b of this.access[j]) {
-              const sb = kind.toHome ? b.sp : b.sa;
+            const f = feedsH ? fd!.best(a.s, j) : null;
+            // the bus part (kept for this zone and hour), then the change and the train
+            let fAvail = 0, feedTour = Infinity;
+            if (f) {
+              const key = ((h * 4 + ai) * F + f.id) * K + k;
+              if (busAt[key] !== i + 1) {
+                const c = cost(a.s, f.x, k, ty, wa, f.w, 0);
+                busAt[key] = i + 1;
+                busTour[key] = c ? c.tour : Infinity;
+                busAvail[key] = c ? c.avail : 0;
+              }
+              if (Number.isFinite(busTour[key])) {
+                fAvail = busAvail[key];
+                feedTour = busTour[key] + (1 - fAvail) * strandedLeg + mult * ty.change + transitTour(transitPathLeg(this.transit!.toZone(f.st, j), ty, twf, wxH[h]), k, h, strandedLeg);
+              }
+            }
+            if (!gj.length && !Number.isFinite(feedTour)) continue;
+            const ef = ptWeight(oth, feedTour);
+            for (const b of gj.length ? gj : NO_STOP) {
+              const sb = !b ? 1 : kind.toHome ? b.sp : b.sa;
               if (!(sb > 0)) continue;
-              const c = cost(a.s, b.s, k, ty, wa, kind.toHome ? b.wp : b.wa, strandedLeg);
-              if (!c) continue;
-              served.add(i * Z + j);
-              if (!kind.oneWay && c.avail > 0) served.add(j * Z + i);
-              sharesInto(s, c.tour, tourH, carShare, lam);
-              const p = smax * s[4];
+              const c = b ? cost(a.s, b.s, k, ty, wa, kind.toHome ? b.wp : b.wa, strandedLeg) : null;
+              if (!c && !Number.isFinite(feedTour)) continue;
+              if (c) {
+                linkIJ = true;
+                if (!kind.oneWay && c.avail > 0) linkJI = true;
+              }
+              sharesFrom(s, oth, c ? ptWeight(oth, c.tour) : 0, ef, carShare);
+              const p = s[4] + s[6];
+              // coming home: by bus, or by train then bus, as far as each runs then
+              const home = (c ? s[4] * c.avail : 0) + s[6] * fAvail;
               const w = th * sa * sb;
               const n = w * (kind.optional ? (1 - STAY_HOME * (1 - p)) / (1 - STAY_HOME) : 1);
               for (const x of OTHER) {
-                // the network's capped-off share goes back to the other modes (as they would be this hour)
-                const v = n * (s[x] + (1 - smax) * s[4] * qh[x]) - w * qg[g][x];
-                add(i, j, x, v);
+                const v = n * s[x] - w * qg[g][x];
+                ij[x] += v;
                 // a stranded traveller comes home by taxi
-                if (!kind.oneWay) add(j, i, x, x === 3 ? v + n * p * (1 - c.avail) : v);
+                if (!kind.oneWay) ji[x] += x === 3 ? v + n * (p - home) : v;
               }
-              add(i, j, 4, n * p);
-              if (!kind.oneWay) add(j, i, 4, n * p * c.avail);
+              ij[4] += n * p;
+              if (!kind.oneWay) ji[4] += n * home;
             }
           }
         }
       }
     }
+    flush();
     return { Z, trips, served };
   }
 

@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-30 (phase 6).
+Last updated: 2026-10-31 (phase 7).
 
 ## Phase 0. Foundations ✅
 
@@ -92,7 +92,7 @@ Built and tested. Screenshots in `docs/screenshots/city-activity/` come from a c
 | Thin line result, day 2 | −2,128 | −2,190 | | below 0 |
 | Crowded line peak load | 1.00 | 0.97 | | above 0.8 |
 
-The reputation cap is still in place (removed in phase 7).
+The reputation cap is still in place (removed in phase 7: see there).
 
 **Changes from the plan, and why:**
 - **The crowded scenario's line changed** (allowed by section 11, "a documented change to its setup"). It was a 14-stop zig-zag chain of nearby stops from Taksim. Under the new model walking or driving beats a line that wanders, so its morning peak reached only 71%. It is now a straight 10-stop line from Taksim to Mecidiyeköy along the main road, with the same two Mini 8 buses, headway, reputation and fare (`crowdedLine` in `test/helpers.ts`). Automation scenario 3 and the Simulation Lab test use the same line. **Approved by the owner on 2026-10-30.** Two tests that wait for "a bus with passengers on board" now wait up to 3 game hours instead of 15–30 minutes: they test commands, not demand.
@@ -111,7 +111,7 @@ The reputation cap is still in place (removed in phase 7).
 **Known gaps:**
 - Metro, tram and ferry lines are not in the choice yet (phase 3). Until then their trips appear as walking, car or taxi in the estimate (taxi is about a quarter of trips). The panel and the place card say so.
 - The evening reversal is weaker than the morning peak (1.8× against 2.7× on the Haseki–Beyazıt line), because trips home spread over more hours.
-- The development switch `setDemandEngine('legacy')` stays until phase 7 for comparisons.
+- The development switch `setDemandEngine('legacy')` stays until phase 7 for comparisons (removed in phase 7).
 
 ## Phase 3. Places come alive 🟡
 
@@ -168,7 +168,7 @@ Before retuning, the city's transit and the new weekday patterns took the refere
 - The city's own buses and minibuses (İETT, dolmuş) are not modelled. Long trips far from a station fall to cars, taxis and, for students, bikes (İstanbul Üniversitesi shows 23% by bike).
 - The map's Sirkeci rail station sits on the old surface line, so Marmaray does not link Sirkeci and Yenikapı. One rail link (Ayrılık Çeşmesi to Cerrahpaşa, 11.5 km) is probably a track-joining artefact. Cable cars have no track on the map and are switched off; only one funicular (F1) is linked.
 - Weather, events and service plans come in phases 4 and 5. Stadiums are quiet until match days exist.
-- Your passengers cannot change between your buses and the city's transit yet (phase 7).
+- Your passengers cannot change between your buses and the city's transit yet (phase 7 added changes at stops near stations).
 
 
 ## Phase 4. Weather 🟡
@@ -318,4 +318,54 @@ The early-morning forecast runs high because the model rates lines by their punc
 
 **Tests:** the full suite ran with 230 passed, 4 skipped and 4 timing tests failed while the game app was using the machine (the hourly-choice test took 67 ms against its 30 ms limit, and 74 ms on the phase 5 commit at the same time, so not a regression). Re-run one file at a time on a quiet machine, all four pass (activity 10/10, perf 1/1, network-control 21/21, progression 2/2). The files touched by the last fixes were re-run afterwards (automation, automation-city, automation-forecast, day-labels: 44 passed). Build OK.
 
-## Phase 7. Depth and balancing ⬜
+## Phase 7. Depth and balancing 🟡
+
+Built and tested. 🟡 until the owner has played it and decided on the progression target (below). Choice is now nested, reputation works through a trust constant instead of the 0.6 cap, passengers can walk between nearby stops to change lines, and people can ride your bus to a station and go on by metro, tram or ferry.
+
+| Item | Status | Evidence |
+|---|---|---|
+| **Nesting**: three nests, public transport (your network, the city's transit, and your bus then the city's transit) with scale 0.6, active (walk, bike) 0.8 and private (car, taxi) 0.8 (`NESTS` in `activity/params.ts`). A better bus draws more from the metro than from cars | ✅ | `choice.test.ts` (nests at 1 give the plain logit; a better bus takes proportionally more from transit than from car) |
+| **Trust constant replaces the 0.6 cap**: your network carries extra minutes on each journey leg, 6.75 at reputation 0 falling to 2.25 at 100 (5.4 at the starting 30). The cap and its share redistribution are gone from the simulation and the estimate | ✅ | `choice.test.ts` (bounds; the same line carries more than 15% more riders at reputation 90 than at 20); calibration below |
+| **Walking changes between nearby stops**: an itinerary may change lines at a stop up to 300 m away (the nearest four), weighed as walking (1.25 × distance at 75 m a minute, weight 1.5) plus the usual change. In the simulation the group walks: it waits at the next stop but cannot board until it has arrived, and it does not give up while walking. Stop waiting counts (the stop board, automation's `stop.waiting` and stop records) leave out people still walking | ✅ | `choice.test.ts` (itinerary cost; a played walking change: walkers seen, boarded the second line, journey completed, audit clean) |
+| **Changes to the city's transit** (multimodal readiness): from your stops within 300 m of a station, people can ride your bus there and go on by metro, tram, rail or ferry. Offered on trips from home (and their way back), per stop the two stops near a station your network reaches quickest, with the traveller type's change penalty each way, and not where it is clearly worse than the train all the way (15 commuter minutes). The bus part runs in the simulation; the train part is the city model's. Rail disruptions apply. The estimate counts these trips with your network; the place card says it | ✅ | `activity.test.ts` (a mall beside a metro station with no stops: under 1% by your network, no groups or fares from reading it); calibration below; screenshot `place-card-travel.png` |
+| Automation's **missed connections** know walking changes: records gain `changeAt`, `changeAtName` and `walkMin`; a bus is held for connections at the stop where people board | ✅ | `automation-operations.test.ts` |
+| **Habit** (optional in the plan) | ⬜ | not built: reputation already carries day-to-day memory through the trust constant |
+| The **legacy demand switch** (`setDemandEngine('legacy')`) and its rate tables are removed | ✅ | no references left; full suite |
+| **Calibration** within the section 11 targets with the trust constant in place of the cap | ✅ | table below |
+| **Performance**: hourly choice within 30 ms on about 400 zones and 100 stops | ✅ | `perf.test.ts`: 25 ms (median of 7) with 410 zones, 85 stops and 36 stops near stations; 21.5 ms before phase 7 |
+| **Save validation**: a save made by the phase 6 code loads, plays on and saves again | ✅ | a mid-morning save of a four-line company from the phase 6 commit: loads with a clean audit, plays a full day, reloads clean. The only new save field is `Leg.b` (optional). The owner's Barcelona save was not loaded: its map tiles are not bundled |
+| **Visual QA** | ✅ | `pnpm shots` (17 screens at 1920 × 1080) and `scripts/capture-activity.mjs` (6 screens, no page errors) reviewed; the place card's transit note was out of date and was fixed; the six activity screenshots were refreshed |
+
+**Calibration** (`pnpm calibrate`, baseline = the earlier model):
+
+| Figure | Now | Baseline | Change | Limit |
+|---|---|---|---|---|
+| Reference riders, weekday | 3,683 | 3,611 | +2.0% | ±10% |
+| Reference riders, weekend | 3,025 | 3,076 | −1.7% | ±15% |
+| Reference boardings a day | 3,464 | 3,432 | +0.9% | ±10% |
+| Reference result a day | 4,085 | 4,032 | +1.3% | ±20% |
+| Reference satisfaction | 0.73 | 0.77 | | above 0.6 |
+| Thin line result, day 2 | −2,036 | −2,190 | | below 0 |
+| Crowded line peak load | 0.97 | 0.97 | | above 0.8 |
+
+The 0.6 cap is removed: these hold with the trust constant in its place.
+
+**Progression** (`progression.test.ts`, riders a day on days 26–39): weekdays 7,428, weekends 5,730. The bot grows and never stalls, but section 11 asks for about 9,000 on weekdays. The gap dates from phase 2 (about 6,900 then, documented there); changes to the city's transit raised it from 6,543 this phase. **Owner decision needed:** accept about 7,400 as the new target, or tune for 9,000.
+
+**Changes from the plan, and why:**
+- **The trust constant falls with reputation** instead of being one per-city constant. The cap tied reputation to riders; without it reputation would only move the score. 6.75 → 2.25 minutes was swept against the reference line before the changes to the city's transit were added (6.5/2 gave +3.8%, 7/2.5 −3.0%; 6.75/2.25 +0.1%); with them it reads +2.0%.
+- **Changes to the city's transit go one way per tour** (your bus first, then the train, and back the same way). Trips that start at the activity end, such as arrivals at the airport, do not get them: those travellers' first leg is the train.
+- **Timing tests run alone.** `perf.test.ts` now holds the hourly-choice budget too, and runs in its own group after the other files (`vitest.config.ts`). Alongside three other workers the same code read about 1.5× slower (39 ms), which says more about the machine than the code.
+- **Four tests changed with the model, not to hide it:** the engine's completed-journeys floor is 15 (23 measured: the trust constant at reputation 30 carries fewer riders on that small line than the cap allowed); the gap tests pick the first bus with another behind it instead of assuming the line's first bus; the rebalance test starts at reputation 60 (at 30 its line peaked at 78% against an 80% trigger); the mall test allows under 1% of trips by your network, which are changes to the metro beside it.
+
+**Effect on play (measured):**
+- Reputation matters again: the same line carries more than 15% more riders at reputation 90 than at 20.
+- Lines that stop near stations gain. A four-line company around Taksim, from the same save and day: 1,428 travellers set out on its buses against 773 on the phase 6 code, and a smaller share were lost (30% against 37%).
+- The thin three-stop line carries 183 riders on day 2 (97 baseline) and still loses money.
+
+**Known gaps:**
+- The day estimate (Network Control's estimated demand, place cards, automation's unserved trips) takes about 620 ms on the 85-stop test network, against about 450 ms on the phase 6 code. It is kept until the network, day, fare or reputation changes.
+- People do not change from the city's transit to your buses (train first, bus last).
+- Habit is not built.
+
+**Tests:** full suite 304 passed, 4 skipped, with the timing group alone afterwards (hourly choice 25 ms, simulation 65 ms per real second at 720× against 120). Build OK.

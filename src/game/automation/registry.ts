@@ -1607,7 +1607,7 @@ export const NODES: NodeDef[] = [
   },
   {
     type: 'data.connections', category: 'data', label: 'Connections at risk',
-    description: 'People on your buses now who change to another of your lines at a stop ahead, and whether the bus they want leaves before they get there, from their own journey plans and the buses’ predicted times. `holdNeeded`: how many minutes the connecting bus would have to wait for them. An estimate: traffic can change it.',
+    description: 'People on your buses now who change to another of your lines at a stop ahead, and whether the bus they want leaves before they get there, from their own journey plans and the buses’ predicted times. `holdNeeded`: how many minutes the connecting bus would have to wait for them. Some change by walking to a stop nearby: `changeAtName` and `walkMin` say where and how far. An estimate: traffic can change it.',
     inputs: [afterIn, { id: 'line', label: 'Arriving on line', type: 'line', optional: true }],
     outputs: [{ id: 'connections', label: 'Connections', type: 'list' }, { id: 'first', label: 'Most people', type: 'record' }, { id: 'people', label: 'People', type: 'number' }, { id: 'count', label: 'How many', type: 'number' }],
     config: [
@@ -1859,15 +1859,16 @@ export const NODES: NodeDef[] = [
         let bus: string | null, stop = idOf(inp.stop, 'stop'), m = num(inp.minutes) ?? (num(cfg.minutes) ?? 2);
         if (isRec(x) && x.kind === 'connection') {
           bus = str(x.connectingBus) || null;
-          stop ??= str(x.stop) || null;
+          // the connecting bus waits where they board it (a stop nearby, for a walking change)
+          stop ??= str(x.changeAt) || str(x.stop) || null;
           if (inp.minutes === undefined) m = num(x.holdNeeded) ?? 0;
-          if (!bus) { skipped.push(`No bus is running the connection at ${str(x.stopName)} yet.`); continue; }
+          if (!bus) { skipped.push(`No bus is running the connection at ${str(x.changeAtName) || str(x.stopName)} yet.`); continue; }
         } else {
           bus = idOf(x, 'vehicle');
           if (inp.minutes === undefined && isRec(x) && typeof x.hold === 'number') m = x.hold;
         }
         if (!bus) continue;
-        if (m < 1) { skipped.push(`${isRec(x) && x.kind === 'connection' ? `Line ${str(x.toLineNumber)} at ${str(x.stopName)}` : fmt(x)} needs no hold.`); continue; }
+        if (m < 1) { skipped.push(`${isRec(x) && x.kind === 'connection' ? `Line ${str(x.toLineNumber)} at ${str(x.changeAtName) || str(x.stopName)}` : fmt(x)} needs no hold.`); continue; }
         recs.push(ctx.act({ type: 'hold_vehicle', vehicle: bus, minutes: Math.min(cap, Math.round(m)), ...(stop ? { stop } : {}) }));
       }
       return actionsOut(recs, skipped);

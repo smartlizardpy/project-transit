@@ -79,7 +79,7 @@ Buses wear by about 0.01% of condition per km. Below 45% condition they can brea
 
 ## Reputation
 
-Reputation (0–100) unlocks area licences and larger vehicles. At the end of every service day (03:00):
+Reputation (0–100) unlocks area licences and larger vehicles, and it is how far people trust your network: each journey leg on your buses weighs 6.75 extra minutes at reputation 0, falling to 2.25 at 100 (5.4 at the starting 30), so a well-regarded company carries more riders on the same lines (`trustMinutes` in `src/game/activity/params.ts`). At the end of every service day (03:00):
 - It drifts towards the day's average satisfaction × 100. The drift is faster with more riders: 3–12% of the gap per day.
 - It drops by 0.04 per missed departure, up to 4 points a day.
 - Objectives can add a few points.

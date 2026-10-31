@@ -155,7 +155,7 @@ function CityTransit({ game, p }: { game: Game; p: CityPlace }) {
       ))}
       {modes.length > 0 && (
         <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>
-          {modes.map((m) => `${MODE_LABEL[m]} every ${TRANSIT_SERVICE[m]?.wait ?? '?'} min at the peak, ${TRANSIT_SERVICE[m]?.kmh ?? '?'} km/h`).join('; ')} (assumed), 06:00 to midnight. It competes with your buses; your passengers cannot change to it yet.
+          {modes.map((m) => `${MODE_LABEL[m]} every ${TRANSIT_SERVICE[m]?.wait ?? '?'} min at the peak, ${TRANSIT_SERVICE[m]?.kmh ?? '?'} km/h`).join('; ')} (assumed), 06:00 to midnight. It competes with your buses, and people can also ride your bus to a stop within 300 m of a station and change to it there.
         </div>
       )}
     </div>

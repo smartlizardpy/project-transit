@@ -45,6 +45,19 @@ const runNow = (game: Game, wf: Workflow) => {
   return runsOf(game, wf.id).at(-1)!;
 };
 const sum = (a: number[] | undefined) => (a ?? []).reduce((x, y) => x + y, 0);
+/**
+ * From 07:30, step a minute at a time (at most an hour) until a bus on the line has another
+ * close behind it in the same direction, early enough in its trip to be held; that bus.
+ */
+const leadBus = (game: Game, route: string) => {
+  runTo(game, 0, 7, 30);
+  for (let i = 0; i < 60; i++) {
+    const lead = lineGaps(game, route).buses.find((b) => b.behind !== null && b.run.v.stopIdx < b.run.p.stops.length - 2);
+    if (lead) return lead;
+    game.run(60);
+  }
+  throw new Error('no bus with another behind it in the same direction');
+};
 const missed = (game: Game, route: string) => sum(game.state.analytics.today.routes[route]?.m);
 
 /** A bus on a trip between two stops, well before the end of its pattern. */
@@ -273,13 +286,11 @@ describe('gaps between buses', () => {
   it('a long hold makes the bus behind catch up; the gaps show it and the hold that evens them out', () => {
     const game = newGame();
     const l = buildLine(game, { buses: 4, stops: 9, headway: 8 });
-    runTo(game, 0, 7, 30);
+    // hold the bus ahead in one direction so the next one catches it up
+    const lead = leadBus(game, l.route);
     const before = lineGaps(game, l.route);
     expect(before.headway).toBe(8);
     expect(before.buses.length).toBeGreaterThanOrEqual(2);
-    // hold the bus ahead in one direction so the next one catches it up
-    const lead = before.buses.find((b) => b.behind !== null && b.run.v.stopIdx < b.run.p.stops.length - 2)!;
-    expect(lead).toBeTruthy();
     expect(runCommand(game, { type: 'hold_vehicle', vehicle: lead.run.v.id, minutes: 7 }, 'player').ok).toBe(true);
     let seen = false;
     for (let i = 0; i < 20 && !seen; i++) {
@@ -302,8 +313,7 @@ describe('gaps between buses', () => {
     const h = g.node('action.hold', { max: 4 });
     g.link(t, 'buses', h, 'bus');
     const wf = make(game, g);
-    runTo(game, 0, 7, 30);
-    const lead = lineGaps(game, l.route).buses.find((b) => b.behind !== null && b.run.v.stopIdx < b.run.p.stops.length - 2)!;
+    const lead = leadBus(game, l.route);
     runCommand(game, { type: 'hold_vehicle', vehicle: lead.run.v.id, minutes: 7 }, 'player');
     game.run(25 * 60);
     const runs = runsOf(game, wf.id);
@@ -505,8 +515,7 @@ describe('control-room starter workflows', () => {
     const game = newGame();
     const l = buildLine(game, { buses: 4, stops: 9, headway: 8 });
     const wf = start(game, 'even-bunching');
-    runTo(game, 0, 7, 30);
-    const lead = lineGaps(game, l.route).buses.find((b) => b.behind !== null && b.run.v.stopIdx < b.run.p.stops.length - 2)!;
+    const lead = leadBus(game, l.route);
     runCommand(game, { type: 'hold_vehicle', vehicle: lead.run.v.id, minutes: 7 }, 'player');
     game.run(30 * 60);
     const holds = runsOf(game, wf.id).flatMap((r) => r.actions).filter((a) => a.cmd.type === 'hold_vehicle' && (a.outcome === 'deferred' || a.outcome === 'executed'));
