@@ -30,6 +30,12 @@ export interface Update {
 /** Newest first. */
 export const UPDATES: Update[] = [
   {
+    date: '2026-10-31',
+    title: '0.4.0: A city that moves by itself',
+    body: 'People now make whole days of trips: work, school, university, shopping, hospitals, the airport, nights out and events. Ten kinds of traveller choose between walking, cycling, car, taxi, the city’s own metro, trams, rail and ferries, and your buses. Airports, stations, universities and other places have opening hours, busy hours and a place card. Weather follows each city’s climate, with forecasts, and matches, concerts and rail closures change who travels. Riders can change lines on foot, or take your bus to a station and carry on by metro. Automation Studio gets control-room blocks such as holding buses for connections and lending buses between lines, plus 49 starter workflows.',
+    href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.4.0',
+  },
+  {
     date: '2026-10-30',
     title: '0.3.0: Network Control and Automation Studio',
     body: 'After 30 operating days at level 3, Network Control opens: passenger flows on the map, origin and destination tables, line and fleet figures, and reports. Automation Studio lets you build workflows from nodes that watch the network and suggest or make changes, with safety limits and a lab to test them on a copy of your company. Also new: clickable route warnings with fixes, and moving buses between depots.',
@@ -71,6 +77,6 @@ export const UPDATES: Update[] = [
 /** What comes next. "planned" means designed but not started. */
 export const NEXT: { title: string; status: Status; body: string }[] = [
   { title: 'Playtesting the pace', status: 'partial', body: 'How quickly a new company reaches its second and third areas, tuned with real players.' },
-  { title: 'Trams and metro', status: 'planned', body: 'In the design document, not yet in the game.' },
+  { title: 'Your own trams and metro', status: 'planned', body: 'In the design document, not yet in the game. The city’s own metro, trams, rail and ferries already carry people and compete with your buses.' },
   { title: 'Deeper depots and economics', status: 'planned', body: 'More to manage once the bus game is balanced.' },
 ];
