@@ -11,7 +11,8 @@ import { HOUR, SPEEDS } from '../content.ts';
 // shared CI machines are a few times slower than a desktop; the strict budget applies locally
 const BUDGET_MS_PER_REAL_SECOND = process.env.CI ? 360 : 120;
 const SPEED = SPEEDS[SPEEDS.length - 1];
-const BUDGET_HOURLY_MS = process.env.CI ? 90 : 30;
+// CI read 82 ms on GitHub's runner for 0.4.0 (about 3.3x a desktop), so it gets 4x
+const BUDGET_HOURLY_MS = process.env.CI ? 120 : 30;
 
 describe('performance', () => {
   it('a 10-line / 70-bus network at the 08:00 peak keeps up with the fastest speed', () => {
