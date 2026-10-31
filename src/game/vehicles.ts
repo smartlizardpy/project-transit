@@ -125,7 +125,7 @@ function leaving(v: Vehicle, route: Id | null) {
 type Candidate = { v: Vehicle; ready: number; kind: 'depot' | 'idle' | 'running' };
 
 function candidate(game: Game, v: Vehicle, startNode: number, now: number): Candidate | null {
-  if (leaving(v, v.route)) return null;
+  if (leaving(v, v.route) || v.handover) return null;
   const st = v.status;
   if (st === 'parked' && v.pos.kind === 'depot') {
     const d = game.state.depots[v.depot];
@@ -676,11 +676,32 @@ export function minuteVehicles(game: Game) {
       if (game.random() < p) breakDown(game, v);
     }
     if (state.settings.autoService && v.condition < state.settings.serviceBelow && !v.wantsService && v.status !== 'maintenance') v.wantsService = true;
-    if (v.status === 'layover' && v.trip === null) {
+      if (v.handover && v.trip === null && v.next === null && v.status !== 'maintenance' && v.status !== 'broken') handOver(game, v);
+    else if (v.status === 'layover' && v.trip === null) {
       if (leaving(v, v.pos.kind === 'pattern' ? v.pos.route : null) || now - v.since > IDLE_TIMEOUT) sendToDepot(game, v);
     }
     if (v.status === 'parked' && v.wantsService) startMaintenance(game, v);
   }
+}
+
+/** A bus that has run the trips it was given moves on: to its new line, or parked as a spare. */
+function handOver(game: Game, v: Vehicle) {
+  const h = v.handover!;
+  delete v.handover;
+  const route = h.route && game.state.routes[h.route] ? h.route : null;
+  if (v.route === route) return;
+  game.assignVehicle(v.id, route, h.src);
+}
+
+/** When a bus will have finished the trips it already has (absolute seconds), or null if it has none. */
+export function workEnds(game: Game, v: Vehicle): number | null {
+  const id = v.next ?? v.trip;
+  if (id === null) return null;
+  const trip = game.trip(id);
+  if (!trip) return null;
+  const sch = tripSchedule(game, trip);
+  if (!sch) return null;
+  return trip.dep + sch[sch.length - 1] + Math.max(0, v.delay);
 }
 
 function breakDown(game: Game, v: Vehicle) {

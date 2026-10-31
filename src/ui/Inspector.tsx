@@ -212,6 +212,15 @@ function VehicleInspector({ id }: { id: string }) {
         {v.status === 'maintenance' && <div className="issue info"><Wrench size={16} weight="fill" />Back in service around {new Date((v.until % 86400) * 1000).toISOString().slice(11, 16)}.</div>}
         {v.sell && <div className="issue"><CurrencyCircleDollar size={16} weight="fill" />Will be sold when it reaches {depot?.name ?? 'the depot'}.</div>}
         {v.withdraw && <div className="issue info"><Warehouse size={16} weight="fill" />Leaving service after this trip.</div>}
+        {v.handover && (
+          <div className="issue info">
+            <Warehouse size={16} weight="fill" />
+            {v.handover.route && game.state.routes[v.handover.route]
+              ? `Moves to line ${game.state.routes[v.handover.route].number} after the trips it already has.`
+              : 'Parks at its depot after the trips it already has.'}
+            {v.handover.src !== 'player' && game.state.automation.workflows[v.handover.src] ? ` Asked by “${game.state.automation.workflows[v.handover.src].name}”.` : ''}
+          </div>
+        )}
         <div className="section">
           <div className="row" style={{ minHeight: 0, marginBottom: 8 }}>
             <span className="k" style={{ display: 'flex', gap: 6, alignItems: 'center' }}><Users size={15} weight="bold" /> Passengers</span>

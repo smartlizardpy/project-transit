@@ -16,7 +16,8 @@ import { setDepartGate } from './events.ts';
 import { checkCommand, runCommand, type Command } from '../commands.ts';
 import { DAY, HOUR, MODEL } from '../content.ts';
 import { dayTotals } from '../finance.ts';
-import { hhmm, weekdayOf } from '../time.ts';
+import { hhmm, serviceDayOf, weekdayOf } from '../time.ts';
+import { linePeaks, peakEvent, peakFireTime, nextPeakFire, timetablePeaks } from './peaks.ts';
 import { notify } from '../progress.ts';
 import { waitingAt } from '../passengers.ts';
 import { dayMatches, eventKindMatches, forecastMatches, linesNearEvent, weatherChangeMatches, weatherRecs } from './city.ts';
@@ -605,6 +606,27 @@ export function processAutomation(game: Game) {
           }
           break;
         }
+        case 'trigger.peak': {
+          // once per line and peak, at the set time (a game loaded a little later still catches it)
+          if (!timeOk(game, c, t)) break;
+          const at = String(c.at ?? 'start') === 'end' ? 'end' : 'start';
+          const mins = Math.max(0, Number(c.minutes ?? 30) || 0);
+          const source = String(c.source ?? 'timetable') === 'riders' ? 'riders' : 'timetable';
+          const only = typeof c.line === 'string' && c.line ? game.state.routes[c.line] : null;
+          const sd = serviceDayOf(t);
+          for (const r of only ? [only] : Object.values(game.state.routes)) {
+            if (r.suspended) continue;
+            for (const p of linePeaks(game, r.id, source)) {
+              const x = peakFireTime(game, p, at, mins);
+              if (t < x || t >= x + 15 * 60) continue;
+              const k = `ev:${wf.id}:${node.id}:${r.id}:${sd}:${p.from}:${at}`;
+              if (a.schedule[k]) continue;
+              if (!fire(wf, node.id, peakEvent(game, r.id, p, at))) continue;
+              a.schedule[k] = t + DAY;
+            }
+          }
+          break;
+        }
         case 'trigger.calendar': {
           const [hh, mm] = String(c.time ?? '05:00').split(':').map(Number);
           if (mod !== (hh || 0) * 60 + (mm || 0)) break;
@@ -698,6 +720,7 @@ function eventLabel(game: Game, node: Workflow['nodes'][number], e: Rec): string
     case 'trigger.week': return `Week ${e.week} ended`;
     case 'trigger.leftBehind': return `${e.leftBehind} left behind at ${e.stopName} (line ${e.lineNumber})`;
     case 'trigger.gaveUp': return `${e.gaveUp} gave up waiting at ${e.stopName}`;
+    case 'trigger.peak': return e.at === 'end' ? `Line ${e.lineNumber}’s peak ${e.period} ended` : `Line ${e.lineNumber}’s peak ${e.period} is coming`;
     case 'trigger.shortBuses': return `Line ${e.lineNumber} short of ${e.short} bus${e.short === 1 ? '' : 'es'}`;
     case 'trigger.watch': return `${e.name}: ${String(e.figureLabel ?? '').toLowerCase()} ${e.reading}`;
     case 'trigger.forecast': return `Forecast for tomorrow: ${e.label}`;
@@ -766,6 +789,19 @@ export function sampleEvent(game: Game, node: Workflow['nodes'][number]): Rec {
         line: it.line, lineNumber: ln?.number ?? '', stop: it.stop, stopName: it.stop ? s.stops[it.stop]?.name ?? '' : '', vehicle: it.vehicle, fleetNo: it.vehicle ? s.vehicles[it.vehicle]?.fleetNo ?? '' : '',
       });
     }
+  }
+  if (node.type === 'trigger.peak') {
+    // the next peak this trigger would fire for, or any line's first peak today
+    const nx = nextPeakFire(game, c);
+    const at = c.at === 'end' ? 'end' : 'start';
+    const any = nx ?? (() => {
+      for (const x of line ? [s.routes[line]].filter(Boolean) : Object.values(s.routes)) {
+        const pk = linePeaks(game, x.id, c.source === 'riders' ? 'riders' : 'timetable')[0] ?? timetablePeaks(game, x.id)[0];
+        if (pk) return { t: game.t, line: x.id, peak: pk };
+      }
+      return null;
+    })();
+    if (any) Object.assign(base, peakEvent(game, any.line, any.peak, at), { source: 'test', sample: true });
   }
   // weather and events: the real forecast, weather and next event in the game
   if (node.type === 'trigger.forecast') {

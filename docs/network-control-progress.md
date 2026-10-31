@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-31 (smarter triggers and starter workflows).
+Last updated: 2026-10-31 (peak hours and sharing buses).
 
 ## A. Foundations: save version 2, analytics recording, unlock ✅
 
@@ -119,6 +119,24 @@ The owner found the triggers too basic and asked for more ready-made flows. Rese
 The live-state screenshot uses a custom workflow, *Reputation slipping*, whose threshold (60) is the next round ten above the demo company's real reputation (58.1), so the trigger is building up in the shot. Everything else in it is the engine's real state.
 
 **Not built yet (second batch, recommended):** bus bunching and gaps between buses on frequent lines, with a *Hold this bus* action; *Check back later* (a workflow re-checks its own fix N minutes on); a preview of how often a trigger would have fired over the last week; a trigger for another workflow acting or being blocked by a limit; a *collect, then send one summary* block.
+
+## H. Peak hours and sharing buses (requested 2026-10-31) 🟡
+
+The owner could not build flows like "compare lines' peak hours" or "park a free bus at the depot and bring a spare in when a line's peak is coming": the blocks were missing. 🟡 until the owner has played it.
+
+| Item | Status | Evidence |
+|---|---|---|
+| Peak hours from the timetable (stretches that need clearly more buses) and from riders (busiest hours on recent days of the same kind) | ✅ | `automation-peaks.test.ts` "finds a line’s timetable peaks…", "finds the busiest hours from riders…" |
+| Trigger **Peak hours start or end**: once per line and peak, N minutes before the start or after the end, on chosen days; live "Next 06:00: line 1, peak 07:00–09:00" on the card | ✅ | tests in "Peak hours start or end" (2) |
+| **Peak hours** block (each line's peaks, hour by hour, a sentence naming lines that could share buses), **Compare peaks**, **Buses to borrow** (spares first, then lines that can do without a bus until the peak ends) | ✅ | tests "compares two lines’ peaks", "brings in a parked spare, then buses another line can do without" |
+| **Buses**: *spare and parked*, *not needed by their line for the next hour*; **Park bus at its depot** (renamed from "Take bus off line"); **Base bus at another depot** (renamed from "Move bus to depot") | ✅ | test "parks the buses a line no longer needs after its peak…" |
+| **After the trips it already has**: moving or parking a bus waits for the trips it was given, takes no new ones, then moves (default for automations; "straight away" still available). Shown on the bus panel, cancelled by a manual move, saved | ✅ | test "runs its trips, takes no new ones, then moves…"; measured: parking 4 buses straight away after a peak cost 4 missed departures in the next two hours, after their trips none |
+| Line records gain `neededSoon`, `neededMax`, `spareNow`, `peakHours`, `inPeak`, `nextPeak`, `nextPeakIn`, `busiestHours`, so Filter and Expression blocks can use them | ✅ | `docs/automation-api.md` |
+| General blocks: **Pick the highest or lowest** (one block for Sort + First item), **For each item, use a function** (at most 20), expression `join()`; a bus or peak connected where a line is wanted stands for its line | ✅ | tests in "more building blocks" (2) |
+| Four starter workflows in a new gallery group: bring in buses before a peak, park after it, warn before a peak a line cannot cover, today's peak hours | ✅ | every template validates and test-runs (existing test); the first two tested end to end |
+| Screenshots of the new blocks in the real UI (`scripts/capture-peaks.mjs`, 4 checks) | ✅ | `automation-peaks-gallery.png`, `automation-peaks-bring-in.png` (live: "Next 06:00: line 1, peak 07:00–09:00"), `automation-peaks-report.png` (a test run: "Line 1: 07:00–09:00 and 16:00–18:00 (3 buses)") |
+
+The demo company's timetables ran the same all day, so they had no timetable peaks. The capture script first gives its busiest line a weekday timetable of every 20 minutes, every 10 minutes 07:00–09:00 and 16:00–18:00, as a player would; everything after that is the engine's real state. Lines 2 and 3 have no peaks and the report leaves them out.
 
 ## Mandatory scenarios
 

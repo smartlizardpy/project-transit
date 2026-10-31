@@ -12,6 +12,7 @@ import { companyLevel } from '../control.ts';
 import { dayTotals } from '../finance.ts';
 import { weekdayName } from '../analytics/query.ts';
 import { busesAvailable, busesNeededNow, gaveUpLastHour, satisfactionToday } from './watch.ts';
+import { linePeakFields } from './peaks.ts';
 
 export type Rec = { [k: string]: Value };
 
@@ -64,6 +65,7 @@ export class LiveData {
       congestion: this.congestion(id),
       neededNow: busesNeededNow(game, id), working: busesAvailable(game, id),
       short: r.suspended ? 0 : Math.max(0, busesNeededNow(game, id) - busesAvailable(game, id)),
+      ...linePeakFields(game, id),
     };
   }
 

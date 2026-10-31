@@ -1428,6 +1428,7 @@ export class Game {
     if (!v) return fail('That bus no longer exists.');
     if (route && !this.state.routes[route]) return fail('That line no longer exists.');
     if (v.sell) return fail('This bus is being sold.');
+    delete v.handover;
     if (v.route === route) return ok(undefined);
     recAssignment(this.state, id, v.route, route, src);
     if (src === 'player') this.notePlayerChange(`vehicle:${id}`, 'assign_vehicle', `route:${route ?? 'none'}`);
@@ -1460,6 +1461,23 @@ export class Game {
         v.pos = { kind: 'depot' };
       } else sendToDepot(this, v);
     }
+    this.changed();
+    return ok(undefined);
+  }
+
+  /**
+   * Move a bus to a line (null: park it as a spare) once it has run the trips it already has. It
+   * takes no new trips meanwhile, so none of its line's departures is missed. A bus with no trips
+   * moves straight away.
+   */
+  handoverVehicle(id: Id, route: Id | null, src = 'player'): Result {
+    const v = this.state.vehicles[id];
+    if (!v) return fail('That bus no longer exists.');
+    if (route && !this.state.routes[route]) return fail('That line no longer exists.');
+    if (v.sell) return fail('This bus is being sold.');
+    if (v.route === route) { delete v.handover; return ok(undefined); }
+    if (v.trip === null && v.next === null && v.status !== 'maintenance' && v.status !== 'broken') return this.assignVehicle(id, route, src);
+    v.handover = { route, src };
     this.changed();
     return ok(undefined);
   }

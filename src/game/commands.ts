@@ -8,9 +8,10 @@ import type { Id, Timetable } from './types.ts';
 import { ECON, MODEL } from './content.ts';
 import { requirement } from './timetable.ts';
 import { hhmm } from './time.ts';
+import { workEnds } from './vehicles.ts';
 
 export type Command =
-  | { type: 'assign_vehicle'; vehicle: Id; route: Id | null }
+  | { type: 'assign_vehicle'; vehicle: Id; route: Id | null; after?: 'trips' | 'now' }
   | { type: 'dispatch_extra'; route: Id; pat?: number; vehicle?: Id }
   | { type: 'set_headway'; route: Id; minutes: number; band?: number | 'all'; days?: 'weekday' | 'weekend' | 'both' }
   | { type: 'suspend_line'; route: Id; suspended: boolean }
@@ -81,10 +82,16 @@ export function checkCommand(game: Game, cmd: Command): CommandCheck {
       if (cmd.route && !s.routes[cmd.route]) return { ...base, ok: false, summary, reason: 'That line no longer exists.', target, key };
       if (v.sell) return { ...base, ok: false, summary, reason: `${v.fleetNo} is being sold.`, target, key };
       if (v.route === cmd.route) return { ...base, ok: true, noop: true, summary, transition: `${v.fleetNo} is already ${cmd.route ? `on ${lineName(game, cmd.route)}` : 'a spare bus'}.`, target, key };
+      if (v.handover && v.handover.route === cmd.route && cmd.after === 'trips') return { ...base, ok: true, noop: true, summary, transition: `${v.fleetNo} already ${cmd.route ? `joins ${lineName(game, cmd.route)}` : 'parks'} after the trips it has.`, target, key };
       let transition: string;
       let deferred = false;
       const join = cmd.route ? `joins ${lineName(game, cmd.route)}` : 'becomes a spare bus';
-      switch (v.status) {
+      const ends = cmd.after === 'trips' && v.status !== 'maintenance' && v.status !== 'broken' ? workEnds(game, v) : null;
+      if (ends !== null) {
+        deferred = true;
+        const carrying = v.load > 0 ? `${v.fleetNo} is carrying ${v.load} passenger${v.load === 1 ? '' : 's'} and finishes this trip. It ` : `${v.fleetNo} `;
+        transition = `${carrying}runs the trips it already has on ${lineName(game, v.route)} (until about ${hhmm(ends)}), so none is missed, then ${cmd.route ? `goes to ${lineName(game, cmd.route)}` : 'parks at its depot as a spare'}.`;
+      } else switch (v.status) {
         case 'in_service': case 'at_stop':
           deferred = true;
           transition = v.load > 0
@@ -201,7 +208,7 @@ export function runCommand(game: Game, cmd: Command, src = 'player'): Result<{ c
   if (check.noop) return { ok: true, value: { check, effect: check.transition ?? 'Nothing to change.' } };
   let r: Result<unknown>;
   switch (cmd.type) {
-    case 'assign_vehicle': r = game.assignVehicle(cmd.vehicle, cmd.route, src); break;
+    case 'assign_vehicle': r = cmd.after === 'trips' ? game.handoverVehicle(cmd.vehicle, cmd.route, src) : game.assignVehicle(cmd.vehicle, cmd.route, src); break;
     case 'dispatch_extra': {
       const x = game.dispatchExtra(cmd.route, { pat: cmd.pat, vehicle: cmd.vehicle, src });
       if (!x.ok) return x;

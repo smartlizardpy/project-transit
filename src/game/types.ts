@@ -170,6 +170,11 @@ export interface Vehicle {
   target?: { route: Id; pat: number };
   /** sell the bus once it is back at its depot */
   sell?: boolean;
+  /**
+   * After the trips it already has, move to this line (null: park as a spare). Until then it
+   * takes no new trips, so no departure it was given is missed.
+   */
+  handover?: { route: Id | null; src: string };
 }
 
 // ─────────────────────────────────────────── timetable trips

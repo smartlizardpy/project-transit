@@ -2,7 +2,7 @@
 
 How Automation Studio workflows run, what they can read and do, and the rules that keep them safe. The node and function tables at the end are generated from the code (`node scripts/dev/automation-reference.mjs`).
 
-Engine code: `src/game/automation/` (types, registry, validate, executor, manage, templates, lab, live, events, city, watch) and `src/game/expr.ts`. Commands: `src/game/commands.ts`. Tests: `src/game/test/automation.test.ts`, `src/game/test/automation-city.test.ts`, `src/game/test/automation-forecast.test.ts`, `src/game/test/automation-triggers.test.ts`, `src/game/test/commands.test.ts`.
+Engine code: `src/game/automation/` (types, registry, validate, executor, manage, templates, lab, live, events, city, watch, peaks) and `src/game/expr.ts`. Commands: `src/game/commands.ts`. Tests: `src/game/test/automation.test.ts`, `src/game/test/automation-city.test.ts`, `src/game/test/automation-forecast.test.ts`, `src/game/test/automation-triggers.test.ts`, `src/game/test/automation-peaks.test.ts`, `src/game/test/commands.test.ts`.
 
 ## How a workflow runs
 
@@ -37,15 +37,31 @@ One trigger for any figure the game keeps, checked every minute for each line, s
 
 Its outputs are the event, the line, stop or bus (or company) record with its live figures, and the figure. The event carries `figure`, `figureLabel`, `name`, `value`, `reading` (formatted), `threshold`, `op`, `for`, and `line`, `lineNumber`, `stop`, `stopName`, `vehicle`, `fleetNo` where they apply.
 
+## Peak hours and sharing buses
+
+Lines that are busy at different times can share buses: a spare waits at the depot, joins a line before its rush and parks again afterwards. The blocks for this (`peaks.ts`):
+
+- **Peak hours** come from one of two sources. *Timetable*: the stretches of today's timetable that need clearly more buses than its quietest part (more than halfway from the fewest to the most); a timetable that needs the same buses all day has none. *Riders*: runs of hours clearly busier than the line's average hour, from the boardings recorded on the last 5 weekdays or 4 weekend days (whichever today is; all recent days if none of today's kind is recorded yet). Riders peaks need at least one full recorded day.
+- **Peak hours start or end** (`trigger.peak`) fires once for each line and peak, a set time before it starts or after it ends, on the chosen days. A game loaded up to 15 minutes late still catches it. Its outputs: the event, the line, the peak and **buses to add or free** (before the start: buses the peak needs beyond those working; after the end: buses the line can spare for the next hour). The node on the canvas shows the next time it fires and for which line.
+- **Peak hours** (`data.peaks`) lists each line's peaks with times and buses needed, the riders and buses needed hour by hour (from 03:00), and a sentence naming lines whose peaks never overlap ("Lines 1 and 4 peak at different times, so they could share buses").
+- **Compare peaks** (`logic.comparePeaks`) says whether two lines' peaks overlap, by how long, and how many buses line B could lend line A during all of A's peaks without falling below its own timetable.
+- **Buses to borrow** (`data.borrow`) finds buses that could join a line now and stay until its peak ends (or for the next hour): spares parked at a depot first, then buses of other lines that those lines will not need before then, soonest first. A line lends only what it can spare until then; a bus carrying passengers between trips is never taken.
+- **Buses** has two more choices: *Spare and parked at a depot* and *Not needed by their line for the next hour* (at most as many as the line can spare: parked first, then idle, then the ones whose trips end soonest).
+- **After the trips it already has.** A bus on a line usually already has its next trip or two. *Move bus to line* and *Park bus at its depot* wait for those by default: the bus takes no new trips, runs the ones it was given, then moves. Moving it straight away instead hands its unstarted trips back to the line, which can miss departures if the buses that stay cannot reach them in time (measured: parking four buses straight away after a peak cost 4 missed departures in the next two hours; after their trips, none). The bus panel says when a bus is waiting to move and which workflow asked. Moving the bus by hand cancels the wait. Saved with the game.
+
+Tested in `automation-peaks.test.ts`: peaks from a two-peak timetable; riders peaks after a recorded day; the trigger fires once per line and peak at the right minute, after the end and only on its days; borrowing takes the parked spare first and then a bus from a line with a different peak, and that line misses nothing; parking after the peak leaves exactly what the timetable needs and no departure is missed; comparing peaks; the move after a bus's trips survives a save.
+
 ## Values and records
 
 Values are numbers, yes/no, text, records and lists. Records are plain objects with a `kind`.
 
 | Record | Fields |
 |---|---|
-| line | `id`, `number`, `name`, `colour`, `buses`, `needed` (peak requirement), `running`, `occupancy` (% average of buses on a trip now), `waiting`, `delay` (min, average), `headway` (min, now), `suspended`, `onTime3h` (%), `load3h` (%), `boardingsToday`, `tripsToday`, `missedToday`, `plan` (the service plan running today, or `null` for the normal timetable), `plans` (names of the enabled plans), `holidayPlan` (has an enabled school-holidays plan), `congestion` (% simulated traffic along the line), `neededNow` (buses the timetable needs at this moment), `working` (buses on the line not under maintenance, broken down or leaving), `short` (buses short of the timetable now; 0 when suspended) |
+| line | `id`, `number`, `name`, `colour`, `buses`, `needed` (peak requirement), `running`, `occupancy` (% average of buses on a trip now), `waiting`, `delay` (min, average), `headway` (min, now), `suspended`, `onTime3h` (%), `load3h` (%), `boardingsToday`, `tripsToday`, `missedToday`, `plan` (the service plan running today, or `null` for the normal timetable), `plans` (names of the enabled plans), `holidayPlan` (has an enabled school-holidays plan), `congestion` (% simulated traffic along the line), `neededNow` (buses the timetable needs at this moment), `working` (buses on the line not under maintenance, broken down or leaving), `short` (buses short of the timetable now; 0 when suspended), `neededSoon` (most buses needed in the next hour), `neededMax` (most today), `spareNow` (working buses it can do without for the next hour), `peakHours` (timetable peaks today in words, e.g. "07:00–09:00 and 16:00–18:00"), `inPeak`, `nextPeak` (HH:MM, or empty), `nextPeakIn` (min, or `null`), `busiestHours` (riders peaks in words) |
 | stop | `id`, `name`, `waiting`, `longestWait` (min), `lines` (numbers), `boardingsToday`, `gaveUpToday`, `avgWaitToday` (min), `gaveUpHour` (people who gave up here in the last 60 minutes), `leftBehindToday` |
 | bus (`vehicle`) | `id`, `fleetNo`, `model`, `capacity`, `line`, `lineNumber`, `status`, `statusLabel`, `load`, `occupancy` (%), `condition` (%), `delay` (min), `depot`, `depotName`, `spare`, `free` (could start an extra trip now), `carrying` |
+| peak (`trigger.peak`, `data.peaks`) | `line`, `lineNumber`, `name`, `from`, `to` (HH:MM), `period`, `minutes`, `need` (buses), `has` (working now), `short`, `riders` (average boardings an hour, riders peaks), `source`, `now` (under way), `startsIn` (min). Connected where a line is wanted, it stands for its line. |
+| hour (`data.peaks` hour by hour) | `hour`, `time`, `riders` (average boardings), `need` (buses the timetable needs) |
 | company | `balance`, `reputation`, `level`, `fare`, `resultToday`, `buses`, `lines`, `satisfactionToday` (% of today's finished journeys, or `null`), `spareBuses` (buses with no line) |
 | week summary (end-of-week trigger) | `week`, `year`, `season`, `days`, `journeys`, `gaveUp`, `fares`, `satisfaction` (%), `journeysPerDay`, `journeysChange` and `faresChange` (% a day on the week before, `null` for the first week), `changeText` (the change in words), `wetDays`, `busiestLine`, `busiestLineBoardings` |
 | time | `t`, `time` (HH:MM), `hour`, `minute`, `weekday`, `weekend`, `day` |
@@ -63,7 +79,7 @@ All figures are read from the live simulation or from Network Control's recorded
 
 ## Actions and the shared command layer
 
-Every action node asks for a **command** (`commands.ts`): `assign_vehicle`, `dispatch_extra`, `set_headway`, `suspend_line`, `service_plan`, `set_fare`, `service_vehicle`, `move_depot`. The player's own buttons use the same game methods, and `checkCommand` is a pure dry run that explains in plain words what would happen (for example: a bus carrying passengers finishes its trip, returns to its depot and then joins the new line). Automations cannot do anything the player could not do, and they never bypass the simulation's rules: an extra departure is a real trip that a real bus prepares for, drives to and runs.
+Every action node asks for a **command** (`commands.ts`): `assign_vehicle`, `dispatch_extra`, `set_headway`, `suspend_line`, `service_plan`, `set_fare`, `service_vehicle`, `move_depot`. The player's own buttons use the same game methods, and `checkCommand` is a pure dry run that explains in plain words what would happen (for example: a bus carrying passengers finishes its trip, returns to its depot and then joins the new line; or, moved after its trips, "runs the trips it already has on Line 1 (until about 09:52), so none is missed, then parks at its depot as a spare"). Automations cannot do anything the player could not do, and they never bypass the simulation's rules: an extra departure is a real trip that a real bus prepares for, drives to and runs.
 
 ## Modes
 
@@ -110,12 +126,13 @@ Used by the Expression, Filter and Calculate-for-each nodes and by custom metric
 
 ## Starter workflows
 
-Automation Studio offers 28 starter workflows (`templates.ts`), grouped in the gallery. Each is an ordinary workflow built from the nodes below and can be changed freely. They start in the mode shown and switched off.
+Automation Studio offers 32 starter workflows (`templates.ts`), grouped in the gallery. Each is an ordinary workflow built from the nodes below and can be changed freely. They start in the mode shown and switched off.
 
 | Group | Workflows |
 |---|---|
 | Crowding and waiting | Extra bus when a line is crowded (observe) · Watch every line for crowding (suggest) · Busy hour ahead (automatic) · Extra bus when people are left behind (suggest) · Crowded stop alert (automatic) · People giving up at a stop (automatic) · Move a bus from a quiet line to a busy one (suggest) |
 | Reliability | Tell me when a bus runs late (automatic) · Warn me when a line is short of buses (automatic) · Send a spare bus to a line that is short (suggest) · Unreliable line alert (automatic) · Tell me when a whole line runs late (automatic) · Missed departures at the end of the day (automatic) |
+| Peak hours and sharing buses | Bring in buses before a line's peak (suggest) · Park buses after a line's peak (suggest) · Warn me before a peak a line cannot cover (automatic) · Today's peak hours (automatic) |
 | Fleet and maintenance | Cover a breakdown (suggest) · Service worn buses between the peaks (suggest) |
 | Money and reputation | Low balance warning (automatic) · Find out why reputation is falling (automatic) |
 | Events, weather and the calendar | Extra buses for big events (suggest) · Rain plan when a storm is forecast (observe) · Extra bus when heavy rain starts (suggest) · Cover a rail disruption (suggest) · Events in the next three days (automatic) · School holidays check (automatic) · Early-morning airport boost (suggest) |
@@ -148,6 +165,7 @@ Start a workflow: on a schedule or when something happens in the game.
 | Balance falls below `trigger.balance` | Runs when the bank balance drops below an amount. | – | Event (event), Company (record) | Below, For at least |
 | Watch a figure `trigger.watch` | Runs when a figure goes above or below a value and stays there: a line’s load or punctuality, people waiting at a stop, a bus’s condition, your reputation… Checked every minute, for each line, stop or bus. It fires again only once the figure is back to normal. | – | Event (event), Line, stop or bus (record), Figure (number) | Watch, Only on line, When it goes, Value, For at least, Fire again, From, Until, On |
 | A line is short of buses `trigger.shortBuses` | Runs when a line has fewer working buses than its timetable needs right now (buses under maintenance or broken down do not count). Every departure it cannot run is missed, and missed departures cost reputation. Fires again only once the line is covered. | – | Event (event), Line (line), Buses short (number) | Line, For at least, From, Until, On |
+| Peak hours start or end `trigger.peak` | Runs for each line a set time before its peak hours start, or after they end. Peak hours come from its timetable (when it needs the most buses) or its riders (its busiest hours over the last week). Use it to bring in a spare bus before the rush and park it again afterwards. | – | Event (event), Line (line), Peak (record), Buses to add or free (number) | Line, When, How long, Peak hours from, On |
 | People left behind `trigger.leftBehind` | Runs when a full bus leaves people behind at a stop. | – | Event (event), Bus (bus), Line (line), Stop (stop) | At least, Line, At most once every, From, Until, On |
 | People give up waiting `trigger.gaveUp` | Runs when people waiting at a stop give up and travel another way: at least this many at one stop within the last hour. Fires again for that stop only once it has calmed down. | – | Event (event), Stop (stop) | At least, On line, For at least, From, Until, On |
 | Tomorrow’s forecast `trigger.forecast` | Runs at 18:00 when tomorrow’s weather forecast comes out. About 8 forecasts in 10 are right; a miss is usually close. | – | Event (event), Forecast (record) | When it says |
@@ -171,6 +189,8 @@ Read live lines, stops, buses, the company and Network Control analytics.
 | Buses `data.buses` | Buses with their status, load and condition. Filter by line or by what they are doing. | After (anything, optional), Line (line, optional) | Buses (list) | Line, Which |
 | Bus `data.bus` | One bus: its line, what it is doing, load and condition (pick it, or connect one). | After (anything, optional), Bus (bus, optional) | Bus (bus), Passengers (number) | Bus |
 | Find a free bus `data.findBus` | The bus that could start an extra trip on a line soonest: one of the line’s own idle buses, or a spare at a depot. Buses carrying passengers are never chosen. | Line (line, optional) | Bus (bus), Found (yes/no) | Line, Take from |
+| Peak hours `data.peaks` | When lines are busiest today, from the timetable (the hours a line needs the most buses) or from riders (its busiest hours on recent days of the same kind). Each peak comes with its times and the buses it needs, plus riders and buses needed hour by hour, and a summary that points out lines whose peaks are at different times (they can share buses). | After (anything, optional), Line (line, optional) | Peaks (list), Biggest peak (record), Hour by hour (list), In words (text) | Line, Peak hours from |
+| Buses to borrow `data.borrow` | Buses that could join a line now and stay until its peak is over: spare buses parked at a depot first, then buses other lines will not need until then (lines whose own peak is at another time). Never a bus carrying passengers, and never one its line still needs. | After (anything, optional), Line (line, optional), How many (number, optional) | Buses (list), First bus (bus), Lines that can lend (list), Found (yes/no) | Line, How many, Take from, Needed until |
 | Company `data.company` | Balance, reputation, level, fare and today’s result. | After (anything, optional) | Company (record), Balance (number) | – |
 | Time `data.time` | The game clock: time, hour, weekday, weekend. | After (anything, optional) | Time (record), Hour (number) | – |
 | Weather `data.weather` | The weather now (rain, temperature), today’s weather and tomorrow’s forecast once it is out at 18:00. | After (anything, optional) | Now (record), Today (record), Tomorrow (forecast) (record), Raining now (yes/no), Temperature (number) | – |
@@ -198,6 +218,8 @@ Compare, branch and work with lists.
 | Sort `logic.sort` | Orders a list by a field, e.g. occupancy, highest first. | List (list) | Sorted (list) | By field, Order |
 | First few `logic.take` | Keeps the first N items of a list. | List (list) | List (list) | How many |
 | First item `logic.first` | The first item of a list. If the list is empty, nothing after it runs. | List (list) | Item (anything), Found (yes/no) | – |
+| Pick the highest or lowest `logic.pick` | The item of a list with the highest (or lowest) value of a field, e.g. the line with the highest load3h. Items without that figure are skipped. If none has it, nothing after it runs. | List (list) | Item (anything), Its value (number), Found (yes/no) | Field, Pick |
+| Compare peaks `logic.comparePeaks` | Compares two lines’ peak hours: whether they overlap, by how long, and how many buses line B could lend line A during A’s peaks without missing its own departures. Lines that peak at different times can share buses. | Line A (line, optional), Line B (line, optional) | Overlap (yes/no), Overlap (min) (number), B can lend A (number), In words (text) | Line A, Line B, Peak hours from |
 
 #### Maths
 
@@ -231,10 +253,10 @@ Change the game, with the same rules as when you do it yourself.
 | Node | What it does | Inputs | Outputs | Settings |
 |---|---|---|---|---|
 | Extra departure `action.dispatch` | Runs an extra trip on a line now with a free bus (the one connected, or the best free one). It follows every normal rule: the bus prepares, drives to the first stop and runs the trip. | When (anything, optional), Line (line or list, optional), Bus (bus, optional) | Result (record), Done (yes/no) | Line |
-| Move bus to line `action.assign` | Moves a bus to a line. A bus with passengers finishes its trip and goes via the depot first. | When (anything, optional), Bus (bus or list), Line (line, optional) | Result (record), Done (yes/no) | Line |
-| Take bus off line `action.release` | Makes a bus a spare. It finishes any trip first, then returns to its depot. | When (anything, optional), Bus (bus or list) | Result (record), Done (yes/no) | – |
+| Move bus to line `action.assign` | Moves a bus to a line. A bus with passengers finishes its trip and goes via the depot first. | When (anything, optional), Bus (bus or list), Line (line, optional) | Result (record), Done (yes/no) | Line, When |
+| Park bus at its depot `action.release` | Takes a bus off its line and parks it at its depot as a spare, ready for any line. By default it first runs the trips it already has, so no departure is missed. Pair it with Buses set to “Not needed by their line” to park only buses a line can do without. | When (anything, optional), Bus (bus or list) | Result (record), Done (yes/no) | When |
 | Send for maintenance `action.service` | Sends a bus to the workshop when it has finished its current work. | When (anything, optional), Bus (bus or list) | Result (record), Done (yes/no) | – |
-| Move bus to depot `action.moveDepot` | Bases a bus at another depot. A parked bus drives there on the road; a working bus goes there next time it returns. | When (anything, optional), Bus (bus or list) | Result (record), Done (yes/no) | Depot |
+| Base bus at another depot `action.moveDepot` | Bases a bus at another depot. A parked bus drives there on the road; a working bus goes there next time it returns. | When (anything, optional), Bus (bus or list) | Result (record), Done (yes/no) | Depot |
 | Change frequency `action.headway` | Sets how often a line runs. High impact: needs your approval unless the workflow is allowed to make big changes. **Big change.** | When (anything, optional), Line (line, optional), Every (min) (number, optional) | Result (record), Done (yes/no) | Line, Every, Timetable |
 | Suspend or resume line `action.suspend` | Stops or restarts a line’s timetable. High impact. **Big change.** | When (anything, optional), Line (line, optional) | Result (record), Done (yes/no) | Line, Action |
 | Switch a service plan `action.servicePlan` | Switches one of a line’s manual service plans on or off (made in the line’s timetable, for example a "Rain" or "Match day" plan). Departures not yet given to buses follow it. High impact. **Big change.** | When (anything, optional), Line (line or list, optional) | Result (record), Done (yes/no) | Line, Plan name, Switch |
@@ -249,6 +271,7 @@ Reusable functions and notes.
 | Node | What it does | Inputs | Outputs | Settings |
 |---|---|---|---|---|
 | Use a function `adv.function` | Runs one of your function workflows with inputs a, b, c and gives back its result. | a (anything, optional), b (anything, optional), c (anything, optional) | Result (anything) | Function |
+| For each item, use a function `adv.forEach` | Runs one of your functions once for every item of a list (at most 20): the item is its input a, its position (1, 2, …) is b, and whatever is connected to c is c. Gives back the results as a list. Actions inside the function run once per item. | List (list), c (anything, optional) | Results (list), Count (number) | Function, At most |
 | Function inputs `adv.input` | In a function: the values a, b and c it was called with. | – | a (anything), b (anything), c (anything) | – |
 | Function result `adv.output` | In a function: the value it gives back. | Value (anything) | – | – |
 | Note `adv.note` | A note on the canvas. It does nothing. | – | – | Text |
@@ -279,6 +302,7 @@ Reusable functions and notes.
 | `if` | 3 | if(condition, then, else). |
 | `text` | 1–2 | A number as text, optionally with decimals: text(x, 1). |
 | `concat` | 1–10 | Join texts together. |
+| `join` | 1–2 | A list as text, separated by a comma or your own separator: join(pluck(lines, "number"), ", "). |
 | `upper` | 1 | Upper-case text. |
 | `lower` | 1 | Lower-case text. |
 | `number` | 1 | Text as a number (or null). |

@@ -140,7 +140,7 @@ export function deleteWorkflow(game: Game, id: string): Result {
   const a = game.state.automation;
   const wf = a.workflows[id];
   if (!wf) return fail('That workflow no longer exists.');
-  const users = Object.values(a.workflows).filter((w) => w.id !== id && w.nodes.some((n) => n.type === 'adv.function' && n.config.workflow === id));
+  const users = Object.values(a.workflows).filter((w) => w.id !== id && w.nodes.some((n) => (n.type === 'adv.function' || n.type === 'adv.forEach') && n.config.workflow === id));
   if (users.length) return fail(`“${users[0].name}” uses this function. Remove it there first.`);
   delete a.workflows[id];
   delete a.memory[id];

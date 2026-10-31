@@ -6,12 +6,13 @@ import type { Mode, WfEdge, WfNode } from './types.ts';
 import { defaultConfig } from './registry.ts';
 import type { Value } from './types.ts';
 
-export type TemplateGroup = 'crowding' | 'reliability' | 'fleet' | 'money' | 'city' | 'reports';
+export type TemplateGroup = 'crowding' | 'reliability' | 'peaks' | 'fleet' | 'money' | 'city' | 'reports';
 
 /** Template groups, in the order the gallery shows them. */
 export const TEMPLATE_GROUPS: { id: TemplateGroup; label: string; help: string }[] = [
   { id: 'crowding', label: 'Crowding and waiting', help: 'Full buses, people left behind, crowded stops.' },
   { id: 'reliability', label: 'Reliability', help: 'Late lines, missed departures, lines short of buses.' },
+  { id: 'peaks', label: 'Peak hours and sharing buses', help: 'Bring buses in before a line’s peak, park them after, share them between lines that peak at different times.' },
   { id: 'fleet', label: 'Fleet and maintenance', help: 'Breakdowns, worn buses, spare buses.' },
   { id: 'money', label: 'Money and reputation', help: 'Balance and reputation.' },
   { id: 'city', label: 'Events, weather and the calendar', help: 'Matches, concerts, rain, school holidays, the airport.' },
@@ -439,6 +440,80 @@ export const TEMPLATES: Template[] = [
       g.link(spares, 'buses', first, 'list');
       g.link(first, 'item', move, 'bus');
       g.link(t, 'line', move, 'line');
+      return g;
+    },
+  },
+  {
+    id: 'peak-bring-in',
+    name: 'Bring in buses before a line’s peak',
+    description: 'An hour before a line’s peak hours start (when its timetable needs the most buses), if it has fewer working buses than the peak needs, move buses to it: spares parked at a depot first, then buses another line will not need until the peak is over. A borrowed bus first runs the trips it already has, so its own line misses nothing.',
+    mode: 'suggest',
+    group: 'peaks',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.peak', 0, 0, { at: 'start', minutes: 60, source: 'timetable' });
+      const borrow = g.add('data.borrow', 1, 0, { from: 'both', until: 'peak' });
+      const move = g.add('action.assign', 2, 0);
+      g.link(t, 'event', borrow, 'after');
+      g.link(t, 'line', borrow, 'line');
+      g.link(t, 'buses', borrow, 'count');
+      g.link(borrow, 'buses', move, 'bus');
+      g.link(t, 'line', move, 'line');
+      return g;
+    },
+  },
+  {
+    id: 'peak-park',
+    name: 'Park buses after a line’s peak',
+    description: 'Ten minutes after a line’s peak hours end, park the buses it will not need for the next hour at their depot as spares, so another line can borrow them. Buses carrying passengers, and buses the line still needs, stay.',
+    mode: 'suggest',
+    group: 'peaks',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.peak', 0, 0, { at: 'end', minutes: 10, source: 'timetable' });
+      const buses = g.add('data.buses', 1, 0, { which: 'notNeeded' }, 'Buses it can do without');
+      const park = g.add('action.release', 2, 0);
+      g.link(t, 'event', buses, 'after');
+      g.link(t, 'line', buses, 'line');
+      g.link(buses, 'buses', park, 'bus');
+      return g;
+    },
+  },
+  {
+    id: 'peak-warning',
+    name: 'Warn me before a peak a line cannot cover',
+    description: 'An hour before a line’s peak hours start, if it has fewer working buses than the peak needs, tell me how many it is short and which lines could lend one.',
+    mode: 'automatic',
+    group: 'peaks',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.peak', 0, 0, { at: 'start', minutes: 60, source: 'timetable' });
+      const short = g.add('logic.compare', 1, 0, { op: '>', b: 0 }, 'Short at the peak?');
+      const borrow = g.add('data.borrow', 1, 1, { count: 0 }, 'Who could lend');
+      const names = g.add('math.expr', 2, 1, { expr: "if(len(a) > 0, concat('Lines that could lend one: ', join(pluck(a, 'number')), '.'), 'No other line can spare a bus then.')" }, 'Lenders in words');
+      const n = g.add('action.notify', 3, 0, { title: 'Line {event.lineNumber} is short for its {event.period} peak', body: 'It needs {event.need} buses at its peak and has {event.has} working. {value}', tone: 'warn' });
+      g.link(t, 'buses', short, 'a');
+      g.link(t, 'event', borrow, 'after');
+      g.link(t, 'line', borrow, 'line');
+      g.link(borrow, 'lenders', names, 'a');
+      g.link(short, 'result', n, 'when');
+      g.link(names, 'value', n, 'value');
+      return g;
+    },
+  },
+  {
+    id: 'peak-report',
+    name: 'Today’s peak hours',
+    description: 'Every morning at 05:00, tell me each line’s peak hours today and how many buses they need, and which lines peak at different times so they could share buses.',
+    mode: 'automatic',
+    group: 'peaks',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.time', 0, 0, { time: '05:00' });
+      const peaks = g.add('data.peaks', 1, 0, { source: 'timetable' });
+      const n = g.add('action.notify', 2, 0, { title: 'Today’s peak hours', body: '{value}', tone: 'info' });
+      g.link(t, 'event', peaks, 'after');
+      g.link(peaks, 'summary', n, 'value');
       return g;
     },
   },

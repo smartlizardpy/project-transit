@@ -12,8 +12,9 @@ import { compile, truthy, type EValue } from '../expr.ts';
 import { aggregate, estimatedDemand, MEASURE, type GroupBy } from '../analytics/query.ts';
 import { extraOption } from '../vehicles.ts';
 import { DAY, HOUR } from '../content.ts';
-import { hhmm } from '../time.ts';
-import { DAYS_OPTIONS, FIGURE, FIGURE_OPTIONS, REPEAT_PER } from './watch.ts';
+import { hhmm, minutesLabel } from '../time.ts';
+import { DAYS_OPTIONS, FIGURE, FIGURE_OPTIONS, REPEAT_PER, busesAvailable } from './watch.ts';
+import { PEAK_SOURCES, busesNotNeeded, busesToBorrow, currentOrNextPeak, linePeaks, needAt, needOver, needSteps, nowMinute, overlapMinutes, peaksText, periodLabel, ridersByHour, type Peak, type PeakSource } from './peaks.ts';
 import { DAY_FILTER, EVENT_FILTER, EVENT_FILTER_SHORT, FORECAST_FILTER, PLACE_FILTER, PLACE_SERVED_M, WEATHER_FILTER, calendarRec, demandForecast, eventRec, eventsAhead, linesNearEvent, placeRec, placesOf, weatherRecs } from './city.ts';
 
 /** Marker for "this branch is not active". Never stored in the save. */
@@ -121,6 +122,8 @@ const isRec = (v: Value | undefined): v is Rec => !!v && typeof v === 'object' &
 const idOf = (v: Value | undefined, kind: string): string | null => {
   if (typeof v === 'string' && v) return v;
   if (isRec(v) && (v.kind === kind || kind === 'any') && typeof v.id === 'string') return v.id;
+  // a bus, peak or watched item connected where a line is wanted stands for its line
+  if (kind === 'line' && isRec(v) && typeof v.line === 'string' && v.line) return v.line;
   return null;
 };
 const fmt = (v: Value | undefined): string => {
@@ -186,6 +189,23 @@ const eventScope = (game: Game, c: WfNode['config']) => {
 const nearLineCfg: ConfigField = { id: 'line', label: 'Near line', kind: 'line', default: '', allowAny: true, help: 'Only events within a kilometre of this line’s stops. Leave empty for any event.' };
 const eventOuts: PortDef[] = [{ id: 'event', label: 'Event', type: 'event' }, { id: 'details', label: 'Event details', type: 'record' }, { id: 'lines', label: 'Lines nearby', type: 'list', help: 'Your lines with a stop within 1 km. When there are none, nothing connected here runs.' }];
 
+
+// ── peak hours
+const peakSourceCfg: ConfigField = { id: 'source', label: 'Peak hours from', kind: 'select', default: 'timetable', options: PEAK_SOURCES, help: 'Timetable: the hours the line needs the most buses to run its timetable. Riders: its busiest hours on recent days of the same kind (weekday or weekend).' };
+const srcOf = (c: Record<string, Value>): PeakSource => (str(c.source) === 'riders' ? 'riders' : 'timetable');
+/** A peak as a record: connect it where a line is wanted and it stands for its line. */
+function peakRec(game: Game, p: Peak): Rec {
+  const r = game.state.routes[p.line];
+  const m = nowMinute(game);
+  const has = busesAvailable(game, p.line);
+  return {
+    kind: 'peak', id: `${p.line}:${p.from}`, line: p.line, lineNumber: r?.number ?? null, name: `Line ${r?.number ?? '?'} ${periodLabel(p.from, p.to)}`,
+    from: minutesLabel(p.from), to: minutesLabel(p.to), period: periodLabel(p.from, p.to), minutes: p.to - p.from,
+    need: p.need, has, short: Math.max(0, p.need - has), riders: p.riders, source: p.source,
+    now: m >= p.from && m < p.to, startsIn: Math.round(p.from - m),
+  };
+}
+
 // ── trigger timing: hours, kinds of day, "for at least" and "at most once every"
 const fromCfg: ConfigField = { id: 'from', label: 'From', kind: 'number', default: 0, min: 0, max: 23, unit: 'h', section: 'timing', help: 'Only between these hours of the day (0 to 24: all day).' };
 const toCfg: ConfigField = { id: 'to', label: 'Until', kind: 'number', default: 24, min: 1, max: 24, unit: 'h', section: 'timing' };
@@ -219,6 +239,8 @@ function actionOut(rec: Rec | Rec[]): NodeResult {
 /** Data nodes: wire a trigger here so the node reads its figures when (and only when) that trigger fires. */
 const afterIn: PortDef = { id: 'after', label: 'After', type: 'any', optional: true, help: 'Connect a trigger (or any step) here: this node then runs only when that step ran. Unconnected, it runs whenever the workflow runs.' };
 
+const moveAfterCfg: ConfigField = { id: 'after', label: 'When', kind: 'select', default: 'trips', options: [{ value: 'trips', label: 'After the trips it already has (no departure missed)' }, { value: 'now', label: 'Straight away (it gives up trips it has not started)' }], help: 'A bus on a line is usually already given its next trip or two. After them, it takes no new trips and moves on once they are done.' };
+const afterOf = (cfg: Record<string, Value>): 'trips' | 'now' => (str(cfg.after) === 'now' ? 'now' : 'trips');
 const whenIn: PortDef = { id: 'when', label: 'When', type: 'any', optional: true, help: 'Connect a condition or a value: the action only runs when it is active and true.' };
 /** An action's `when` input: unconnected = go, false/empty = skip. */
 const go = (inp: Record<string, Value | undefined>) => !('when' in inp) || inp.when === undefined || truthy(inp.when as EValue);
@@ -323,6 +345,28 @@ export const NODES: NodeDef[] = [
     inputs: [], outputs: [eventOut, { id: 'line', label: 'Line', type: 'line' }, { id: 'short', label: 'Buses short', type: 'number' }], trigger: { source: 'condition' },
     config: [lineCfg('Line', true), forCfg(0), ...hoursDays],
     run: (ctx) => ({ out: { event: ctx.event, line: triggerEntity(ctx).line, short: num(ctx.event.short) ?? 0 }, note: `Line ${str(ctx.event.lineNumber)} needs ${str(ctx.event.needed)} buses now and has ${str(ctx.event.buses)} working.` }),
+  },
+  {
+    type: 'trigger.peak', category: 'trigger', label: 'Peak hours start or end',
+    description: 'Runs for each line a set time before its peak hours start, or after they end. Peak hours come from its timetable (when it needs the most buses) or its riders (its busiest hours over the last week). Use it to bring in a spare bus before the rush and park it again afterwards.',
+    inputs: [], trigger: { source: 'clock' },
+    outputs: [eventOut, { id: 'line', label: 'Line', type: 'line' }, { id: 'peak', label: 'Peak', type: 'record' }, { id: 'buses', label: 'Buses to add or free', type: 'number', help: 'Before the start: buses the line needs at its peak beyond those it has working. After the end: buses it can now spare.' }],
+    config: [
+      lineCfg('Line', true),
+      { id: 'at', label: 'When', kind: 'select', default: 'start', options: [{ value: 'start', label: 'Before the peak starts' }, { value: 'end', label: 'After the peak ends' }] },
+      { id: 'minutes', label: 'How long', kind: 'number', default: 30, min: 0, max: 180, step: 5, unit: 'min', help: 'Before the start, or after the end. A bus from the depot needs a few minutes to get ready and then drives to the line.' },
+      peakSourceCfg,
+      daysCfg,
+    ],
+    run: (ctx) => {
+      const e = ctx.event;
+      const peak: Rec = { kind: 'peak', id: `${str(e.line)}:${str(e.from)}`, line: e.line ?? null, lineNumber: e.lineNumber ?? null, name: `Line ${str(e.lineNumber)} ${str(e.period)}`, from: e.from ?? null, to: e.to ?? null, period: e.period ?? null, need: e.need ?? null, has: e.has ?? null, riders: e.riders ?? null, source: e.peakSource ?? null };
+      const n = num(e.buses) ?? 0;
+      const what = e.at === 'end'
+        ? `Line ${str(e.lineNumber)}’s peak ${str(e.period)} has ended: it can spare ${n} bus${n === 1 ? '' : 'es'} now.`
+        : `Line ${str(e.lineNumber)}’s peak ${str(e.period)} is coming: it needs ${str(e.need)} buses and has ${str(e.has)} working${n ? `, ${n} short` : ''}.`;
+      return { out: { event: e, line: triggerEntity(ctx).line, peak, buses: n }, note: what };
+    },
   },
   {
     type: 'trigger.leftBehind', category: 'trigger', label: 'People left behind',
@@ -435,7 +479,7 @@ export const NODES: NodeDef[] = [
   {
     type: 'data.buses', category: 'data', label: 'Buses', description: 'Buses with their status, load and condition. Filter by line or by what they are doing.',
     inputs: [afterIn, { id: 'line', label: 'Line', type: 'line', optional: true }], outputs: [{ id: 'buses', label: 'Buses', type: 'list' }],
-    config: [lineCfg('Line', true), { id: 'which', label: 'Which', kind: 'select', default: 'all', options: [{ value: 'all', label: 'All' }, { value: 'free', label: 'Free now' }, { value: 'spare', label: 'Spare (no line)' }, { value: 'working', label: 'On a trip' }] }],
+    config: [lineCfg('Line', true), { id: 'which', label: 'Which', kind: 'select', default: 'all', options: [{ value: 'all', label: 'All' }, { value: 'free', label: 'Free now' }, { value: 'spare', label: 'Spare (no line)' }, { value: 'parked', label: 'Spare and parked at a depot' }, { value: 'notNeeded', label: 'Not needed by their line for the next hour' }, { value: 'working', label: 'On a trip' }] }],
     run: (ctx, inp, cfg) => {
       const lid = idOf(inp.line, 'line') ?? (str(cfg.line) || null);
       const which = str(cfg.which);
@@ -444,6 +488,11 @@ export const NODES: NodeDef[] = [
       if (which === 'free') list = list.filter((b) => b.free);
       if (which === 'spare') list = list.filter((b) => b.spare);
       if (which === 'working') list = list.filter((b) => b.status === 'in_service' || b.status === 'at_stop');
+      if (which === 'parked') list = list.filter((b) => b.spare && b.status === 'parked');
+      if (which === 'notNeeded') {
+        const ok = new Set((lid ? [lid] : Object.keys(ctx.game.state.routes)).flatMap((r) => busesNotNeeded(ctx.game, r).map((v) => v.id)));
+        list = list.filter((b) => ok.has(String(b.id)));
+      }
       ctx.spend(list.length);
       return { out: { buses: list }, note: `${list.length} bus${list.length === 1 ? '' : 'es'}.` };
     },
@@ -481,6 +530,76 @@ export const NODES: NodeDef[] = [
       if (!best) return { out: { bus: OFF, found: false }, note: `No free bus for line ${r.number}.` };
       const bus: Rec = { ...(ctx.live.busById(best.v) as Rec), readyAt: hhmm(best.ready) };
       return { out: { bus, found: true }, note: `${str(bus.fleetNo)} could start at ${hhmm(best.ready)}.` };
+    },
+  },
+  {
+    type: 'data.peaks', category: 'data', label: 'Peak hours',
+    description: 'When lines are busiest today, from the timetable (the hours a line needs the most buses) or from riders (its busiest hours on recent days of the same kind). Each peak comes with its times and the buses it needs, plus riders and buses needed hour by hour, and a summary that points out lines whose peaks are at different times (they can share buses).',
+    inputs: [afterIn, { id: 'line', label: 'Line', type: 'line', optional: true }],
+    outputs: [{ id: 'peaks', label: 'Peaks', type: 'list' }, { id: 'busiest', label: 'Biggest peak', type: 'record' }, { id: 'hours', label: 'Hour by hour', type: 'list' }, { id: 'summary', label: 'In words', type: 'text' }],
+    config: [lineCfg('Line', true), peakSourceCfg],
+    run: (ctx, inp, cfg) => {
+      const game = ctx.game, s = game.state;
+      const lid = idOf(inp.line, 'line') ?? (str(cfg.line) || null);
+      if (lid && !s.routes[lid]) throw new Error('That line no longer exists.');
+      const source = srcOf(cfg);
+      const lines = (lid ? [s.routes[lid]] : Object.values(s.routes)).filter((r) => !r.suspended);
+      ctx.spend(lines.length * 24);
+      const per = lines.map((r) => ({ r, peaks: linePeaks(game, r.id, source) }));
+      const peaks = per.flatMap((x) => x.peaks.map((p) => peakRec(game, p)));
+      const big = per.flatMap((x) => x.peaks).sort((a, b) => (source === 'riders' ? (b.riders ?? 0) - (a.riders ?? 0) : b.need - a.need))[0];
+      // hour by hour, in service-day order from 03:00
+      const rid = ridersByHour(game, lid);
+      const steps = lines.map((r) => needSteps(game, r.id));
+      const hours: Value[] = Array.from({ length: 24 }, (_, i) => {
+        const h = (3 + i) % 24, m = (h < 3 ? h + 24 : h) * 60;
+        return { kind: 'hour', id: String(h), hour: h, time: minutesLabel(m), riders: rid.hours[h], need: steps.reduce((x, st) => x + needAt(st, m + 30), 0) };
+      });
+      // in words, with lines whose peaks never overlap
+      const parts = per.filter((x) => x.peaks.length).map((x) => `Line ${x.r.number}: ${peaksText(x.peaks)}${source === 'timetable' ? ` (${Math.max(...x.peaks.map((p) => p.need))} buses)` : ''}`);
+      const pairs: string[] = [];
+      const withPeaks = per.filter((x) => x.peaks.length);
+      for (let i = 0; i < withPeaks.length && pairs.length < 3; i++) for (let j = i + 1; j < withPeaks.length && pairs.length < 3; j++) {
+        if (overlapMinutes(withPeaks[i].peaks, withPeaks[j].peaks) === 0) pairs.push(`${withPeaks[i].r.number} and ${withPeaks[j].r.number}`);
+      }
+      const none = source === 'riders' && !rid.days ? 'No full day of riders recorded yet.' : lid ? `Line ${s.routes[lid].number} has no clear peak hours today${source === 'timetable' ? ': its timetable needs the same buses all day' : ''}.` : 'No line has clear peak hours today.';
+      const summary = parts.length
+        ? `${parts.join('. ')}.${pairs.length ? ` Lines ${pairs.join(', ')} peak at different times, so they could share buses.` : ''}${source === 'riders' ? ` From ${rid.days} recorded ${rid.kind === 'all days' ? 'days' : rid.kind}.` : ''}`
+        : none;
+      return { out: { peaks, busiest: big ? peakRec(game, big) : OFF, hours, summary }, note: summary };
+    },
+  },
+  {
+    type: 'data.borrow', category: 'data', label: 'Buses to borrow',
+    description: 'Buses that could join a line now and stay until its peak is over: spare buses parked at a depot first, then buses other lines will not need until then (lines whose own peak is at another time). Never a bus carrying passengers, and never one its line still needs.',
+    inputs: [afterIn, { id: 'line', label: 'Line', type: 'line', optional: true }, { id: 'count', label: 'How many', type: 'number', optional: true }],
+    outputs: [{ id: 'buses', label: 'Buses', type: 'list' }, { id: 'bus', label: 'First bus', type: 'vehicle' }, { id: 'lenders', label: 'Lines that can lend', type: 'list' }, { id: 'found', label: 'Found', type: 'boolean' }],
+    config: [
+      lineCfg(),
+      { id: 'count', label: 'How many', kind: 'number', default: 1, min: 0, max: 10 },
+      { id: 'from', label: 'Take from', kind: 'select', default: 'both', options: [{ value: 'both', label: 'Spares, then other lines' }, { value: 'spare', label: 'Only spare buses' }, { value: 'lines', label: 'Only other lines' }] },
+      { id: 'until', label: 'Needed until', kind: 'select', default: 'peak', options: [{ value: 'peak', label: 'The end of the line’s peak (timetable)' }, { value: 'hour', label: 'An hour from now' }], help: 'A line lends a bus only if it will not need it before then.' },
+    ],
+    run: (ctx, inp, cfg) => {
+      const game = ctx.game, s = game.state;
+      const lid = idOf(inp.line, 'line') ?? str(cfg.line);
+      const r = lid ? s.routes[lid] : null;
+      if (!r) throw new Error(lid ? 'That line no longer exists.' : 'Choose or connect a line.');
+      const count = Math.max(0, Math.min(10, Math.round(num(inp.count) ?? num(cfg.count) ?? 1)));
+      const m = nowMinute(game);
+      const pk = str(cfg.until) === 'hour' ? null : currentOrNextPeak(game, r.id, 'timetable');
+      const until = pk ? pk.peak.to : m + 60;
+      const from = str(cfg.from) || 'both';
+      ctx.spend(Object.keys(s.vehicles).length + Object.keys(s.routes).length * 4);
+      const { loans, lenders } = busesToBorrow(game, r.id, until, { spares: from !== 'lines', lines: from !== 'spare' });
+      const picked = loans.slice(0, count);
+      const buses: Value[] = picked.map((l) => ({ ...ctx.live.bus(l.bus), fromLine: l.from ? s.routes[l.from]?.number ?? null : null, readyAt: Number.isFinite(l.ready) ? hhmm(l.ready) : null }));
+      const lend: Value[] = lenders.map((x) => ({ ...(ctx.live.line(x.line) ?? {}), canLend: x.canLend }));
+      const why = `until ${minutesLabel(until)}${pk ? ` (the end of its peak ${periodLabel(pk.peak.from, pk.peak.to)})` : ''}`;
+      const note = !count ? 'Asked for no buses.' : picked.length
+        ? `${picked.map((l) => `${l.bus.fleetNo}${l.from ? ` from line ${s.routes[l.from]?.number ?? '?'}` : ' (spare)'}`).join(', ')} could join line ${r.number} ${why}.`
+        : `No bus free to join line ${r.number} ${why}: no spare is parked and no other line can do without one.`;
+      return { out: { buses, bus: buses.length ? buses[0] : OFF, lenders: lend, found: buses.length > 0 }, note };
     },
   },
   {
@@ -711,6 +830,49 @@ export const NODES: NodeDef[] = [
     inputs: [{ id: 'list', label: 'List', type: 'list' }], outputs: [{ id: 'item', label: 'Item', type: 'any' }, { id: 'found', label: 'Found', type: 'boolean' }], config: [],
     run: (_ctx, inp) => { const list = Array.isArray(inp.list) ? inp.list : []; return { out: { item: list.length ? list[0] : OFF, found: list.length > 0 }, note: list.length ? `${fmt(list[0])}.` : 'The list is empty.' }; },
   },
+  {
+    type: 'logic.pick', category: 'logic', label: 'Pick the highest or lowest',
+    description: 'The item of a list with the highest (or lowest) value of a field, e.g. the line with the highest load3h. Items without that figure are skipped. If none has it, nothing after it runs.',
+    inputs: [{ id: 'list', label: 'List', type: 'list' }], outputs: [{ id: 'item', label: 'Item', type: 'any' }, { id: 'value', label: 'Its value', type: 'number' }, { id: 'found', label: 'Found', type: 'boolean' }],
+    config: [{ id: 'field', label: 'Field', kind: 'text', default: 'load3h' }, { id: 'order', label: 'Pick', kind: 'select', default: 'desc', options: [{ value: 'desc', label: 'The highest' }, { value: 'asc', label: 'The lowest' }] }],
+    run: (ctx, inp, cfg) => {
+      const list = Array.isArray(inp.list) ? inp.list : [];
+      const f = str(cfg.field), low = str(cfg.order) === 'asc';
+      ctx.spend(list.length);
+      let best: Rec | null = null, bv = 0;
+      for (const x of list) {
+        if (!isRec(x)) continue;
+        const v = num(x[f]);
+        if (v === null) continue;
+        if (!best || (low ? v < bv : v > bv)) { best = x; bv = v; }
+      }
+      return best ? { out: { item: best, value: bv, found: true }, note: `${fmt(best)}: ${f} ${fmt(bv)}.` } : { out: { item: OFF, value: OFF, found: false }, note: list.length ? `No item has a figure “${f}”.` : 'The list is empty.' };
+    },
+  },
+  {
+    type: 'logic.comparePeaks', category: 'logic', label: 'Compare peaks',
+    description: 'Compares two lines’ peak hours: whether they overlap, by how long, and how many buses line B could lend line A during A’s peaks without missing its own departures. Lines that peak at different times can share buses.',
+    inputs: [{ id: 'a', label: 'Line A', type: 'line', optional: true }, { id: 'b', label: 'Line B', type: 'line', optional: true }],
+    outputs: [{ id: 'overlap', label: 'Overlap', type: 'boolean' }, { id: 'minutes', label: 'Overlap (min)', type: 'number' }, { id: 'lend', label: 'B can lend A', type: 'number' }, { id: 'text', label: 'In words', type: 'text' }],
+    config: [{ id: 'a', label: 'Line A', kind: 'line', default: '' }, { id: 'b', label: 'Line B', kind: 'line', default: '' }, peakSourceCfg],
+    run: (ctx, inp, cfg) => {
+      const game = ctx.game, s = game.state;
+      const ida = idOf(inp.a, 'line') ?? str(cfg.a), idb = idOf(inp.b, 'line') ?? str(cfg.b);
+      const ra = ida ? s.routes[ida] : null, rb = idb ? s.routes[idb] : null;
+      if (!ra || !rb) throw new Error('Choose or connect two lines.');
+      if (ra.id === rb.id) throw new Error('Choose two different lines.');
+      ctx.spend(48);
+      const source = srcOf(cfg);
+      const pa = linePeaks(game, ra.id, source), pb = linePeaks(game, rb.id, source);
+      const ov = overlapMinutes(pa, pb);
+      const stepsB = needSteps(game, rb.id), hasB = busesAvailable(game, rb.id);
+      const lend = pa.length && !rb.suspended ? Math.max(0, Math.min(...pa.map((p) => hasB - needOver(stepsB, p.from, p.to)))) : rb.suspended ? hasB : 0;
+      const desc = (n: string, p: Peak[]) => (p.length ? `Line ${n} is busiest ${peaksText(p)}` : `Line ${n} has no clear peak hours`);
+      const dur = ov >= 60 ? `${Math.round((ov / 60) * 10) / 10} h` : `${ov} min`;
+      const text = `${desc(ra.number, pa)}; ${desc(rb.number, pb).replace(/^Line/, 'line')}. ${!pa.length || !pb.length ? '' : ov ? `They overlap by ${dur}. ` : 'They do not overlap. '}${pa.length ? (lend ? `Line ${rb.number} could lend line ${ra.number} ${lend} bus${lend === 1 ? '' : 'es'} during its peaks.` : `Line ${rb.number} needs all its buses during line ${ra.number}’s peaks.`) : ''}`.trim();
+      return { out: { overlap: ov > 0, minutes: ov, lend, text }, note: text };
+    },
+  },
 
   // ── maths
   {
@@ -837,24 +999,24 @@ export const NODES: NodeDef[] = [
   {
     type: 'action.assign', category: 'action', label: 'Move bus to line', description: 'Moves a bus to a line. A bus with passengers finishes its trip and goes via the depot first.',
     inputs: [whenIn, { id: 'bus', label: 'Bus', type: 'vehicle', list: true }, { id: 'line', label: 'Line', type: 'line', optional: true }], outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }],
-    config: [lineCfg()], action: { impact: 'low' },
+    config: [lineCfg(), moveAfterCfg], action: { impact: 'low' },
     run: (ctx, inp, cfg) => {
       if (!go(inp)) return { out: { result: OFF, done: false }, note: 'Condition was false.' };
       const route = idOf(inp.line, 'line') ?? (str(cfg.line) || null);
       if (!route) throw new Error('Choose or connect a line.');
       const buses = items(inp.bus).map((x) => idOf(x, 'vehicle')).filter((x): x is string => !!x);
       if (!buses.length) return { out: { result: OFF, done: false }, note: 'No bus connected.' };
-      return actionOut(buses.map((vehicle) => ctx.act({ type: 'assign_vehicle', vehicle, route })));
+      return actionOut(buses.map((vehicle) => ctx.act({ type: 'assign_vehicle', vehicle, route, after: afterOf(cfg) })));
     },
   },
   {
-    type: 'action.release', category: 'action', label: 'Take bus off line', description: 'Makes a bus a spare. It finishes any trip first, then returns to its depot.',
-    inputs: [whenIn, { id: 'bus', label: 'Bus', type: 'vehicle', list: true }], outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }], config: [], action: { impact: 'low' },
-    run: (ctx, inp) => {
+    type: 'action.release', category: 'action', label: 'Park bus at its depot', description: 'Takes a bus off its line and parks it at its depot as a spare, ready for any line. By default it first runs the trips it already has, so no departure is missed. Pair it with Buses set to “Not needed by their line” to park only buses a line can do without.',
+    inputs: [whenIn, { id: 'bus', label: 'Bus', type: 'vehicle', list: true }], outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }], config: [moveAfterCfg], action: { impact: 'low' },
+    run: (ctx, inp, cfg) => {
       if (!go(inp)) return { out: { result: OFF, done: false }, note: 'Condition was false.' };
       const buses = items(inp.bus).map((x) => idOf(x, 'vehicle')).filter((x): x is string => !!x);
       if (!buses.length) return { out: { result: OFF, done: false }, note: 'No bus connected.' };
-      return actionOut(buses.map((vehicle) => ctx.act({ type: 'assign_vehicle', vehicle, route: null })));
+      return actionOut(buses.map((vehicle) => ctx.act({ type: 'assign_vehicle', vehicle, route: null, after: afterOf(cfg) })));
     },
   },
   {
@@ -868,7 +1030,7 @@ export const NODES: NodeDef[] = [
     },
   },
   {
-    type: 'action.moveDepot', category: 'action', label: 'Move bus to depot', description: 'Bases a bus at another depot. A parked bus drives there on the road; a working bus goes there next time it returns.',
+    type: 'action.moveDepot', category: 'action', label: 'Base bus at another depot', description: 'Bases a bus at another depot. A parked bus drives there on the road; a working bus goes there next time it returns.',
     inputs: [whenIn, { id: 'bus', label: 'Bus', type: 'vehicle', list: true }], outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }],
     config: [{ id: 'depot', label: 'Depot', kind: 'depot', default: '' }], action: { impact: 'low' },
     run: (ctx, inp, cfg) => {
@@ -963,6 +1125,22 @@ export const NODES: NodeDef[] = [
       if (!id) throw new Error('Choose a function.');
       const v = ctx.call(id, { a: inp.a ?? null, b: inp.b ?? null, c: inp.c ?? null });
       return { out: { value: v }, note: `Returned ${fmt(v)}.` };
+    },
+  },
+  {
+    type: 'adv.forEach', category: 'advanced', label: 'For each item, use a function',
+    description: 'Runs one of your functions once for every item of a list (at most 20): the item is its input a, its position (1, 2, …) is b, and whatever is connected to c is c. Gives back the results as a list. Actions inside the function run once per item.',
+    inputs: [{ id: 'list', label: 'List', type: 'list' }, { id: 'c', label: 'c', type: 'any', optional: true }],
+    outputs: [{ id: 'results', label: 'Results', type: 'list' }, { id: 'count', label: 'Count', type: 'number' }],
+    config: [{ id: 'workflow', label: 'Function', kind: 'workflow', default: '' }, { id: 'max', label: 'At most', kind: 'number', default: 10, min: 1, max: 20, unit: 'items' }],
+    run: (ctx, inp, cfg) => {
+      const id = str(cfg.workflow);
+      if (!id) throw new Error('Choose a function.');
+      const list = Array.isArray(inp.list) ? inp.list : [];
+      const max = Math.max(1, Math.min(20, Math.round(num(cfg.max) ?? 10)));
+      const results: Value[] = list.slice(0, max).map((item, i) => ctx.call(id, { a: item, b: i + 1, c: inp.c ?? null }));
+      const more = list.length > max ? ` (${list.length - max} more left out: at most ${max})` : '';
+      return { out: { results, count: results.length }, note: `Ran the function for ${results.length} item${results.length === 1 ? '' : 's'}${more}.` };
     },
   },
   {
@@ -1062,6 +1240,13 @@ export function triggerLabel(game: Game, node: WfNode): string {
       const shown = f.unit === 'money' ? game.money(v, { compact: true }) : f.unit === '%' ? `${v}%` : `${v} ${f.unit}`;
       const who = f.scope === 'company' ? '' : line ? ` (line ${game.state.routes[String(c.line)]?.number ?? '?'})` : f.scope === 'line' ? ' (any line)' : f.scope === 'stop' ? ' (any stop)' : ' (any bus)';
       return `${f.label}${who} ${String(c.op) === 'below' ? 'below' : 'above'} ${shown}${timingWords(c)}`;
+    }
+    case 'trigger.peak': {
+      const m = Number(c.minutes ?? 30) || 0;
+      const who = line ? `line ${game.state.routes[String(c.line)]?.number ?? '?'}’s` : 'a line’s';
+      const src = String(c.source) === 'riders' ? 'busiest hours' : 'peak';
+      const when = String(c.at) === 'end' ? `${m ? `${m} min after` : 'When'} ${who} ${src} end${src === 'peak' ? 's' : ''}` : `${m ? `${m} min before` : 'When'} ${who} ${src} start${src === 'peak' ? 's' : ''}`;
+      return `${when}${timingWords(c)}`;
     }
     case 'trigger.manual': return 'Run by hand';
     case 'trigger.forecast': {

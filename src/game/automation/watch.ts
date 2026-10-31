@@ -12,6 +12,7 @@ import { hhmm, serviceDayOf, weekdayOf } from '../time.ts';
 import { routeWindow } from '../progress.ts';
 import { companyLevel } from '../control.ts';
 import { dayTotals } from '../finance.ts';
+import { nextPeakFire, periodLabel } from './peaks.ts';
 
 export type Scope = 'line' | 'stop' | 'bus' | 'company';
 
@@ -74,7 +75,7 @@ export function busesAvailable(game: Game, route: Id): number {
   let n = 0;
   for (const id of r.vehicles) {
     const v = s.vehicles[id];
-    if (v && v.status !== 'maintenance' && v.status !== 'broken' && !v.withdraw && !v.sell) n++;
+    if (v && v.status !== 'maintenance' && v.status !== 'broken' && !v.withdraw && !v.sell && !v.handover) n++;
   }
   return n;
 }
@@ -354,6 +355,13 @@ export function triggerStatus(game: Game, wf: Workflow, node: WfNode): TriggerSt
   if (node.type === 'trigger.every' || node.type === 'trigger.time' || node.type === 'trigger.calendar') {
     const nx = nextClock(game, node);
     return { ...base, state: 'idle', text: `${nx !== null ? `Next ${Math.floor(nx / DAY) === today ? hhmm(nx) : `day ${Math.floor(nx / DAY) + 1} ${hhmm(nx)}`}` : 'No time ahead'} · ${lastText}` };
+  }
+
+  if (node.type === 'trigger.peak') {
+    const nx = nextPeakFire(game, c);
+    const r = nx ? game.state.routes[nx.line] : null;
+    const when = nx ? (Math.floor(nx.t / DAY) === today ? hhmm(nx.t) : `day ${Math.floor(nx.t / DAY) + 1} ${hhmm(nx.t)}`) : '';
+    return { ...base, state: 'idle', text: `${nx && r ? `Next ${when}: line ${r.number}, peak ${periodLabel(nx.peak.from, nx.peak.to)}` : 'No peak left today'} · ${lastText}` };
   }
 
   // condition triggers: what they watch now
