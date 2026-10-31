@@ -69,12 +69,14 @@ Buses wear by about 0.01% of condition per km. Below 45% condition they can brea
 ## Fares and ridership
 
 - **Fare:** one flat fare per journey, including transfers. The suggested fare is **1.8**, adjustable from 0.4 to 4.5 in Finances.
-- **Who travels:** journeys come from the demand model (`src/game/passengers.ts`).
-  - Residents, jobs, schools, shops and leisure are estimated from OpenStreetMap buildings and land use, then served within a 450 m walk of a stop.
-  - Trip rates vary by purpose and by hour, and differ on weekdays and weekends.
-- **Choosing the bus:** each traveller compares the bus with walking, and some also with a car or taxi, using a logit choice on *generalised time*. Generalised time is in-vehicle time, plus waiting, plus crowding and unreliability penalties, plus the fare.
-  - Every 0.15 above the reference fare adds a minute of perceived journey time, so raising the fare earns more per rider but loses riders.
-  - The car alternative slows with simulated traffic, so the bus wins more riders at rush hour.
+- **Who travels:** journeys come from the City Activity Engine (`src/game/activity/`; details in `docs/city-activity-engine-progress.md`).
+  - The city is split into zones. Homes, jobs, schools, universities, shops, hospitals, the airport and other places are estimated from OpenStreetMap buildings, land use and places.
+  - People make tours: work, school, university, shopping, errands, health, leisure, nights out, sightseeing, business, the airport and events. Their timing follows the hour, the day of the week, the calendar, the weather and each place's opening hours.
+  - A stop serves people within a 600 m walk along streets.
+- **Choosing a way to travel:** each tour chooses between walking, cycling, car, taxi, the city's own metro, tram, rail and ferries, and your buses. The choice is a nested logit on *generalised time*: in-vehicle time, walking, waiting, changes, crowding, unreliability and the fare. Ten traveller types weigh these differently; for example, a student minds the fare more than a commuter, and an air traveller minds changes and delays most.
+  - Every 0.15 above the reference fare adds a minute of perceived journey time, scaled by the traveller's fare sensitivity. Raising the fare earns more per rider but loses riders.
+  - The car slows with simulated traffic, so the bus wins more riders at rush hour.
+  - From your stops near a station, people can ride your bus there and go on by the city's transit.
 - **Satisfaction:** each completed journey is scored on waiting (30%), journey time compared with a car (25%), crowding (15%), reliability (15%) and price (15%). There is a small penalty for each transfer. Passengers who give up waiting score very low.
 
 ## Reputation
@@ -121,9 +123,11 @@ These come from `src/game/test/balance.test.ts`: real Istanbul streets, the defa
 
 | Network | Riders/day | Operating result/day |
 |---|---|---|
-| 8 stops, Taksim → Karaköy, 4 buses, about 14 min headway | ~3,000 | **about +3,800** |
-| 3 stops, same 4 buses | ~175 | **about −2,400** |
-| Progression bot: 2 lines, 7 buses, starting areas plus one licence (see `progression.test.ts`) | ~9,000 weekdays, ~7,000 weekends | **about +10,000** |
+| 8 stops, Taksim → Karaköy, 4 buses, about 14 min headway | ~3,700 weekdays, ~3,000 weekends | **about +4,100** |
+| 3 stops, same 4 buses | ~180 | **about −2,000** |
+| Progression bot: 2 lines, 7 buses, starting areas plus one licence (see `progression.test.ts`) | ~7,400 weekdays, ~5,700 weekends | **about +8,300** (balance growth on days 29–39, loan repaid) |
+
+Figures measured for 0.4.0 (`pnpm calibrate` and `progression.test.ts`). The plan's progression target is about 9,000 weekday riders; whether to keep it is an open question.
 
 A strong line repays a 75,000 bus in about two weeks of game time, before grants. An average network grows slowly, and loans (at about 10% a year) are the intended way to speed up. A badly planned line burns money quickly, and that is the main pressure on the player.
 
@@ -136,7 +140,7 @@ The balance tests guard these properties:
 
 ## Known tuning questions
 
-- Early growth leans on grants and loans. The progression test shows a scripted player expanding on day 0 (with a loan) and then growing steadily rather than stalling. If playtesting shows expansion still feels slow, the first levers are demand (`RATE` in `passengers.ts`) and vehicle prices, not the fare.
+- Early growth leans on grants and loans. The progression test shows a scripted player expanding on day 0 (with a loan) and then growing steadily rather than stalling. If playtesting shows expansion still feels slow, the first levers are demand (`HOME_RATE` and the trust minutes in `src/game/activity/params.ts`) and vehicle prices, not the fare.
 - History: later on 2026-10-30 the maps grew about 2.5× and new companies start with ~15 km² of land. Destinations now compete across a larger city, so a line near the old map edge carries fewer riders than before (the Taksim → Karaköy reference fell from ~4,300 to ~3,000 a day). Demand was not retuned; the bigger start gives better corridors, and the progression bot does better than before.
 - Earlier on 2026-10-30 trip rates were raised 25% (to about 2.7 trips per person per day, all modes) and driver wages cut from 27 to 24 an hour. Before that, average lines barely covered their costs and the scripted player stalled after its first expansion.
 - Weekend demand is lower (shopping and leisure up, work down). Lines tuned for weekday peaks run emptier on weekends, which is intended.

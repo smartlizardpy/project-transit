@@ -103,12 +103,22 @@ Fallbacks:
 - If no tiles download at all, the app suggests İstanbul (offline).
 - Traffic is always the simulated model and is labelled as such.
 
+## City Activity Engine
+
+Tracked in detail in [`docs/city-activity-engine-progress.md`](city-activity-engine-progress.md), phases 0–7, with evidence, calibration and known gaps. Every phase is 🟡 until the owner has played it.
+
+- Zones and places from the map (airports, stations, universities, schools, hospitals, malls, stadiums, markets, piers, sights), with opening rules, busy hours and a place card.
+- Tours by purpose, with ten traveller types and a nested choice between walking, cycling, car, taxi, the city's metro, tram, rail and ferries, and your buses. People can ride your bus to a station and go on by the city's transit, and walk up to 300 m between stops to change lines.
+- Weather from a climate model per city, with forecasts; events and disruptions; service plans for school holidays, weekends and events.
+- Reputation works through trust minutes on each journey leg (see `docs/economy.md`).
+- Open: the progression bot reaches about 7,400 weekday riders against the plan's 9,000 (owner decision); habit is not built; people do not change from the train to your bus.
+
 ## Network Control and Intelligent Operations
 
 Tracked in detail in [`docs/network-control-progress.md`](network-control-progress.md), with evidence for each item.
 
 - **Network Control** unlocks after 30 operating days at company level 3. Analytics are recorded from day one and reconcile with the simulation and the ledger. The panel covers overview, passengers (observed journeys and estimated demand, drawn on the map), stops, lines, fleet, custom metrics and saved reports.
-- **Automation Studio**: workflows of typed nodes run on game time through the same commands as the player, in Observe, Suggest or Automatic mode, within safety limits, with history, traces and a Simulation Lab. Triggers can wait for a condition to last, keep to hours and days, and limit repeats; *Watch a figure* covers 18 figures; each trigger shows its live state. Peak hours (from timetables and riders), a peak trigger, buses to borrow from lines that peak at other times, and moves that wait for a bus's trips so no departure is missed. Blocks to build your own strategies: compare with a normal day, passenger journeys, group by, join lists, and extra departures planned ahead; 38 starter workflows in eight groups. Reference: [`docs/automation-api.md`](automation-api.md).
+- **Automation Studio**: workflows of typed nodes run on game time through the same commands as the player, in Observe, Suggest or Automatic mode, within safety limits, with history, traces and a Simulation Lab. Triggers can wait for a condition to last, keep to hours and days, and limit repeats; *Watch a figure* covers 18 figures; each trigger shows its live state. Peak hours (from timetables and riders), a peak trigger, buses to borrow from lines that peak at other times, and moves that wait for a bus's trips so no departure is missed. Blocks to build your own strategies: compare with a normal day, passenger journeys, group by, join lists, and extra departures planned ahead; 49 starter workflows in nine groups (including the *Control room* group). Reference: [`docs/automation-api.md`](automation-api.md).
 - **Route diagnostics** (not locked): clickable route warnings with the cause, a map overlay, fixes with before/after, and undo. See [`docs/route-diagnostics.md`](route-diagnostics.md).
 - **Depot moves**: a bus can be based at another depot and drives there on the road.
 
@@ -195,3 +205,5 @@ Tracked in detail in [`docs/network-control-progress.md`](network-control-progre
       - Verified locally: a signed release build produces the `.app.tar.gz` update and its signature.
       - First release: v0.2.1. The v0.2.0 tag's run stopped in tests (the 40-day test hit its 180 s limit on the slower CI runner; CI now allows 900 s), so v0.2.0 has no release.
       - v0.3.0: Network Control (analytics, Automation Studio, Simulation Lab), clickable route diagnostics, moving buses between depots. Details in `docs/network-control-progress.md`.
+- **2026-10-31.**
+  - v0.4.0: the City Activity Engine (phases 0–7: places, tours, traveller types, nested mode choice, the city's own transit, weather, events, service plans, trust minutes, walking changes) and more Automation Studio blocks (peaks, sharing buses between lines, connection holds, control-room blocks, "why reputation fell", 49 starter workflows). Details in `docs/city-activity-engine-progress.md` and `docs/network-control-progress.md`. PR #4.
