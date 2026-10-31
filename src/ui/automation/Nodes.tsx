@@ -5,9 +5,9 @@ import type { Game } from '../../game/engine.ts';
 import { NODE, triggerLabel, describeValue } from '../../game/automation/registry.ts';
 import type { NodeTrace, WfGroup, WfNode } from '../../game/automation/types.ts';
 import { CatChip, nodeTitle } from './common.tsx';
-import { triggerStatus } from '../../game/automation/watch.ts';
+import { pendingStatus, triggerStatus } from '../../game/automation/watch.ts';
 
-/** A trigger's live state (watching, building up, fired), refreshed as game minutes pass. */
+/** A trigger's live state (watching, building up, fired), or what a Wait holds, refreshed as game minutes pass. */
 function TriggerLive({ game, wfId, node }: { game: Game; wfId: string; node: WfNode }) {
   const [, force] = useReducer((x: number) => x + 1, 0);
   useEffect(() => {
@@ -19,8 +19,8 @@ function TriggerLive({ game, wfId, node }: { game: Game; wfId: string; node: WfN
   }, [game]);
   const wf = game.state.automation.workflows[wfId];
   if (!wf) return null;
-  const st = triggerStatus(game, wf, node);
-  return <div className={`st-node-live s-${st.state}`} title="Live: what this trigger is doing in the running game">{st.text}</div>;
+  const st = NODE[node.type]?.trigger ? triggerStatus(game, wf, node) : pendingStatus(game, wf, node);
+  return <div className={`st-node-live s-${st.state}`} title="Live: what this node is doing in the running game">{st.text}</div>;
 }
 
 /** A line of what the node is set to, in the game's words. */
@@ -78,7 +78,7 @@ function StNodeView({ data, selected }: NodeProps) {
         </div>
       </div>
       {sum && <div className="st-node-sum">{sum}</div>}
-      {def.trigger && wfId && <TriggerLive game={game} wfId={wfId} node={node} />}
+      {(def.trigger || def.resume) && wfId && <TriggerLive game={game} wfId={wfId} node={node} />}
       {ran && trace?.note && trace.status === 'ok' && <div className="st-node-note">{trace.note}</div>}
       {ran && trace?.status === 'error' && <div className="st-node-note err">{trace.error}</div>}
       {ran && trace?.status === 'inactive' && <div className="st-node-note off">Not reached</div>}

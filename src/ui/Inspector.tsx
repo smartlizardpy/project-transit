@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Crosshair, Warehouse, MapPin, Users, Wrench, Path, Plus, Warning, CalendarBlank, PencilSimple, Trash, Pause, Play, CurrencyCircleDollar, ArrowsOutSimple, Lock, LockOpen, Check, Minus } from '@phosphor-icons/react';
+import { X, Crosshair, Warehouse, MapPin, Users, Wrench, Path, Plus, Warning, CalendarBlank, PencilSimple, Trash, Pause, Play, CurrencyCircleDollar, ArrowsOutSimple, Lock, LockOpen, Check, Minus, ArrowUUpLeft, Hourglass } from '@phosphor-icons/react';
 import { useUI } from '../state/store.ts';
 import { useGameUpdates } from './hooks.ts';
 import { LineBadge, LoadBar, Tip, Kpi } from './primitives.tsx';
@@ -109,6 +109,45 @@ export function statusPill(v: Vehicle): { text: string; pill: string; cls: strin
 
 // ───────────────────────────────────────────── vehicle
 
+/** Who asked for a control action: you, or an automation by name. */
+function askedBy(game: Game, src: string) {
+  if (src === 'player') return '';
+  const wf = game.state.automation.workflows[src];
+  return wf ? ` Asked by “${wf.name}”.` : '';
+}
+
+/** A hold at a stop or an early turn back planned for this bus, with a way to call it off. */
+function ControlNotes({ game, v }: { game: Game; v: Vehicle }) {
+  const s = game.state;
+  const hold = v.hold && v.hold.trip === v.trip ? v.hold : null;
+  const turn = v.turn && v.turn.trip === v.trip ? v.turn : null;
+  const pat = v.pos.kind === 'pattern' ? game.pattern(v.pos.route, v.pos.pat) : null;
+  return (
+    <>
+      {hold && (
+        <div className="issue info">
+          <Hourglass size={16} weight="fill" />
+          <span className="grow">
+            {hold.until ? `Held at ${s.stops[hold.stop ?? '']?.name ?? 'the stop'} until ${hhmm(hold.until)}, doors open.` : `Will wait ${hold.min} min at ${s.stops[hold.stop ?? '']?.name ?? 'its next stop'} after its normal stop.`}
+            {askedBy(game, hold.src)}
+          </span>
+          <button className="link" onClick={() => run(game.cancelControl(v.id, 'hold'), 'Hold called off')}>Call off</button>
+        </div>
+      )}
+      {turn && pat && (
+        <div className="issue info">
+          <ArrowUUpLeft size={16} weight="bold" />
+          <span className="grow">
+            Turns back at {s.stops[pat.stops[turn.at]]?.name ?? 'a stop'} instead of {s.stops[pat.stops[pat.stops.length - 1]]?.name ?? 'the end of the line'}; people going further change to the next bus.
+            {askedBy(game, turn.src)}
+          </span>
+          <button className="link" onClick={() => run(game.cancelControl(v.id, 'turn'), 'Turn back called off')}>Call off</button>
+        </div>
+      )}
+    </>
+  );
+}
+
 /** Home depot, with a move to another depot (asks first, saying what will happen). */
 function DepotMove({ game, v }: { game: Game; v: Vehicle }) {
   const [to, setTo] = useState<string | null>(null);
@@ -212,6 +251,7 @@ function VehicleInspector({ id }: { id: string }) {
         {v.status === 'maintenance' && <div className="issue info"><Wrench size={16} weight="fill" />Back in service around {new Date((v.until % 86400) * 1000).toISOString().slice(11, 16)}.</div>}
         {v.sell && <div className="issue"><CurrencyCircleDollar size={16} weight="fill" />Will be sold when it reaches {depot?.name ?? 'the depot'}.</div>}
         {v.withdraw && <div className="issue info"><Warehouse size={16} weight="fill" />Leaving service after this trip.</div>}
+        <ControlNotes game={game} v={v} />
         {v.handover && (
           <div className="issue info">
             <Warehouse size={16} weight="fill" />
@@ -323,6 +363,7 @@ function LineInspector({ id }: { id: string }) {
   const busDiag = diags.find((d) => d.kind === 'insufficient-buses');
   const headway = game.headwayAt(id, 0, game.t);
   const extras = game.scheduledExtras(id).slice(0, 8);
+  const detours = (game.state.detours ?? []).filter((d) => d.route === id);
   return (
     <>
       <div className="p-head">
@@ -347,6 +388,16 @@ function LineInspector({ id }: { id: string }) {
           <span className="v num muted">{headway ? `every ${headway} min now` : 'no service now'}</span>
         </div>
         {problems.map((p) => <div key={p} className="issue bad"><Warning size={16} weight="fill" />{p}</div>)}
+        {detours.length > 0 && (
+          <div className="issue info">
+            <Path size={16} weight="bold" />
+            <span className="grow">
+              {detours.every((d) => d.state === 'end') ? 'Going back to its usual route: each stretch switches once no bus is on it.' : `On a temporary detour until ${hhmm(detours[0].until)}${detours[0].why ? ` (${detours[0].why})` : ''}: ${detours.length} stretch${detours.length === 1 ? '' : 'es'} on other roads, same stops.`}
+              {askedBy(game, detours[0].src)}
+            </span>
+            {!detours.every((d) => d.state === 'end') && <button className="link" onClick={() => run(game.endDetour(id), `Line ${r.number} goes back to its usual route`)}>End now</button>}
+          </div>
+        )}
         {short && !r.suspended && busDiag && <DiagnosticButton d={busDiag} onOpen={() => useUI.getState().openModal({ kind: 'timetable', route: id })} />}
         {legDiags.slice(0, 2).map((d) => <DiagnosticButton key={d.id} d={d} onOpen={() => useUI.getState().openRouteCheck({ route: id, pat: d.pat ?? 0, leg: d.leg ?? 0 })} />)}
         {legDiags.length > 2 && (

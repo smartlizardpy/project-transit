@@ -6,12 +6,13 @@ import type { Mode, WfEdge, WfNode } from './types.ts';
 import { defaultConfig } from './registry.ts';
 import type { Value } from './types.ts';
 
-export type TemplateGroup = 'crowding' | 'reliability' | 'peaks' | 'insight' | 'fleet' | 'money' | 'city' | 'reports';
+export type TemplateGroup = 'crowding' | 'reliability' | 'control' | 'peaks' | 'insight' | 'fleet' | 'money' | 'city' | 'reports';
 
 /** Template groups, in the order the gallery shows them. */
 export const TEMPLATE_GROUPS: { id: TemplateGroup; label: string; help: string }[] = [
   { id: 'crowding', label: 'Crowding and waiting', help: 'Full buses, people left behind, crowded stops.' },
   { id: 'reliability', label: 'Reliability', help: 'Late lines, missed departures, lines short of buses.' },
+  { id: 'control', label: 'Control room', help: 'Even out bunched buses, hold for connections, turn buses back, drive round trouble, share spare buses and plan network changes.' },
   { id: 'peaks', label: 'Peak hours and sharing buses', help: 'Bring buses in before a line’s peak, park them after, share them between lines that peak at different times.' },
   { id: 'insight', label: 'Forecasts, normal days and journeys', help: 'React to what is unusual for the time of day, plan extra departures ahead from the forecast, and see where passengers travel.' },
   { id: 'fleet', label: 'Fleet and maintenance', help: 'Breakdowns, worn buses, spare buses.' },
@@ -789,6 +790,226 @@ export const TEMPLATES: Template[] = [
       g.link(ev, 'count', text, 'b');
       g.link(short, 'count', text, 'c');
       g.link(text, 'value', n, 'value');
+      return g;
+    },
+  },
+  // ── control room: gaps, connections, detours and network changes
+  {
+    id: 'even-bunching',
+    name: 'Even out bunched buses',
+    description: 'When two buses on a line run close together for 3 minutes, hold the one that has caught up at its next stop (at most 4 minutes) so the gaps even out again.',
+    mode: 'observe',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.bunching', 0, 0, { what: 'bunch', bunch: 35, for: 3 });
+      const h = g.add('action.hold', 1, 0, { max: 4 });
+      g.link(t, 'buses', h, 'bus');
+      return g;
+    },
+  },
+  {
+    id: 'hold-connections',
+    name: 'Hold for people changing lines',
+    description: 'Every 5 minutes: when at least 3 people on a bus would just miss the bus they change to, hold the connecting bus for them (at most 3 minutes).',
+    mode: 'observe',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.every', 0, 0, { minutes: 5 });
+      const c = g.add('data.connections', 1, 0, { within: 10, show: 'risk' });
+      const f = g.add('logic.filter', 2, 0, { expr: 'item.people >= 3 && item.holdNeeded <= 3' }, 'Worth holding for');
+      const h = g.add('action.hold', 3, 0, { max: 3 });
+      g.link(t, 'event', c, 'after');
+      g.link(c, 'connections', f, 'list');
+      g.link(f, 'list', h, 'bus');
+      return g;
+    },
+  },
+  {
+    id: 'turn-back-gap',
+    name: 'Turn a late bus back into a gap',
+    description: 'When a gap of more than twice the timetable gap opens on a line for 5 minutes, turn a late bus going the other way back early to fill it, if no more than 10 people on board would have to change.',
+    mode: 'observe',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.bunching', 0, 0, { what: 'gap', gap: 200, for: 5 });
+      const first = g.add('logic.first', 1, 0, {}, 'The latest one');
+      const s = g.add('action.shortTurn', 2, 0, { people: 10 });
+      g.link(t, 'turnBacks', first, 'list');
+      g.link(first, 'item', s, 'bus');
+      return g;
+    },
+  },
+  {
+    id: 'crowded-departure',
+    name: 'Extra bus before a crowded departure',
+    description: 'Every 30 minutes: if one of the line’s next departures is expected to be more than 95% full, plan an extra departure 4 minutes before it to share the crowd (from the forecast; an estimate).',
+    mode: 'observe',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.every', 0, 0, { minutes: 30, from: 6, to: 21 });
+      const d = g.add('data.occupancyForecast', 1, 0, { line: firstLine(game), count: 6, hours: '1' });
+      const f = g.add('logic.filter', 2, 0, { expr: 'item.occupancy > 95 && item.in >= 15' }, 'Too full, far enough ahead');
+      const first = g.add('logic.first', 3, 0);
+      const at = g.add('math.expr', 3, 1, { expr: 'a.in - 4' }, 'Minutes from now');
+      const x = g.add('action.scheduleExtra', 4, 0, { line: firstLine(game) });
+      g.link(t, 'event', d, 'after');
+      g.link(d, 'departures', f, 'list');
+      g.link(f, 'list', first, 'list');
+      g.link(first, 'item', at, 'a');
+      g.link(at, 'value', x, 'at');
+      g.link(first, 'found', x, 'when');
+      return g;
+    },
+  },
+  {
+    id: 'wait-for-crowd',
+    name: 'Wait for the crowd after an event',
+    description: '15 minutes before a big event ends: a departure on a line nearby that would leave in the last few minutes before the end leaves 10 minutes later instead, when the crowd comes out.',
+    mode: 'observe',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.eventEnd', 0, 0, { minutes: -15, kinds: 'crowds', people: 5000 });
+      const d = g.add('data.occupancyForecast', 1, 0, { count: 4, hours: '1' });
+      const f = g.add('logic.filter', 2, 0, { expr: 'item.in >= 6 && item.in <= 14' }, 'Leaving just before the end');
+      const m = g.add('action.adjustDeparture', 3, 0, { minutes: 10 });
+      g.link(t, 'lines', d, 'line');
+      g.link(d, 'departures', f, 'list');
+      g.link(f, 'list', m, 'departure');
+      return g;
+    },
+  },
+  {
+    id: 'detour-event',
+    name: 'Drive round a big event',
+    description: 'An hour before an event of 10,000 people or more starts, lines nearby drive round the streets within 300 m of it for four hours (stops in the area are still served).',
+    mode: 'observe',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.eventStart', 0, 0, { minutes: 60, kinds: 'crowds', people: 10000 });
+      const d = g.add('action.detour', 1, 0, { radius: 300, minutes: 240 });
+      g.link(t, 'lines', d, 'line');
+      g.link(t, 'details', d, 'at');
+      return g;
+    },
+  },
+  {
+    id: 'spares-to-short',
+    name: 'Send spare buses to lines short of buses',
+    description: 'Every 15 minutes: pair the buses parked at depots with the lines that are short of buses, so the total distance is as small as possible, and move them there.',
+    mode: 'observe',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.every', 0, 0, { minutes: 15, from: 5, to: 22 });
+      const b = g.add('data.buses', 1, 0, { which: 'parked' });
+      const l = g.add('data.lines', 1, 1);
+      const short = g.add('logic.filter', 2, 1, { expr: 'item.short > 0' }, 'Short of buses');
+      const p = g.add('logic.assign', 3, 0, { score: 'km', max: 5 });
+      const m = g.add('action.assign', 4, 0, { after: 'trips' });
+      g.link(t, 'event', b, 'after');
+      g.link(t, 'event', l, 'after');
+      g.link(l, 'lines', short, 'list');
+      g.link(b, 'buses', p, 'a');
+      g.link(short, 'list', p, 'b');
+      g.link(p, 'pairs', m, 'bus');
+      return g;
+    },
+  },
+  {
+    id: 'check-extra-worked',
+    name: 'Check back after an extra bus',
+    description: 'Every 15 minutes: if the line is more than 85% full, run an extra departure, wait 30 minutes and tell me if it is still that full (then it needs more buses or a better timetable).',
+    mode: 'observe',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.every', 0, 0, { minutes: 15, from: 6, to: 21 });
+      const line = g.add('data.line', 0, 1, { line: firstLine(game) });
+      const cmp = g.add('logic.compare', 1, 1, { op: '>', b: 85 }, 'More than 85% full?');
+      const iff = g.add('logic.if', 2, 1);
+      const go = g.add('action.dispatch', 3, 1);
+      const w = g.add('logic.wait', 3, 2, { minutes: 30 });
+      const occ = g.add('math.field', 4, 2, { field: 'occupancy' });
+      const still = g.add('logic.compare', 5, 2, { op: '>', b: 85 }, 'Still full?');
+      const n = g.add('action.notify', 6, 2, { title: '{value.name} is still crowded', body: 'An extra departure 30 minutes ago did not bring it under 85%. It may need another bus or a shorter timetable gap.', tone: 'warn' });
+      g.link(t, 'event', line, 'after');
+      g.link(line, 'occupancy', cmp, 'a');
+      g.link(cmp, 'result', iff, 'condition');
+      g.link(line, 'line', iff, 'value');
+      g.link(iff, 'yes', go, 'line');
+      g.link(iff, 'yes', w, 'value');
+      g.link(w, 'then', occ, 'record');
+      g.link(occ, 'value', still, 'a');
+      g.link(still, 'result', n, 'when');
+      g.link(w, 'then', n, 'value');
+      return g;
+    },
+  },
+  {
+    id: 'service-one-by-one',
+    name: 'Service worn buses one at a time',
+    description: 'Between 09:00 and 16:00: buses under 75% condition go for maintenance one at a time, at most one every 45 minutes, so no line is left short.',
+    mode: 'observe',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.every', 0, 0, { minutes: 30, from: 9, to: 16 });
+      const b = g.add('data.buses', 1, 0);
+      const f = g.add('logic.filter', 2, 0, { expr: 'item.condition < 75' }, 'Worn');
+      const s = g.add('logic.sort', 3, 0, { field: 'condition', order: 'asc' }, 'Most worn first');
+      const q = g.add('logic.queue', 4, 0, { per: 1, every: 45, again: 720 });
+      const m = g.add('action.service', 5, 0);
+      g.link(t, 'event', b, 'after');
+      g.link(b, 'buses', f, 'list');
+      g.link(f, 'list', s, 'list');
+      g.link(s, 'list', q, 'items');
+      g.link(q, 'next', m, 'bus');
+      return g;
+    },
+  },
+  {
+    id: 'suggest-corridor',
+    name: 'Suggest a line for an unserved corridor',
+    description: 'Every Monday at 06:00: the busiest connection between two of your areas that has stops at both ends but no line becomes a suggested new line through your stops along the road, for you to review (it never builds anything by itself).',
+    mode: 'suggest',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.week', 0, 0);
+      const u = g.add('data.unserved', 1, 0, { limit: 5 });
+      const f = g.add('logic.filter', 2, 0, { expr: "item.missing == 'line' && len(item.stops) >= 2" }, 'Stops at both ends');
+      const first = g.add('logic.first', 3, 0);
+      const p = g.add('action.proposeRoute', 4, 0, { op: 'new_line' });
+      g.link(t, 'event', u, 'after');
+      g.link(u, 'flows', f, 'list');
+      g.link(f, 'list', first, 'list');
+      g.link(first, 'item', p, 'stops');
+      return g;
+    },
+  },
+  {
+    id: 'coverage-report',
+    name: 'Weekly coverage report',
+    description: 'At the end of each week, write how many residents and jobs in your areas are within a 400 m walk of your stops, and the biggest place left out, to this workflow’s report (an estimate).',
+    mode: 'automatic',
+    group: 'control',
+    build: (game) => {
+      const g = graph(game);
+      const t = g.add('trigger.week', 0, 0);
+      const c = g.add('data.coverage', 1, 0, { walk: 400 });
+      const first = g.add('logic.first', 2, 1, {}, 'Biggest left out');
+      const r1 = g.add('action.report', 2, 0, { text: 'Within 400 m of a stop: {value.residents}% of residents, {value.jobs}% of jobs (estimate)' });
+      const r2 = g.add('action.report', 3, 1, { text: 'Biggest left out: {value.label} ({value.residents} residents, {value.jobs} jobs)' });
+      g.link(t, 'event', c, 'after');
+      g.link(c, 'coverage', r1, 'value');
+      g.link(c, 'gaps', first, 'list');
+      g.link(first, 'item', r2, 'value');
       return g;
     },
   },

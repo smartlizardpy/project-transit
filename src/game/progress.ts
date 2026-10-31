@@ -246,17 +246,22 @@ export function closeDay(game: Game, day: number) {
   // reputation drifts towards what passengers experienced; more riders = faster
   const c = state.company;
   const before = c.reputation;
+  // two parts: a drift towards how passengers rated their journeys, and a penalty for every
+  // timetabled departure that did not run
+  let drift = 0;
   if (w.trips + w.abandoned >= 30 && w.satisfaction !== null) {
     const target = w.satisfaction * 100;
     const k = Math.min(0.12, 0.03 + (w.trips + w.abandoned) / 40000);
-    c.reputation += (target - c.reputation) * k;
+    drift = (target - c.reputation) * k;
+    c.reputation += drift;
   }
-  c.reputation -= Math.min(4, w.missed * 0.04);
+  const penalty = Math.min(4, w.missed * 0.04);
+  c.reputation -= penalty;
   c.reputation = Math.max(0, Math.min(100, c.reputation));
   row.reputation = c.reputation;
   const delta = c.reputation - before;
   if (Math.abs(delta) >= 1) {
-    notify(game, delta > 0 ? 'good' : 'warn', `Reputation ${delta > 0 ? 'up' : 'down'} ${Math.abs(delta).toFixed(1)} points`, delta > 0 ? 'Passengers are happy with your service.' : explainSatisfaction(w));
+    notify(game, delta > 0 ? 'good' : 'warn', `Reputation ${delta > 0 ? 'up' : 'down'} ${Math.abs(delta).toFixed(1)} points`, delta > 0 ? 'Passengers are happy with your service.' : explainDrop(game, day, w, drift, penalty), delta > 0 ? undefined : dropTarget(game, day, penalty));
   }
 
   // solvency
@@ -277,6 +282,63 @@ export function closeDay(game: Game, day: number) {
     c.redDays = 0;
     c.status = 'ok';
   }
+}
+
+/** The ended day's missed departures per line, most first. */
+function missedByLine(game: Game, day: number): { id: Id; n: number }[] {
+  const a = game.state.analytics;
+  const rec = a.today.day === day ? a.today : a.days.find((d) => d.day === day);
+  if (!rec) return [];
+  return Object.entries(rec.routes)
+    .map(([id, rd]) => ({ id, n: rd.m.reduce((x, y) => x + y, 0) }))
+    .filter((x) => x.n > 0 && game.state.routes[x.id])
+    .sort((p, q) => q.n - p.n || p.id.localeCompare(q.id));
+}
+
+/** Why a line misses departures, when it is plain: no buses at all, or fewer than its timetable needs. */
+function missedWhy(game: Game, id: Id): string | null {
+  const r = game.state.routes[id];
+  if (!r.vehicles.length) return 'it has a timetable but no buses';
+  const need = game.requirement(id)?.peak ?? 0;
+  if (need > r.vehicles.length) return `its timetable needs ${need} buses at the busiest time and it has ${r.vehicles.length}`;
+  return null;
+}
+
+const listWords = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+/**
+ * Why reputation fell, in the order it cost points: missed departures (naming the lines, and
+ * whether they have no buses or too few), then how passengers rated their journeys.
+ */
+export function explainDrop(game: Game, day: number, w: Window, drift: number, penalty: number): string {
+  const s = game.state;
+  const parts: { pts: number; text: string }[] = [];
+  if (penalty >= 0.1) {
+    const lines = missedByLine(game, day);
+    const top = lines.slice(0, 3);
+    const named = top.map((x) => `line ${s.routes[x.id].number} (${x.n})`);
+    const noBus = top.filter((x) => !s.routes[x.id].vehicles.length).map((x) => s.routes[x.id].number);
+    // lines with some buses but too few (lines with none are named together above)
+    const reasons = top.filter((x) => s.routes[x.id].vehicles.length).map((x) => ({ n: s.routes[x.id].number, why: missedWhy(game, x.id) })).filter((x) => x.why);
+    let text = `${w.missed} timetabled departure${w.missed === 1 ? ' was' : 's were'} missed (−${penalty.toFixed(1)} points)${named.length ? `, most on ${listWords(named)}` : ''}.`;
+    if (noBus.length) text += ` Line${noBus.length === 1 ? '' : 's'} ${listWords(noBus.map(String))} ${noBus.length === 1 ? 'has' : 'have'} a timetable but no buses, so every departure is missed: give ${noBus.length === 1 ? 'it' : 'them'} buses, or suspend ${noBus.length === 1 ? 'it' : 'them'} until you do.`;
+    for (const r of reasons) text += ` Line ${r.n}: ${r.why}.`;
+    if (!noBus.length && !reasons.length) text += ' Buses that are late back, broken down or in the workshop miss their next departures: look at the line’s buses and its layover time.';
+    parts.push({ pts: penalty, text });
+  }
+  if (drift <= -0.1 || !parts.length) {
+    const hint = explainSatisfaction(w);
+    parts.push({ pts: -drift, text: parts.length ? `Passengers also rated their journeys below your reputation (−${(-drift).toFixed(1)}): ${hint.charAt(0).toLowerCase()}${hint.slice(1)}` : hint });
+  }
+  parts.sort((a, b) => b.pts - a.pts);
+  return parts.map((p) => p.text).join(' ');
+}
+
+/** What the notification opens: the line that missed the most departures, when that cost the most. */
+function dropTarget(game: Game, day: number, penalty: number) {
+  if (penalty < 0.5) return undefined;
+  const top = missedByLine(game, day)[0];
+  return top ? { kind: 'route' as const, id: top.id } : undefined;
 }
 
 function explainSatisfaction(w: Window): string {

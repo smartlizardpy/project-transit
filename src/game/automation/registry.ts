@@ -4,7 +4,7 @@
 // Values: numbers, booleans, text, records (a line, stop, bus, row: plain objects with `kind`
 // and `id`) and lists. A branch that is not taken carries OFF: nodes that receive it do not run.
 
-import type { Value, WfNode } from './types.ts';
+import type { Pending, Value, WfNode } from './types.ts';
 import type { Command } from '../commands.ts';
 import type { Game } from '../engine.ts';
 import type { LiveData, Rec } from './live.ts';
@@ -15,7 +15,10 @@ import { BASE_COMPARE, BASE_MEASURE, BASE_OPTIONS, BASE_WINDOWS, baselineText, c
 import { extraOption } from '../vehicles.ts';
 import { DAY, HOUR } from '../content.ts';
 import { hhmm, minutesLabel } from '../time.ts';
-import { DAYS_OPTIONS, FIGURE, FIGURE_OPTIONS, REPEAT_PER, busesAvailable } from './watch.ts';
+import { DAYS_OPTIONS, FIGURE, FIGURE_OPTIONS, REPEAT_PER, busesAvailable, figureValue } from './watch.ts';
+import { areaStop, assignRows, corridorStops, coverage, forecastOccupancy, gapOptions, lineGaps, missedConnections, nearbyStops, nearestStopOfLine, pointOf, roadTrip, transferPoints, type GapBus } from './ops.ts';
+import { turnPlan } from '../operations.ts';
+import type { LngLat } from '../world/graph.ts';
 import { PEAK_SOURCES, busesNotNeeded, busesToBorrow, currentOrNextPeak, linePeaks, needAt, needOver, needSteps, nowMinute, overlapMinutes, peaksText, periodLabel, ridersByHour, type Peak, type PeakSource } from './peaks.ts';
 import { DAY_FILTER, EVENT_FILTER, EVENT_FILTER_SHORT, FORECAST_FILTER, PLACE_FILTER, PLACE_SERVED_M, WEATHER_FILTER, calendarRec, demandForecast, eventRec, eventsAhead, linesNearEvent, placeRec, placesOf, weatherRecs } from './city.ts';
 
@@ -88,6 +91,19 @@ export interface NodeCtx {
   notify: (tone: 'info' | 'good' | 'warn' | 'bad', title: string, body: string) => Rec;
   /** count work for the run's budget */
   spend: (n: number) => void;
+  /** a test run from the editor: nothing in the game changes */
+  test: boolean;
+  /** pause the workflow at this node and carry on later (Wait, One at a time) */
+  later: (spec: LaterSpec) => { ok: boolean; note: string };
+}
+
+export interface LaterSpec {
+  kind: Pending['kind'];
+  due: number;
+  value?: Value;
+  until?: Pending['until'];
+  label: string;
+  key: string;
 }
 
 export interface NodeResult {
@@ -114,6 +130,8 @@ export interface NodeDef {
   /** action nodes: what they ask the game to do */
   action?: { impact: 'low' | 'high' | 'none' };
   run: (ctx: NodeCtx, inp: Record<string, Value | undefined>, cfg: Record<string, Value>, node: WfNode) => NodeResult;
+  /** Wait and One at a time: the outputs when the workflow carries on from this node */
+  resume?: (ctx: NodeCtx, p: Pending, cfg: Record<string, Value>, node: WfNode) => NodeResult;
 }
 
 // ───────────────────────────────────────────── helpers
@@ -137,6 +155,8 @@ const idOf = (v: Value | undefined, kind: string): string | null => {
   if (isRec(v) && (v.kind === kind || kind === 'any') && typeof v.id === 'string') return v.id;
   // a bus, peak or watched item connected where a line is wanted stands for its line
   if (kind === 'line' && isRec(v) && typeof v.line === 'string' && v.line) return v.line;
+  // a pair from "Best pairs" stands for its bus or stop
+  if (isRec(v) && v.kind === 'pair' && (kind === 'vehicle' || kind === 'stop') && typeof v[kind] === 'string' && v[kind]) return v[kind] as string;
   return null;
 };
 const fmt = (v: Value | undefined): string => {
@@ -259,6 +279,84 @@ const whenIn: PortDef = { id: 'when', label: 'When', type: 'any', optional: true
 const go = (inp: Record<string, Value | undefined>) => !('when' in inp) || inp.when === undefined || truthy(inp.when as EValue);
 
 // ───────────────────────────────────────────── the library
+
+// ── control room helpers
+/** An action node's result when some items needed nothing doing. */
+function actionsOut(recs: Rec[], skipped: string[]): NodeResult {
+  if (!recs.length) return { out: { result: OFF, done: false }, note: skipped.length ? skipped.join(' ') : 'Nothing to do.' };
+  const r = actionOut(recs);
+  return skipped.length ? { ...r, note: `${r.note}. ${skipped.join(' ')}` } : r;
+}
+
+/** Lines, stops and buses as they are now (a Wait carries on with fresh figures). */
+function fresh(ctx: NodeCtx, v: Value): Value {
+  if (Array.isArray(v)) return v.map((x) => fresh(ctx, x));
+  if (!isRec(v) || typeof v.id !== 'string') return v;
+  if (v.kind === 'line') return ctx.live.line(v.id) ?? v;
+  if (v.kind === 'stop') return ctx.live.stop(v.id) ?? v;
+  if (v.kind === 'vehicle') return ctx.live.busById(v.id) ?? v;
+  return v;
+}
+
+/** A bus from "Gaps between buses": its live record with the gaps around it. */
+function gapRec(ctx: NodeCtx, b: GapBus, headway: number | null): Rec {
+  const s = ctx.game.state;
+  const p = b.run.p;
+  const next = p.stops[Math.min(b.run.v.stopIdx, p.stops.length - 1)];
+  const r1 = (x: number | null) => (x === null ? null : Math.round(x * 10) / 10);
+  return { ...ctx.live.bus(b.run.v), ahead: r1(b.ahead), behind: r1(b.behind), hold: b.hold, headway, dir: p.index, nextStop: next, nextStopName: s.stops[next]?.name ?? null, towards: s.stops[p.stops[p.stops.length - 1]]?.name ?? null };
+}
+
+// "One at a time": the queue lives in the workflow's memory
+interface QueueMem { items: Value[]; last: number | null; done: Record<string, Value> }
+const itemKey = (v: Value): string => keyOf(v) ?? JSON.stringify(v);
+function queueState(ctx: NodeCtx, node: string): QueueMem {
+  const k = `@queue:${node}`;
+  const m = ctx.memory[k];
+  if (isRec(m) && Array.isArray(m.items) && isRec(m.done)) return m as unknown as QueueMem;
+  const q: QueueMem = { items: [], last: null, done: {} };
+  ctx.memory[k] = q as unknown as Value;
+  return q;
+}
+function releaseQueue(ctx: NodeCtx, cfg: Record<string, Value>, q: QueueMem, added: number): NodeResult {
+  const t = ctx.game.t;
+  const every = Math.max(1, num(cfg.every) ?? 30) * 60;
+  const per = Math.max(1, Math.min(10, num(cfg.per) ?? 1));
+  const due = q.last === null ? t : q.last + every;
+  const addNote = added ? `${added} added. ` : '';
+  if (!q.items.length) return { out: { next: OFF, batch: OFF, waiting: 0 }, note: `${addNote}Nothing waiting.` };
+  if (t < due) {
+    const r = ctx.later({ kind: 'queue', due, label: `${q.items.length} waiting`, key: 'queue' });
+    return { out: { next: OFF, batch: OFF, waiting: q.items.length }, note: `${addNote}${q.items.length} waiting; the next one goes at ${hhmm(due)}.${r.ok || ctx.test ? '' : ` ${r.note}`}` };
+  }
+  const batch = q.items.splice(0, per).map((x) => fresh(ctx, x));
+  for (const x of batch) q.done[itemKey(x)] = t;
+  q.last = t;
+  if (q.items.length) ctx.later({ kind: 'queue', due: t + every, label: `${q.items.length} waiting`, key: 'queue' });
+  return { out: { next: batch[0], batch, waiting: q.items.length }, note: `${addNote}Passed on ${batch.map((x) => fmt(x)).join(', ')}; ${q.items.length ? `${q.items.length} still waiting, the next at ${hhmm(t + every)}` : 'none left'}.` };
+}
+
+// "Best pairs": distances between items, and pair records that work as a bus, line or stop
+/** A line (or peak) item: distances to it are to its nearest stop. */
+function linePoint(v: Value): string | null {
+  return isRec(v) && (v.kind === 'line' || v.kind === 'peak') ? idOf(v, 'line') : null;
+}
+function pairKm(ctx: NodeCtx, pa: LngLat | null, la: string | null, pb: LngLat | null, lb: string | null): number | null {
+  const km = (m: number) => Math.round(m / 100) / 10;
+  if (la && pb) { const n = nearestStopOfLine(ctx.game, la, pb); return n ? km(n.m) : null; }
+  if (lb && pa) { const n = nearestStopOfLine(ctx.game, lb, pa); return n ? km(n.m) : null; }
+  if (!pa || !pb) return null;
+  const [ax, ay] = ctx.game.geo.xy(pa), [bx, by] = ctx.game.geo.xy(pb);
+  return km(Math.hypot(ax - bx, ay - by));
+}
+function pairRec(a: Value, b: Value, score: number): Rec {
+  const pickId = (kind: string) => {
+    for (const x of [a, b]) if (isRec(x) && x.kind === kind && typeof x.id === 'string') return x.id;
+    return null;
+  };
+  const line = (isRec(b) && (b.kind === 'line' || b.kind === 'peak') ? idOf(b, 'line') : null) ?? (isRec(a) && (a.kind === 'line' || a.kind === 'peak') ? idOf(a, 'line') : null);
+  return { kind: 'pair', id: `${itemKey(a)}+${itemKey(b)}`, label: `${fmt(a)} → ${fmt(b)}`, a, b, score: Math.round(score * 100) / 100, vehicle: pickId('vehicle'), line, stop: pickId('stop') };
+}
 
 export const NODES: NodeDef[] = [
   // ── triggers
@@ -698,10 +796,16 @@ export const NODES: NodeDef[] = [
       // between two different areas: trips within one area are mostly short walks, not corridors
       const between = estimatedDemand(ctx.game, { level: 'zone', view: 'unserved' }).flows.filter((f) => f.o !== f.d);
       const unserved = between.reduce((a, f) => a + f.trips, 0);
-      const flows: Value[] = between.slice(0, n).map((f) => ({
-        kind: 'flow', from: f.oLabel, to: f.dLabel, label: `${f.oLabel} → ${f.dLabel}`, trips: Math.round(f.trips), value: Math.round(f.trips),
-        missing: f.noStop >= f.noLink ? 'stop' : 'line', estimate: true,
-      }));
+      const flows: Value[] = between.slice(0, n).map((f) => {
+        // a first sketch of a line: your stops along the road between the two areas
+        const a = areaStop(ctx.game, f.o), b = areaStop(ctx.game, f.d);
+        const stops = a && b ? corridorStops(ctx.game, a, b) : null;
+        if (stops) ctx.spend(40);
+        return {
+          kind: 'flow', from: f.oLabel, to: f.dLabel, label: `${f.oLabel} → ${f.dLabel}`, trips: Math.round(f.trips), value: Math.round(f.trips),
+          missing: f.noStop >= f.noLink ? 'stop' : 'line', fromArea: f.o, toArea: f.d, fromStop: a, toStop: b, stops: stops ?? [], estimate: true,
+        };
+      });
       const first = flows[0] as Rec | undefined;
       return {
         out: { flows, first: first ?? OFF, count: flows.length, trips: Math.round(unserved) },
@@ -1291,11 +1395,12 @@ export const NODES: NodeDef[] = [
     config: [lineCfg(), moveAfterCfg], action: { impact: 'low' },
     run: (ctx, inp, cfg) => {
       if (!go(inp)) return { out: { result: OFF, done: false }, note: 'Condition was false.' };
-      const route = idOf(inp.line, 'line') ?? (str(cfg.line) || null);
-      if (!route) throw new Error('Choose or connect a line.');
-      const buses = items(inp.bus).map((x) => idOf(x, 'vehicle')).filter((x): x is string => !!x);
-      if (!buses.length) return { out: { result: OFF, done: false }, note: 'No bus connected.' };
-      return actionOut(buses.map((vehicle) => ctx.act({ type: 'assign_vehicle', vehicle, route, after: afterOf(cfg) })));
+      const fixed = idOf(inp.line, 'line') ?? (str(cfg.line) || null);
+      // a pair from "Best pairs" brings its own line
+      const jobs = items(inp.bus).map((x) => ({ vehicle: idOf(x, 'vehicle'), route: inp.line === undefined && isRec(x) && x.kind === 'pair' && typeof x.line === 'string' ? x.line : fixed })).filter((x): x is { vehicle: string; route: string | null } => !!x.vehicle);
+      if (!jobs.length) return { out: { result: OFF, done: false }, note: 'No bus connected.' };
+      if (jobs.some((j) => !j.route)) throw new Error('Choose or connect a line.');
+      return actionOut(jobs.map((j) => ctx.act({ type: 'assign_vehicle', vehicle: j.vehicle, route: j.route!, after: afterOf(cfg) })));
     },
   },
   {
@@ -1450,6 +1555,428 @@ export const NODES: NodeDef[] = [
     inputs: [], outputs: [], config: [{ id: 'text', label: 'Text', kind: 'textarea', default: '' }],
     run: () => ({ out: {} }),
   },
+  // ───────────────────────────────────────────── control room: where buses are and where people go
+
+  {
+    type: 'trigger.bunching', category: 'trigger', label: 'Buses bunch or a gap opens',
+    description: 'Runs when two buses on a line run close together, or a big gap opens between two buses, measured in timetable minutes between them (so slow traffic on its own does not set it off). The bus that has caught up comes out with how long to hold it to even out the gaps, and any late bus going the other way that could turn back early to fill a gap. Fires again only once the line is back to normal.',
+    inputs: [], trigger: { source: 'condition' },
+    outputs: [eventOut, { id: 'line', label: 'Line', type: 'line' }, { id: 'buses', label: 'Buses to hold', type: 'list', help: 'The bus behind in each close pair, with `hold`: the minutes that even out the gaps around it. Connect to “Hold a bus”.' }, { id: 'turnBacks', label: 'Could turn back', type: 'list', help: 'Late buses going the other way that could turn back early into the gap, each with the stop. Connect to “Turn a bus back early”.' }, { id: 'headway', label: 'Timetable gap', type: 'number' }],
+    config: [
+      lineCfg('Line', true),
+      { id: 'what', label: 'When', kind: 'select', default: 'bunch', options: [{ value: 'bunch', label: 'Two buses run close together' }, { value: 'gap', label: 'A big gap opens' }] },
+      { id: 'bunch', label: 'Close together: under', kind: 'number', default: 35, min: 10, max: 80, step: 5, unit: '%', help: 'Of the timetable gap. 35%: with a bus every 10 minutes, two buses under 3½ minutes apart.' },
+      { id: 'gap', label: 'Big gap: over', kind: 'number', default: 160, min: 110, max: 400, step: 10, unit: '%', help: 'Of the timetable gap. 160%: with a bus every 10 minutes, 16 minutes or more between two buses.' },
+      forCfg(5), ...hoursDays,
+    ],
+    run: (ctx, _inp, cfg) => {
+      const line = str(ctx.event.line);
+      if (!line || !ctx.game.state.routes[line]) return { out: { event: ctx.event, line: OFF, buses: OFF, turnBacks: OFF, headway: OFF }, note: 'The line no longer exists.' };
+      const gp = lineGaps(ctx.game, line, gapOptions(cfg));
+      ctx.spend(gp.buses.length * 3 + 5);
+      const o = gapOptions(cfg);
+      const hold = gp.buses.filter((b) => gp.headway && b.ahead !== null && b.ahead < o.bunch * gp.headway && b.hold > 0).map((b) => gapRec(ctx, b, gp.headway));
+      const turn = gp.turnBacks;
+      const num0 = ctx.game.state.routes[line].number;
+      return {
+        out: { event: ctx.event, line: ctx.live.line(line) ?? OFF, buses: hold.length ? hold : OFF, turnBacks: turn.length ? turn : OFF, headway: gp.headway ?? OFF },
+        note: `Line ${num0}: ${gp.bunched} close pair${gp.bunched === 1 ? '' : 's'}${gp.worstGap !== null ? `, longest gap ${gp.worstGap}% of the timetable gap` : ''}${gp.headway ? ` (a bus every ${gp.headway} min)` : ''}. ${hold.length ? `${hold.length} bus${hold.length === 1 ? '' : 'es'} to hold.` : 'None needs holding now.'}${turn.length ? ` ${turn.length} could turn back.` : ''}`,
+      };
+    },
+  },
+  {
+    type: 'data.gaps', category: 'data', label: 'Gaps between buses',
+    description: 'The buses on a line now, in order along each direction, with the time to the bus ahead and behind (in timetable minutes), the timetable gap, and how long each would have to wait to even out the gaps. Also late buses going the other way that could turn back early to fill a big gap.',
+    inputs: [afterIn, { id: 'line', label: 'Line', type: 'line', optional: true }],
+    outputs: [{ id: 'buses', label: 'Buses', type: 'list' }, { id: 'hold', label: 'To hold', type: 'list', help: 'Buses close behind another, with `hold` (minutes).' }, { id: 'turnBacks', label: 'Could turn back', type: 'list' }, { id: 'headway', label: 'Timetable gap', type: 'number' }, { id: 'worst', label: 'Longest gap', type: 'number', help: 'As a share of the timetable gap (%).' }],
+    config: [lineCfg(), { id: 'bunch', label: 'Close together: under', kind: 'number', default: 35, min: 10, max: 80, step: 5, unit: '%' }, { id: 'gap', label: 'Big gap: over', kind: 'number', default: 160, min: 110, max: 400, step: 10, unit: '%' }],
+    run: (ctx, inp, cfg) => {
+      const line = idOf(inp.line, 'line') ?? (str(cfg.line) || null);
+      if (!line || !ctx.game.state.routes[line]) throw new Error('Choose or connect a line.');
+      const o = gapOptions(cfg);
+      const gp = lineGaps(ctx.game, line, o);
+      ctx.spend(gp.buses.length * 3 + 5);
+      const buses = gp.buses.map((b) => gapRec(ctx, b, gp.headway));
+      const hold = gp.buses.filter((b) => gp.headway && b.ahead !== null && b.ahead < o.bunch * gp.headway && b.hold > 0).map((b) => gapRec(ctx, b, gp.headway));
+      const n = ctx.game.state.routes[line].number;
+      return {
+        out: { buses, hold, turnBacks: gp.turnBacks, headway: gp.headway ?? OFF, worst: gp.worstGap ?? OFF },
+        note: gp.headway === null ? `Line ${n} has no timetable running now.` : `Line ${n}: ${buses.length} bus${buses.length === 1 ? '' : 'es'} on trips, a bus every ${gp.headway} min, ${gp.bunched} close pair${gp.bunched === 1 ? '' : 's'}${gp.worstGap !== null ? `, longest gap ${gp.worstGap}%` : ''}.`,
+      };
+    },
+  },
+  {
+    type: 'data.connections', category: 'data', label: 'Connections at risk',
+    description: 'People on your buses now who change to another of your lines at a stop ahead, and whether the bus they want leaves before they get there, from their own journey plans and the buses’ predicted times. `holdNeeded`: how many minutes the connecting bus would have to wait for them. An estimate: traffic can change it.',
+    inputs: [afterIn, { id: 'line', label: 'Arriving on line', type: 'line', optional: true }],
+    outputs: [{ id: 'connections', label: 'Connections', type: 'list' }, { id: 'first', label: 'Most people', type: 'record' }, { id: 'people', label: 'People', type: 'number' }, { id: 'count', label: 'How many', type: 'number' }],
+    config: [
+      lineCfg('Arriving on line', true),
+      { id: 'within', label: 'Arriving within', kind: 'number', default: 15, min: 3, max: 60, step: 1, unit: 'min' },
+      { id: 'show', label: 'Show', kind: 'select', default: 'risk', options: [{ value: 'risk', label: 'Only those about to miss it' }, { value: 'tight', label: 'Also those with under 2 minutes to spare' }, { value: 'all', label: 'Every connection' }] },
+    ],
+    run: (ctx, inp, cfg) => {
+      const line = idOf(inp.line, 'line') ?? (str(cfg.line) || null);
+      const all = missedConnections(ctx.game, line, Math.max(3, Math.min(60, num(cfg.within) ?? 15)), 40);
+      ctx.spend(ctx.game.vehicleList().length * 4 + all.length * 10);
+      const show = str(cfg.show) || 'risk';
+      const list = all.filter((c) => show === 'all' || c.missed || (show === 'tight' && (c.margin as number) < 2));
+      const people = list.reduce((a, c) => a + (c.people as number), 0);
+      const top = [...list].sort((a, b) => (b.people as number) - (a.people as number))[0];
+      return {
+        out: { connections: list, first: top ?? OFF, people, count: list.length },
+        note: list.length ? `${list.length} connection${list.length === 1 ? '' : 's'}, ${people} ${people === 1 ? 'person' : 'people'}${top ? `; most at ${str(top.stopName)} onto line ${str(top.toLineNumber)} (${str(top.people)}, ${top.missed ? `the bus leaves ${Math.abs(num(top.margin) ?? 0)} min before they arrive` : `${str(top.margin)} min to spare`})` : ''}. Estimate.` : `No connection${show === 'all' ? 's' : ' at risk'} in the next ${num(cfg.within) ?? 15} min.`,
+      };
+    },
+  },
+  {
+    type: 'data.occupancyForecast', category: 'data', label: 'How full departures will be',
+    description: 'A line’s next departures with the expected boardings and how full each bus will be at its fullest point: the demand forecast for each hour shared between that hour’s departures, scaled by how the line’s riders have been spread along it on recent days. An estimate: use it to spot a crowded departure before it leaves.',
+    inputs: [afterIn, { id: 'line', label: 'Line', type: 'line', optional: true, list: true }],
+    outputs: [{ id: 'departures', label: 'Departures', type: 'list' }, { id: 'fullest', label: 'Fullest', type: 'record' }, { id: 'count', label: 'How many', type: 'number' }],
+    config: [lineCfg(), { id: 'count', label: 'Next', kind: 'number', default: 6, min: 1, max: 30, unit: 'departures' }, { id: 'hours', label: 'Within', kind: 'select', default: '3', options: [{ value: '1', label: 'The next hour' }, { value: '3', label: 'The next 3 hours' }, { value: '6', label: 'The next 6 hours' }] }],
+    run: (ctx, inp, cfg) => {
+      const lines = inp.line !== undefined ? items(inp.line, 5).map((x) => idOf(x, 'line')).filter((x): x is string => !!x) : [str(cfg.line)].filter(Boolean);
+      if (!lines.length) throw new Error('Choose or connect a line.');
+      const hours = Math.max(1, Math.min(6, Number(cfg.hours) || 3));
+      const n = Math.max(1, Math.min(30, num(cfg.count) ?? 6));
+      ctx.spend(hours * 60 * lines.length);
+      const deps = lines.flatMap((l) => forecastOccupancy(ctx.game, l, n, hours));
+      const fullest = deps.reduce<Rec | null>((a, d) => (!a || (d.occupancy as number) > (a.occupancy as number) ? d : a), null);
+      const assumed = deps.some((d) => d.ratioFrom === 'assumed');
+      return {
+        out: { departures: deps, fullest: fullest ?? OFF, count: deps.length },
+        note: fullest ? `${deps.length} departure${deps.length === 1 ? '' : 's'}; fullest ${str(fullest.label)}: about ${str(fullest.occupancy)}% full at its busiest point. Estimate${assumed ? ' (with little recorded riding yet, a typical spread along the line is assumed)' : ''}.` : 'No departures in that time.',
+      };
+    },
+  },
+  {
+    type: 'data.nearbyStops', category: 'data', label: 'Stops nearby',
+    description: 'Your stops within a walk of a place, stop, bus or event, nearest first, with the lines at each and the people waiting. The walk is estimated as a quarter longer than the straight line.',
+    inputs: [afterIn, { id: 'at', label: 'Near', type: 'any', help: 'A place, stop, bus or event, or any record with lng and lat (e.g. a gap from Coverage).' }],
+    outputs: [{ id: 'stops', label: 'Stops', type: 'list' }, { id: 'nearest', label: 'Nearest', type: 'record' }, { id: 'lines', label: 'Lines there', type: 'list' }, { id: 'count', label: 'How many', type: 'number' }],
+    config: [{ id: 'walk', label: 'Within a walk of', kind: 'number', default: 500, min: 50, max: 2000, step: 50, unit: 'm' }, { id: 'limit', label: 'At most', kind: 'number', default: 10, min: 1, max: 30 }],
+    run: (ctx, inp, cfg) => {
+      const at = pointOf(ctx.game, inp.at);
+      if (!at) throw new Error('Connect a place, stop, bus or event (or a record with lng and lat).');
+      ctx.spend(Math.ceil(Object.keys(ctx.game.state.stops).length / 10) + 5);
+      const walk = Math.max(50, Math.min(2000, num(cfg.walk) ?? 500));
+      const stops = nearbyStops(ctx.game, at, walk, Math.max(1, Math.min(30, num(cfg.limit) ?? 10)));
+      const ids = [...new Set(stops.flatMap((s) => s.lineIds as string[]))].sort();
+      const lines = ids.map((id) => ctx.live.line(id)).filter((x): x is Rec => !!x);
+      return {
+        out: { stops, nearest: stops[0] ?? OFF, lines: lines.length ? lines : OFF, count: stops.length },
+        note: stops.length ? `${stops.length} stop${stops.length === 1 ? '' : 's'} within ${walk} m; nearest ${str(stops[0].name)} (about ${str(stops[0].walk)} m, ${str(stops[0].walkMin)} min on foot). Lines there: ${lines.map((l) => l.number).join(', ') || 'none'}.` : `None of your stops is within a ${walk} m walk.`,
+      };
+    },
+  },
+  {
+    type: 'data.roadRoute', category: 'data', label: 'Road route between',
+    description: 'The quickest legal road route a bus could take between two places: distance, minutes at free-flow speed, and minutes in the traffic and weather now. Use it to check whether a detour or a new link is worth it.',
+    inputs: [afterIn, { id: 'from', label: 'From', type: 'any' }, { id: 'to', label: 'To', type: 'any' }],
+    outputs: [{ id: 'route', label: 'Route', type: 'record' }, { id: 'minutes', label: 'Minutes now', type: 'number' }, { id: 'km', label: 'Distance', type: 'number' }],
+    config: [],
+    run: (ctx, inp) => {
+      const a = pointOf(ctx.game, inp.from), b = pointOf(ctx.game, inp.to);
+      if (!a || !b) throw new Error('Connect two places, stops, buses or events (or records with lng and lat).');
+      ctx.spend(60);
+      const r = roadTrip(ctx.game, a, b);
+      if (!r) return { out: { route: OFF, minutes: OFF, km: OFF }, note: 'No road links those two places.' };
+      return { out: { route: r, minutes: r.minutesNow, km: r.km }, note: `${str(r.km)} km by road: ${str(r.minutes)} min at free-flow speed, about ${str(r.minutesNow)} min now${(r.slowerBy as number) > 0 ? ` (${str(r.slowerBy)}% slower in traffic)` : ''}. Estimate.` };
+    },
+  },
+  {
+    type: 'data.coverage', category: 'data', label: 'Coverage',
+    description: 'How many of the residents and jobs in your areas are within a walk of your stops (or one line’s stops), and the biggest places left out, each with lng and lat (connect one to “Stops nearby”). From the map’s land use: an estimate.',
+    inputs: [afterIn, { id: 'line', label: 'Line', type: 'line', optional: true, list: true }],
+    outputs: [{ id: 'coverage', label: 'Coverage', type: 'record' }, { id: 'residents', label: 'Residents reached', type: 'number', help: '%' }, { id: 'jobs', label: 'Jobs reached', type: 'number', help: '%' }, { id: 'gaps', label: 'Left out', type: 'list' }],
+    config: [lineCfg('Only the stops of line', true), { id: 'walk', label: 'Within a walk of', kind: 'number', default: 400, min: 100, max: 1000, step: 50, unit: 'm' }],
+    run: (ctx, inp, cfg) => {
+      const s = ctx.game.state;
+      const lines = inp.line !== undefined ? items(inp.line, 20).map((x) => idOf(x, 'line')).filter((x): x is string => !!x) : [str(cfg.line)].filter(Boolean);
+      const stops = lines.length ? [...new Set(lines.flatMap((l) => (s.routes[l] ? [...s.routes[l].stops, ...(s.routes[l].returnStops ?? [])] : [])))] : Object.keys(s.stops);
+      ctx.spend(200);
+      const c = coverage(ctx.game, stops, Math.max(100, Math.min(1000, num(cfg.walk) ?? 400)));
+      const who = lines.length ? `line${lines.length === 1 ? '' : 's'} ${lines.map((l) => s.routes[l]?.number ?? '?').join(', ')}` : 'your stops';
+      return {
+        out: { coverage: c, residents: c.residents ?? OFF, jobs: c.jobs ?? OFF, gaps: c.gaps },
+        note: c.residents === null ? 'Nobody lives or works in your areas on this map.' : `Within ${str(c.walk)} m of ${who}: ${str(c.residents)}% of residents and ${str(c.jobs)}% of jobs in your areas. Estimate.`,
+      };
+    },
+  },
+  {
+    type: 'data.transfers', category: 'data', label: 'Where lines meet',
+    description: 'Places where two of your lines meet, at the same stop or stops a short walk apart, with the average wait for the second line (half its timetable gap) and how many people changed there a day over the last week.',
+    inputs: [afterIn, { id: 'line', label: 'From line', type: 'line', optional: true }],
+    outputs: [{ id: 'transfers', label: 'Changes', type: 'list' }, { id: 'busiest', label: 'Busiest', type: 'record' }, { id: 'count', label: 'How many', type: 'number' }],
+    config: [lineCfg('From line', true), { id: 'walk', label: 'Stops at most', kind: 'number', default: 200, min: 0, max: 600, step: 50, unit: 'm apart', help: '0: only the same stop.' }, { id: 'limit', label: 'At most', kind: 'number', default: 10, min: 1, max: 30 }],
+    run: (ctx, inp, cfg) => {
+      const line = idOf(inp.line, 'line') ?? (str(cfg.line) || null);
+      const n = Object.keys(ctx.game.state.routes).length;
+      ctx.spend(n * (line ? 1 : n) * 4 + 20);
+      const list = transferPoints(ctx.game, line, Math.max(0, Math.min(600, num(cfg.walk) ?? 200)), Math.max(1, Math.min(30, num(cfg.limit) ?? 10)));
+      const top = list[0];
+      return {
+        out: { transfers: list, busiest: top ?? OFF, count: list.length },
+        note: top ? `${list.length} place${list.length === 1 ? '' : 's'} where lines meet; busiest ${str(top.label)} (about ${str(top.changesPerDay)} changes a day${top.wait !== null ? `, ${str(top.wait)} min average wait` : ''}).` : 'None of your lines meet.',
+      };
+    },
+  },
+
+  // ───────────────────────────────────────────── control room: timing and choosing
+
+  {
+    type: 'logic.wait', category: 'logic', label: 'Wait',
+    description: 'Pauses here and carries on later: after a number of minutes, or once a figure for the line, stop or bus passed in crosses a value (e.g. until line 3’s buses are under 80% full, giving up after an hour). Then only the steps after it run, with fresh figures for the line, stop or bus; nothing before it runs again. Use it to check whether an action worked.',
+    inputs: [{ id: 'value', label: 'Value', type: 'any', help: 'What it carries on with. For “until”, the line, stop or bus whose figure it checks.' }],
+    outputs: [{ id: 'then', label: 'Then', type: 'any' }, { id: 'timeout', label: 'Gave up', type: 'any', help: 'Waiting until a figure: it did not get there in time.' }, { id: 'waited', label: 'Minutes waited', type: 'number' }],
+    config: [
+      { id: 'mode', label: 'Wait', kind: 'select', default: 'minutes', options: [{ value: 'minutes', label: 'A number of minutes' }, { value: 'until', label: 'Until a figure crosses a value' }] },
+      { id: 'minutes', label: 'For', kind: 'number', default: 30, min: 1, max: 720, step: 5, unit: 'min' },
+      { id: 'figure', label: 'Until', kind: 'select', default: 'line.occupancy', options: FIGURE_OPTIONS },
+      { id: 'op', label: 'Is', kind: 'select', default: 'below', options: [{ value: 'below', label: 'Below' }, { value: 'above', label: 'Above' }] },
+      { id: 'value', label: 'Value', kind: 'number', default: 80 },
+      { id: 'timeout', label: 'Give up after', kind: 'number', default: 60, min: 5, max: 720, step: 5, unit: 'min' },
+    ],
+    run: (ctx, inp, cfg) => {
+      const v = inp.value === undefined ? null : inp.value;
+      const what = fmt(v);
+      const t = ctx.game.t;
+      if (str(cfg.mode) !== 'until') {
+        const m = Math.max(1, Math.min(720, num(cfg.minutes) ?? 30));
+        if (ctx.test) return { out: { then: v, timeout: OFF, waited: 0 }, note: `Test run: carries straight on. A real run waits ${m} min here (until ${hhmm(t + m * 60)}).` };
+        const r = ctx.later({ kind: 'wait', due: t + m * 60, value: v, label: what, key: keyOf(v) ?? 'all' });
+        return { out: { then: OFF, timeout: OFF, waited: OFF }, note: r.ok ? `Waiting ${m} min, until ${hhmm(t + m * 60)}, then carries on with ${what}.` : r.note };
+      }
+      const fig = FIGURE[str(cfg.figure)];
+      if (!fig) throw new Error('Choose a figure to wait for.');
+      const kind = fig.scope === 'bus' ? 'vehicle' : fig.scope;
+      const item = fig.scope === 'company' ? null : idOf(v, kind);
+      if (fig.scope !== 'company' && !item) throw new Error(`“${fig.label}” is a figure for a ${fig.scope}: connect one.`);
+      const op = str(cfg.op) === 'above' ? 'above' : 'below';
+      const thr = num(cfg.value) ?? 0;
+      const now = figureValue(ctx.game, fig.id, item);
+      const label = fig.scope === 'company' ? 'the company' : what;
+      if (now !== null && (op === 'above' ? now > thr : now < thr)) return { out: { then: v, timeout: OFF, waited: 0 }, note: `${fig.label} for ${label} is already ${op} ${thr} (${now}): carries straight on.` };
+      const m = Math.max(5, Math.min(720, num(cfg.timeout) ?? 60));
+      if (ctx.test) return { out: { then: v, timeout: OFF, waited: 0 }, note: `Test run: carries straight on. A real run waits until ${fig.label.toLowerCase()} for ${label} is ${op} ${thr} (now ${now ?? 'unknown'}), giving up at ${hhmm(t + m * 60)}.` };
+      const r = ctx.later({ kind: 'wait', due: t + m * 60, value: v, until: { figure: fig.id, item, op, value: thr }, label, key: item ?? 'company' });
+      return { out: { then: OFF, timeout: OFF, waited: OFF }, note: r.ok ? `Waiting until ${fig.label.toLowerCase()} for ${label} is ${op} ${thr} (now ${now ?? 'unknown'}); gives up at ${hhmm(t + m * 60)}.` : r.note };
+    },
+    resume: (ctx, p) => {
+      const mins = Math.round((ctx.game.t - p.from) / 60);
+      const v = fresh(ctx, p.value ?? null);
+      if (p.outcome === 'timeout') return { out: { then: OFF, timeout: v, waited: mins }, note: `Gave up after ${mins} min: carries on down “Gave up” with ${fmt(v)}.` };
+      return { out: { then: v, timeout: OFF, waited: mins }, note: `Carried on after ${mins} min with ${fmt(v)}${p.until ? ` (${FIGURE[p.until.figure]?.label.toLowerCase() ?? 'the figure'} is ${p.until.op} ${p.until.value})` : ''}.` };
+    },
+  },
+  {
+    type: 'logic.queue', category: 'logic', label: 'One at a time',
+    description: 'Lines items up and passes them on one (or a few) at a time, at most once every so many minutes, and carries on by itself until none are left: e.g. send worn buses for maintenance one by one so no line is left short. An item already waiting, or passed on recently, is not added again.',
+    inputs: [{ id: 'items', label: 'Items', type: 'any', help: 'A list, or one item each run (e.g. from an event trigger).' }],
+    outputs: [{ id: 'next', label: 'Next', type: 'any' }, { id: 'batch', label: 'Passed on', type: 'list' }, { id: 'waiting', label: 'Still waiting', type: 'number' }],
+    config: [
+      { id: 'per', label: 'How many at a time', kind: 'number', default: 1, min: 1, max: 10 },
+      { id: 'every', label: 'At most once every', kind: 'number', default: 30, min: 1, max: 1440, step: 5, unit: 'min' },
+      { id: 'again', label: 'Do not take the same one again for', kind: 'number', default: 240, min: 0, max: 2880, step: 30, unit: 'min' },
+    ],
+    run: (ctx, inp, cfg, node) => {
+      const q = queueState(ctx, node.id);
+      const t = ctx.game.t;
+      const again = Math.max(0, num(cfg.again) ?? 240) * 60;
+      for (const [k, at] of Object.entries(q.done)) if (t - (at as number) >= again) delete q.done[k];
+      const incoming = Array.isArray(inp.items) ? inp.items.slice(0, 50) : inp.items === undefined || inp.items === null ? [] : [inp.items];
+      let added = 0;
+      for (const it of incoming) {
+        const k = itemKey(it);
+        if (q.done[k] !== undefined || q.items.some((x) => itemKey(x) === k) || q.items.length >= 50) continue;
+        q.items.push(it);
+        added++;
+      }
+      ctx.spend(incoming.length + 1);
+      return releaseQueue(ctx, cfg, q, added);
+    },
+    resume: (ctx, _p, cfg, node) => releaseQueue(ctx, cfg, queueState(ctx, node.id), 0),
+  },
+  {
+    type: 'logic.assign', category: 'logic', label: 'Best pairs',
+    description: 'Pairs items of list A with items of list B so the total score is as low (or as high) as possible, choosing every pair together rather than one at a time. E.g. spare buses (A) to lines short of buses (B), scored by `km`, the distance from the bus to the line. Each item is used at most once; a pair whose score is empty (null) is never made.',
+    inputs: [{ id: 'a', label: 'A', type: 'list' }, { id: 'b', label: 'B', type: 'list' }],
+    outputs: [{ id: 'pairs', label: 'Pairs', type: 'list', help: 'Each with `a`, `b` and `score`. A pair of a bus and a line works where a bus or a line is wanted (e.g. “Move bus to line”).' }, { id: 'first', label: 'Best pair', type: 'record' }, { id: 'leftA', label: 'A left over', type: 'list' }, { id: 'leftB', label: 'B left over', type: 'list' }],
+    config: [
+      { id: 'score', label: 'Score', kind: 'expr', default: 'km', vars: ['a', 'b', 'km'], help: '`a` and `b` are the two items, `km` the distance between them on the map (null if either has no place). E.g. km, or km - b.short * 5.' },
+      { id: 'goal', label: 'Best is', kind: 'select', default: 'low', options: [{ value: 'low', label: 'The lowest total' }, { value: 'high', label: 'The highest total' }] },
+      { id: 'max', label: 'At most', kind: 'number', default: 10, min: 1, max: 30, unit: 'pairs' },
+    ],
+    run: (ctx, inp, cfg) => {
+      const A = Array.isArray(inp.a) ? inp.a.slice(0, 30) : [];
+      const B = Array.isArray(inp.b) ? inp.b.slice(0, 30) : [];
+      if (!A.length || !B.length) return { out: { pairs: [], first: OFF, leftA: A, leftB: B }, note: `Nothing to pair: list ${A.length ? 'B' : 'A'} is empty.` };
+      const src = str(cfg.score) || 'km';
+      const high = str(cfg.goal) === 'high';
+      const ptsA = A.map((x) => pointOf(ctx.game, x)), ptsB = B.map((x) => pointOf(ctx.game, x));
+      const lineA = A.map(linePoint), lineB = B.map(linePoint);
+      const score: number[][] = A.map((a, i) => B.map((b, j) => {
+        const km = pairKm(ctx, ptsA[i], lineA[i], ptsB[j], lineB[j]);
+        const v = expr(ctx, src, { a, b, km });
+        const n = num(v);
+        return n === null ? Infinity : high ? -n : n;
+      }));
+      const pick = assignRows(score);
+      const max = Math.max(1, Math.min(30, num(cfg.max) ?? 10));
+      let pairs = pick.map((j, i) => (j < 0 ? null : { i, j, s: high ? -score[i][j] : score[i][j] })).filter((x): x is { i: number; j: number; s: number } => !!x);
+      pairs.sort((x, y) => (high ? y.s - x.s : x.s - y.s) || x.i - y.i);
+      pairs = pairs.slice(0, max);
+      const usedA = new Set(pairs.map((p) => p.i)), usedB = new Set(pairs.map((p) => p.j));
+      const recs = pairs.map((p) => pairRec(A[p.i], B[p.j], p.s));
+      const total = pairs.reduce((n, p) => n + p.s, 0);
+      return {
+        out: { pairs: recs, first: recs[0] ?? OFF, leftA: A.filter((_, i) => !usedA.has(i)), leftB: B.filter((_, j) => !usedB.has(j)) },
+        note: recs.length ? `${recs.length} pair${recs.length === 1 ? '' : 's'}, total score ${Math.round(total * 10) / 10} (${high ? 'highest' : 'lowest'} possible): ${recs.slice(0, 3).map((r) => str(r.label)).join('; ')}${recs.length > 3 ? '…' : ''}.` : 'No pair has a score: nothing paired.',
+      };
+    },
+  },
+
+  // ───────────────────────────────────────────── control room: actions
+
+  {
+    type: 'action.hold', category: 'action', label: 'Hold a bus',
+    description: 'Keeps a bus at a stop for a few minutes after its normal stop, doors open, then it carries on. Use it to even out bunched buses (hold the one that has caught up) or to wait for people changing from a late bus. A bus from “Gaps between buses” is held for the minutes that even out the gaps; a connection from “Connections at risk” holds the connecting bus as long as needed.',
+    inputs: [whenIn, { id: 'bus', label: 'Bus', type: 'any', list: true, help: 'A bus, a bus from “Gaps between buses”, or a connection from “Connections at risk”.' }, { id: 'stop', label: 'At stop', type: 'stop', optional: true, help: 'Unconnected: its next stop (or the stop it is at), or the connection’s stop.' }, { id: 'minutes', label: 'Minutes', type: 'number', optional: true }],
+    outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }],
+    config: [
+      { id: 'minutes', label: 'For', kind: 'number', default: 2, min: 1, max: 10, unit: 'min', help: 'For a plain bus. Buses from “Gaps between buses” and connections bring their own minutes.' },
+      { id: 'max', label: 'Never longer than', kind: 'number', default: 5, min: 1, max: 10, unit: 'min', help: 'People on board wait too, so keep holds short.' },
+    ],
+    action: { impact: 'low' },
+    run: (ctx, inp, cfg) => {
+      if (!go(inp)) return { out: { result: OFF, done: false }, note: 'Condition was false: no bus held.' };
+      const list = items(inp.bus);
+      if (!list.length) return { out: { result: OFF, done: false }, note: 'No bus connected.' };
+      const cap = Math.max(1, Math.min(10, num(cfg.max) ?? 5));
+      const recs: Rec[] = [], skipped: string[] = [];
+      for (const x of list) {
+        let bus: string | null, stop = idOf(inp.stop, 'stop'), m = num(inp.minutes) ?? (num(cfg.minutes) ?? 2);
+        if (isRec(x) && x.kind === 'connection') {
+          bus = str(x.connectingBus) || null;
+          stop ??= str(x.stop) || null;
+          if (inp.minutes === undefined) m = num(x.holdNeeded) ?? 0;
+          if (!bus) { skipped.push(`No bus is running the connection at ${str(x.stopName)} yet.`); continue; }
+        } else {
+          bus = idOf(x, 'vehicle');
+          if (inp.minutes === undefined && isRec(x) && typeof x.hold === 'number') m = x.hold;
+        }
+        if (!bus) continue;
+        if (m < 1) { skipped.push(`${isRec(x) && x.kind === 'connection' ? `Line ${str(x.toLineNumber)} at ${str(x.stopName)}` : fmt(x)} needs no hold.`); continue; }
+        recs.push(ctx.act({ type: 'hold_vehicle', vehicle: bus, minutes: Math.min(cap, Math.round(m)), ...(stop ? { stop } : {}) }));
+      }
+      return actionsOut(recs, skipped);
+    },
+  },
+  {
+    type: 'action.shortTurn', category: 'action', label: 'Turn a bus back early',
+    description: 'Ends a bus’s trip at a stop before the end of the line and runs it back the other way from there. Everyone going further gets off for the next bus (they have already paid). The usual way to get a late bus back on time, or to fill a big gap going the other way. Connect a suggestion from “Gaps between buses” (it says where), or a bus and a stop. Lines that go both ways only.',
+    inputs: [whenIn, { id: 'bus', label: 'Bus', type: 'any', list: true }, { id: 'stop', label: 'At stop', type: 'stop', optional: true, help: 'Unconnected: the stop the suggestion names.' }],
+    outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }],
+    config: [{ id: 'people', label: 'Only if at most', kind: 'number', default: 15, min: 0, max: 150, unit: 'people', help: 'have to get off and wait for the next bus.' }],
+    action: { impact: 'low' },
+    run: (ctx, inp, cfg) => {
+      if (!go(inp)) return { out: { result: OFF, done: false }, note: 'Condition was false: no bus turned back.' };
+      const list = items(inp.bus, 3);
+      if (!list.length) return { out: { result: OFF, done: false }, note: 'No bus connected.' };
+      const most = Math.max(0, num(cfg.people) ?? 15);
+      const recs: Rec[] = [], skipped: string[] = [];
+      for (const x of list) {
+        const bus = idOf(x, 'vehicle');
+        const stop = idOf(inp.stop, 'stop') ?? (isRec(x) && typeof x.stop === 'string' ? x.stop : null);
+        if (!bus) continue;
+        if (!stop) throw new Error('Connect a stop to turn back at (or a suggestion from “Gaps between buses”).');
+        const plan = turnPlan(ctx.game, bus, stop);
+        if (plan.ok && plan.value.riders > most) { skipped.push(`${ctx.game.state.vehicles[bus]?.fleetNo ?? 'The bus'} has ${plan.value.riders} people going further: more than ${most}, so it carries on.`); continue; }
+        recs.push(ctx.act({ type: 'short_turn', vehicle: bus, stop }));
+      }
+      return actionsOut(recs, skipped);
+    },
+  },
+  {
+    type: 'action.adjustDeparture', category: 'action', label: 'Move a departure',
+    description: 'Moves one departure a few minutes earlier or later (at most 15 from its timetable time) without changing the rest of the timetable: e.g. spread two crowded departures apart, or leave a little later for people off a late train. Connect a departure from “How full departures will be”. A timetable change puts it back.',
+    inputs: [whenIn, { id: 'departure', label: 'Departure', type: 'any', list: true }, { id: 'minutes', label: 'Minutes', type: 'number', optional: true }],
+    outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }],
+    config: [{ id: 'minutes', label: 'By', kind: 'number', default: 3, min: -10, max: 15, unit: 'min', help: 'Negative: earlier. It can only leave 5 minutes from now or later.' }],
+    action: { impact: 'low' },
+    run: (ctx, inp, cfg) => {
+      if (!go(inp)) return { out: { result: OFF, done: false }, note: 'Condition was false: no departure moved.' };
+      const m = Math.round(num(inp.minutes) ?? num(cfg.minutes) ?? 3);
+      const recs: Rec[] = [];
+      for (const x of items(inp.departure, 5)) {
+        const trip = isRec(x) ? num(x.trip) : num(x);
+        const route = isRec(x) ? str(x.line) : '';
+        const t = trip !== null ? ctx.game.trip(trip) : undefined;
+        if (!t) throw new Error('Connect a departure from “How full departures will be”.');
+        recs.push(ctx.act({ type: 'adjust_departure', route: route || t.route, trip: t.id, minutes: m }));
+      }
+      return actionsOut(recs, []);
+    },
+  },
+  {
+    type: 'action.detour', category: 'action', label: 'Temporary detour',
+    description: 'Sends a line round an area for a while (a busy event, a jam, a closure) on the quickest other roads between the same stops. The stops stay the same; a stop inside the area is still served. Each changed stretch switches over once no bus is driving it, and back when the time is up. Choose “End the detour” to end one early.',
+    inputs: [whenIn, { id: 'line', label: 'Line', type: 'line', optional: true, list: true }, { id: 'at', label: 'Around', type: 'any', optional: true, help: 'A place, event or stop, or a record with lng and lat.' }],
+    outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }],
+    config: [
+      lineCfg(),
+      { id: 'do', label: 'Do', kind: 'select', default: 'start', options: [{ value: 'start', label: 'Start a detour' }, { value: 'end', label: 'End the detour' }] },
+      { id: 'radius', label: 'Avoid within', kind: 'number', default: 300, min: 100, max: 800, step: 50, unit: 'm', help: 'Of the centre of what is connected to “Around”.' },
+      { id: 'minutes', label: 'For', kind: 'number', default: 120, min: 15, max: 360, step: 15, unit: 'min' },
+    ],
+    action: { impact: 'low' },
+    run: (ctx, inp, cfg) => {
+      if (!go(inp)) return { out: { result: OFF, done: false }, note: 'Condition was false: no detour.' };
+      const lines = inp.line !== undefined ? items(inp.line, 5).map((x) => idOf(x, 'line')).filter((x): x is string => !!x) : [str(cfg.line)].filter(Boolean);
+      if (!lines.length) throw new Error('Choose or connect a line.');
+      if (str(cfg.do) === 'end') return actionsOut(lines.map((route) => ctx.act({ type: 'end_detour', route })), []);
+      const at = pointOf(ctx.game, inp.at);
+      if (!at) throw new Error('Connect what to drive round: a place, event or stop.');
+      ctx.spend(lines.length * 80);
+      const why = isRec(inp.at) ? str(inp.at.eventTitle) || str(inp.at.title) || str(inp.at.name) || str(inp.at.label) : '';
+      return actionsOut(lines.map((route) => ctx.act({ type: 'detour', route, at, radius: num(cfg.radius) ?? 300, minutes: num(cfg.minutes) ?? 120, why })), []);
+    },
+  },
+  {
+    type: 'action.proposeRoute', category: 'action', label: 'Suggest a route change',
+    description: 'Prepares a change to your network for you to review: add a stop to a line (where it adds the least distance), take a stop off a line, or a new line through a list of stops (e.g. a corridor from “Unserved trips”). It never changes anything by itself: each suggestion waits for your approval in Network Control → Automation for 3 days, with the distance, time and buses it would add.',
+    inputs: [whenIn, { id: 'line', label: 'Line', type: 'line', optional: true }, { id: 'stop', label: 'Stop', type: 'stop', optional: true, list: true }, { id: 'stops', label: 'Stops of a new line', type: 'list', optional: true, help: 'Stops in order, or a connection from “Unserved trips” (it brings a sketch of the line).' }],
+    outputs: [{ id: 'result', label: 'Result', type: 'record' }, { id: 'done', label: 'Done', type: 'boolean' }],
+    config: [
+      { id: 'op', label: 'Suggest', kind: 'select', default: 'add_stop', options: [{ value: 'add_stop', label: 'Add a stop to a line' }, { value: 'remove_stop', label: 'Take a stop off a line' }, { value: 'new_line', label: 'A new line' }] },
+      lineCfg('Line', true),
+    ],
+    action: { impact: 'high' },
+    run: (ctx, inp, cfg) => {
+      if (!go(inp)) return { out: { result: OFF, done: false }, note: 'Condition was false: nothing suggested.' };
+      const op = str(cfg.op) || 'add_stop';
+      if (op === 'new_line') {
+        const src = inp.stops;
+        const sketches: string[][] = [];
+        const listOf = (v: Value | undefined) => (Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]);
+        const all = listOf(src);
+        if (all.some((x) => isRec(x) && x.kind === 'flow')) {
+          for (const f of all.slice(0, 3)) if (isRec(f) && Array.isArray(f.stops) && f.stops.length >= 2) sketches.push(f.stops.map((x) => str(x)));
+        } else {
+          const ids = all.map((x) => idOf(x, 'stop')).filter((x): x is string => !!x);
+          if (ids.length) sketches.push(ids);
+        }
+        if (!sketches.length) return { out: { result: OFF, done: false }, note: 'No stops to make a line from (a connection from “Unserved trips” needs stops in both areas).' };
+        return actionsOut(sketches.map((stops) => ctx.act({ type: 'change_route', change: { op: 'new_line', stops } })), []);
+      }
+      const route = idOf(inp.line, 'line') ?? (str(cfg.line) || null);
+      if (!route) throw new Error('Choose or connect a line.');
+      const stops = items(inp.stop, 3).map((x) => idOf(x, 'stop')).filter((x): x is string => !!x);
+      if (!stops.length) return { out: { result: OFF, done: false }, note: 'No stop connected.' };
+      return actionsOut(stops.map((stop) => ctx.act({ type: 'change_route', change: { op: op === 'remove_stop' ? 'remove_stop' : 'add_stop', route, stop } })), []);
+    },
+  },
 ];
 
 export const NODE: Record<string, NodeDef> = Object.fromEntries(NODES.map((n) => [n.type, n]));
@@ -1538,6 +2065,10 @@ export function triggerLabel(game: Game, node: WfNode): string {
       return `${when}${timingWords(c)}`;
     }
     case 'trigger.manual': return 'Run by hand';
+    case 'trigger.bunching': {
+      const who = line ? `Line ${game.state.routes[String(c.line)]?.number ?? '?'}` : 'A line';
+      return String(c.what) === 'gap' ? `${who}: a gap over ${c.gap ?? 160}% of the timetable gap${timingWords(c)}` : `${who}: buses under ${c.bunch ?? 35}% of the timetable gap apart${timingWords(c)}`;
+    }
     case 'trigger.forecast': {
       const f = String(c.when ?? 'any');
       return f === 'any' ? 'Tomorrow’s forecast (18:00)' : `Forecast at 18:00: ${FORECAST_FILTER.find((x) => x.value === f)?.label.toLowerCase() ?? f}`;

@@ -8,12 +8,12 @@
 //   limits, cooldowns, duplicates, conflicts between workflows, and the workflow's mode.
 
 import type { Game } from '../engine.ts';
-import type { ActionOutcome, ActionRecord, AutomationState, Mode, NodeTrace, Proposal, RunRecord, Value, Workflow } from './types.ts';
-import { NODE, OFF, isOff, trim, triggerLabel, type Flow, type NodeCtx } from './registry.ts';
+import type { ActionOutcome, ActionRecord, AutomationState, Mode, NodeTrace, Pending, Proposal, RunRecord, Value, Workflow } from './types.ts';
+import { NODE, OFF, isOff, trim, triggerLabel, type Flow, type LaterSpec, type NodeCtx } from './registry.ts';
 import { validateWorkflow, GRAPH_LIMITS, type Validation } from './validate.ts';
 import { LiveData, type Rec } from './live.ts';
 import { setDepartGate } from './events.ts';
-import { checkCommand, runCommand, type Command } from '../commands.ts';
+import { ALWAYS_ASK, checkCommand, runCommand, type Command } from '../commands.ts';
 import { DAY, HOUR, MODEL } from '../content.ts';
 import { dayTotals } from '../finance.ts';
 import { hhmm, serviceDayOf, weekdayOf } from '../time.ts';
@@ -23,7 +23,8 @@ import { waitingAt } from '../passengers.ts';
 import { dayMatches, eventKindMatches, forecastMatches, linesNearEvent, weatherChangeMatches, weatherRecs } from './city.ts';
 import { actualEnd, type GameEvent } from '../events.ts';
 import { CONDITION_LABEL, hourCondition } from '../weather.ts';
-import { FIGURE, REPEAT_PER, condStep, firedKey, gaveUpLastHour, markFired, pendingKey, repeatOk, shortOf, busesAvailable, busesNeededNow, timeOk, watchTest, watchedItems } from './watch.ts';
+import { gapOptions, lineGaps } from './ops.ts';
+import { FIGURE, REPEAT_PER, condStep, figureValue, firedKey, gaveUpLastHour, markFired, pendingKey, repeatOk, shortOf, busesAvailable, busesNeededNow, timeOk, watchTest, watchedItems } from './watch.ts';
 
 export const RUN_LIMITS = {
   /** node evaluations and list items handled per run */
@@ -113,7 +114,12 @@ export interface RunOptions {
   allowHighImpact?: boolean;
   /** an unsaved copy from the editor: validate it afresh instead of using the cache */
   draft?: boolean;
+  /** carry on from a Wait or One-at-a-time node */
+  resume?: Pending;
 }
+
+/** Workflows waiting at a Wait or One-at-a-time node: at most this many at once. */
+export const PENDING_LIMITS = { perWorkflow: 30, total: 200 };
 
 interface RunState {
   game: Game;
@@ -127,6 +133,8 @@ interface RunState {
   /** target+key acted on in this run */
   seen: Set<string>;
   memory: Record<string, Value>;
+  event: Rec;
+  resume: Pending | null;
 }
 
 export function runWorkflow(game: Game, wf: Workflow, trigger: { node: string | null; event: Rec; label: string }, opts: RunOptions = {}): RunRecord {
@@ -144,6 +152,7 @@ export function runWorkflow(game: Game, wf: Workflow, trigger: { node: string | 
     actions: [],
     trace: [],
     test: test || undefined,
+    resumed: opts.resume ? true : undefined,
   };
   const val = opts.draft ? validateWorkflow(wf, game.state) : validation(game, wf);
   if (!val.ok) {
@@ -152,7 +161,7 @@ export function runWorkflow(game: Game, wf: Workflow, trigger: { node: string | 
     return finish(game, wf, run, test);
   }
   const memory = test ? structuredClone(a.memory[wf.id] ?? {}) : (a.memory[wf.id] ??= {});
-  const rs: RunState = { game, wf, mode: run.mode, test, allowHigh: opts.allowHighImpact ?? wf.allowHighImpact, run, work: 0, live: new LiveData(game), seen: new Set(), memory };
+  const rs: RunState = { game, wf, mode: run.mode, test, allowHigh: opts.allowHighImpact ?? wf.allowHighImpact, run, work: 0, live: new LiveData(game), seen: new Set(), memory, event: trigger.event, resume: opts.resume ?? null };
   try {
     evaluateGraph(rs, wf, val, trigger.node, trigger.event, memory, run.trace!, 0);
   } catch (e) {
@@ -211,6 +220,31 @@ function evaluateGraph(rs: RunState, wf: Workflow, val: Validation, start: strin
   const needed = new Set(val.order);
   const values = new Map<string, Flow>();
   const game = rs.game;
+  // carrying on after a Wait: only the steps after it run, plus data and logic they read that
+  // does not come before the Wait. Nothing before it runs again, so no action is repeated.
+  const resume = rs.resume && depth === 0 ? rs.resume : null;
+  let after: Set<string> = new Set(), reads: Set<string> = new Set();
+  if (resume) {
+    const outs = new Map<string, string[]>(), ins = new Map<string, string[]>();
+    for (const e of wf.edges) {
+      outs.set(e.from, [...(outs.get(e.from) ?? []), e.to]);
+      ins.set(e.to, [...(ins.get(e.to) ?? []), e.from]);
+    }
+    const walk = (from: string[], m: Map<string, string[]>) => {
+      const seen = new Set<string>();
+      const stack = from.flatMap((x) => m.get(x) ?? []);
+      while (stack.length) {
+        const x = stack.pop()!;
+        if (seen.has(x)) continue;
+        seen.add(x);
+        stack.push(...(m.get(x) ?? []));
+      }
+      return seen;
+    };
+    after = walk([resume.node], outs);
+    const before = walk([resume.node], ins);
+    reads = new Set([...walk([...after], ins)].filter((x) => !before.has(x) && x !== resume.node && !after.has(x)));
+  }
   const ctxBase = (nodeId: string): NodeCtx => ({
     game, live: rs.live, event, memory,
     key: `${wf.id}:${nodeId}`,
@@ -227,6 +261,8 @@ function evaluateGraph(rs: RunState, wf: Workflow, val: Validation, start: strin
     },
     notify: (tone, title, body) => notice(rs, nodeId, tone, title, body),
     spend: (n) => spend(rs, n),
+    test: rs.test,
+    later: (spec) => later(rs, wf, nodeId, spec, depth),
   });
   let result: Value = null;
   for (const id of val.order) {
@@ -236,6 +272,26 @@ function evaluateGraph(rs: RunState, wf: Workflow, val: Validation, start: strin
     spend(rs, 1);
     rs.run.evaluated++;
     const offAll = () => { for (const p of def.outputs) values.set(`${id}:${p.id}`, OFF); };
+    if (resume) {
+      if (id === resume.node) {
+        try {
+          const res = def.resume ? def.resume(ctxBase(id), resume, { ...defaultsFor(node.type), ...node.config }, node) : { out: {} };
+          for (const p of def.outputs) values.set(`${id}:${p.id}`, p.id in res.out ? res.out[p.id] : OFF);
+          trace.push({ node: id, status: 'ok', outputs: Object.fromEntries(def.outputs.map((p) => [p.id, preview(res.out[p.id])])), note: res.note });
+        } catch (e) {
+          if (e instanceof Stop) throw e;
+          const msg = e instanceof Error ? e.message : 'This node failed.';
+          trace.push({ node: id, status: 'error', error: msg });
+          throw new Error(`${node.label || def.label}: ${msg}`);
+        }
+        continue;
+      }
+      const reader = reads.has(id) && !def.trigger && def.category !== 'action' && !def.resume && !CHANGES.has(def.type);
+      if (!after.has(id) && !reader) {
+        offAll();
+        continue;
+      }
+    }
     if (def.trigger && id !== start) {
       offAll();
       continue;
@@ -274,6 +330,44 @@ function evaluateGraph(rs: RunState, wf: Workflow, val: Validation, start: strin
     }
   }
   return result;
+}
+
+/** Nodes that change something (memory, or a function that may act): after a Wait they run only if they come after it. */
+const CHANGES = new Set(['state.set', 'state.counter', 'state.changed', 'state.cooldown', 'state.once', 'adv.function', 'adv.forEach']);
+
+/** Pause the run's workflow at a node; it carries on from there when due (see processAutomation). */
+function later(rs: RunState, wf: Workflow, node: string, spec: LaterSpec, depth: number): { ok: boolean; note: string } {
+  if (depth > 0) throw new Error('Wait and One at a time cannot be used inside a function: put them in the workflow that calls it.');
+  if (rs.test) return { ok: false, note: 'test' };
+  const a = rs.game.state.automation;
+  const list = (a.pending ??= []);
+  const same = list.find((p) => p.wf === wf.id && p.node === node && p.key === spec.key);
+  if (same) {
+    if (spec.kind === 'queue') same.due = Math.min(same.due, spec.due);
+    return { ok: false, note: `Already waiting for ${same.label} since ${hhmm(same.from)}.` };
+  }
+  if (list.filter((p) => p.wf === wf.id).length >= PENDING_LIMITS.perWorkflow) return { ok: false, note: `This workflow is already waiting in ${PENDING_LIMITS.perWorkflow} places: nothing more is added until one carries on.` };
+  if (list.length >= PENDING_LIMITS.total) return { ok: false, note: `Your workflows are already waiting in ${PENDING_LIMITS.total} places: nothing more is added until one carries on.` };
+  const id = (a.counters.pending = (a.counters.pending ?? 0) + 1);
+  list.push({ id, wf: wf.id, node, kind: spec.kind, due: spec.due, from: rs.game.t, event: rs.event, label: spec.label, key: spec.key, ...(spec.value === undefined ? {} : { value: spec.value }), ...(spec.until ? { until: spec.until } : {}) });
+  return { ok: true, note: '' };
+}
+
+/** Is a pending wait ready to carry on? */
+function pendingOutcome(game: Game, p: Pending): 'then' | 'timeout' | null {
+  const t = game.t;
+  if (p.kind === 'queue' || !p.until) return t >= p.due ? 'then' : null;
+  const v = figureValue(game, p.until.figure, p.until.item);
+  if (v !== null && (p.until.op === 'above' ? v > p.until.value : v < p.until.value)) return 'then';
+  return t >= p.due ? 'timeout' : null;
+}
+
+function resumeLabel(game: Game, p: Pending): string {
+  const mins = Math.round((game.t - p.from) / 60);
+  if (p.kind === 'queue') return `Next one from “One at a time” (${p.label})`;
+  if (!p.until) return `Carried on after waiting ${mins} min (${p.label})`;
+  const fig = FIGURE[p.until.figure]?.label.toLowerCase() ?? 'the figure';
+  return p.outcome === 'timeout' ? `Gave up waiting after ${mins} min: ${p.label}, ${fig} not ${p.until.op} ${p.until.value}` : `${p.label}: ${fig} ${p.until.op} ${p.until.value} after ${mins} min`;
 }
 
 const defaultCache = new Map<string, Record<string, Value>>();
@@ -355,15 +449,19 @@ function act(rs: RunState, node: string, cmd: Command): Rec {
   // modes
   if (rs.test) return record('observed', check.summary, { reason: 'Test run: nothing was changed.', effect: check.transition, cost: check.cost });
   if (rs.mode === 'observe') return record('observed', check.summary, { reason: 'Observe mode: nothing was changed.', effect: check.transition, cost: check.cost });
-  const needsApproval = rs.mode === 'suggest' || (check.impact === 'high' && !rs.allowHigh);
+  // route changes are always the player's call, whatever the workflow's mode
+  const always = ALWAYS_ASK.has(cmd.type);
+  const needsApproval = always || rs.mode === 'suggest' || (check.impact === 'high' && !rs.allowHigh);
   if (needsApproval) {
     const dup = a.proposals.find((p) => p.status === 'open' && p.wf === wf.id && JSON.stringify(p.cmd) === JSON.stringify(cmd));
     if (dup) return record('duplicate', check.summary, { reason: 'The same suggestion is already waiting for your approval.' });
-    const p: Proposal = { id: ++a.counters.proposal, wf: wf.id, node, t, expires: t + RUN_LIMITS.proposalMin * 60, cmd, summary: check.summary, detail: check.transition, impact: check.impact, status: 'open' };
+    // a route change takes some thought, so it stays open for three days
+    const p: Proposal = { id: ++a.counters.proposal, wf: wf.id, node, t, expires: t + (always ? 3 * DAY : RUN_LIMITS.proposalMin * 60), cmd, summary: check.summary, detail: check.transition, impact: check.impact, status: 'open' };
     a.proposals.push(p);
     trimProposals(a);
     d.actions++;
-    return record('proposed', check.summary, { reason: rs.mode === 'suggest' ? 'Suggest mode: approve it in Network Control → Automation.' : 'A big change: it needs your approval.', effect: check.transition, cost: check.cost });
+    const why = always ? 'Route changes always wait for your approval: see Network Control → Automation (open for 3 days).' : rs.mode === 'suggest' ? 'Suggest mode: approve it in Network Control → Automation.' : 'A big change: it needs your approval.';
+    return record('proposed', check.summary, { reason: why, effect: check.transition, cost: check.cost });
   }
   game.automationActing = true;
   let r: ReturnType<typeof runCommand>;
@@ -473,6 +571,8 @@ export function processAutomation(game: Game) {
   const wfs = a.order.map((id) => a.workflows[id]).filter((w): w is Workflow => !!w && w.enabled && w.kind === 'workflow');
   if (a.paused || !wfs.length) {
     a.queue.length = 0;
+    // switching every workflow off ends their waits (pausing keeps them)
+    if (!wfs.length && a.pending?.length) a.pending.length = 0;
     return;
   }
   const hour = Math.floor(t / HOUR);
@@ -483,7 +583,7 @@ export function processAutomation(game: Game) {
   const wd = weekdayOf(game.state.clock.startWeekday, t);
   // event trigger keys (`ev:` …) and repeat limits (`rp:` …) hold the time they can be forgotten
   if (mod === 0) for (const [k, v] of Object.entries(a.schedule)) if ((k.startsWith('ev:') || k.startsWith('rp:')) && v < t) delete a.schedule[k];
-  const fire = (wf: Workflow, nodeId: string, event: Rec): boolean => {
+  const fire = (wf: Workflow, nodeId: string, event: Rec, resume?: Pending): boolean => {
     if (budget <= 0) return false;
     const n = (a.hourly.byWf[wf.id] ?? 0) + 1;
     a.hourly.byWf[wf.id] = n;
@@ -496,7 +596,8 @@ export function processAutomation(game: Game) {
     }
     budget--;
     const node = wf.nodes.find((x) => x.id === nodeId)!;
-    runWorkflow(game, wf, { node: nodeId, event: { ...event, time: hhmm(t) }, label: eventLabel(game, node, event) });
+    if (resume) runWorkflow(game, wf, { node: nodeId, event, label: resumeLabel(game, resume) }, { resume });
+    else runWorkflow(game, wf, { node: nodeId, event: { ...event, time: hhmm(t) }, label: eventLabel(game, node, event) });
     return true;
   };
 
@@ -638,6 +739,21 @@ export function processAutomation(game: Game) {
           fire(wf, node.id, { kind: 'event', source: 'calendar', day: kind });
           break;
         }
+        case 'trigger.bunching': {
+          const only = typeof c.line === 'string' && c.line ? game.state.routes[c.line] : null;
+          const ok = timeOk(game, c, t);
+          const o = gapOptions(c);
+          const gap = String(c.what ?? 'bunch') === 'gap';
+          for (const r of only ? [only] : Object.values(game.state.routes)) {
+            if (r.suspended) continue;
+            const gp = lineGaps(game, r.id, o);
+            const worst = gp.worstGap ?? 0;
+            const on = gap ? worst >= o.gap * 100 : gp.bunched > 0;
+            const off = gap ? worst < o.gap * 85 : gp.bunched === 0;
+            cond(wf, node, r.id, on, off, () => ({ kind: 'event', source: 'bunching', line: r.id, lineNumber: r.number, lineName: r.name || `Line ${r.number}`, bunched: gp.bunched, worstGap: gp.worstGap, headway: gp.headway }), ok);
+          }
+          break;
+        }
         case 'trigger.balance': {
           const amt = Number(c.amount) || 0;
           const old = `${wf.id}:${node.id}`; // before trigger timing (0.3)
@@ -650,7 +766,28 @@ export function processAutomation(game: Game) {
     }
   }
 
-  // 2. queued simulation events
+  // 2. workflows waiting at a Wait or One-at-a-time node
+  if (a.pending?.length) {
+    const live = new Set(wfs.map((w) => w.id));
+    for (const p of [...a.pending]) {
+      const wf = a.workflows[p.wf];
+      const node = wf?.nodes.find((x) => x.id === p.node);
+      const drop = () => a.pending!.splice(a.pending!.indexOf(p), 1);
+      // the workflow was switched off or deleted, or the node removed or switched off
+      if (!wf || !live.has(wf.id) || !node || node.disabled) {
+        drop();
+        continue;
+      }
+      if (budget <= 0) break;
+      const outcome = pendingOutcome(game, p);
+      if (!outcome) continue;
+      drop();
+      p.outcome = outcome;
+      fire(wf, p.node, p.event, p);
+    }
+  }
+
+  // 3. queued simulation events
   let i = 0;
   for (; i < a.queue.length && budget > 0; i++) {
     const ev = a.queue[i];
@@ -771,6 +908,14 @@ export function sampleEvent(game: Game, node: Workflow['nodes'][number]): Rec {
     const ids = line ? [...new Set([...(s.routes[line]?.stops ?? []), ...(s.routes[line]?.returnStops ?? [])])] : Object.keys(s.stops);
     const top = ids.map((id) => ({ id, g: gaveUpLastHour(game, id) })).sort((x, y) => y.g - x.g)[0];
     if (top) Object.assign(base, { stop: top.id, stopName: s.stops[top.id]?.name ?? '', gaveUp: top.g });
+  }
+  if (node.type === 'trigger.bunching') {
+    // the line whose buses are closest together (or with the biggest gap) now
+    const lines = (line ? [s.routes[line]].filter(Boolean) : Object.values(s.routes)).filter((x) => !x.suspended);
+    const o = gapOptions(c);
+    const gap = String(c.what ?? 'bunch') === 'gap';
+    const top = lines.map((x) => ({ r: x, g: lineGaps(game, x.id, o) })).sort((p, q) => (gap ? (q.g.worstGap ?? 0) - (p.g.worstGap ?? 0) : q.g.bunched - p.g.bunched))[0];
+    if (top) Object.assign(base, { line: top.r.id, lineNumber: top.r.number, lineName: top.r.name || `Line ${top.r.number}`, bunched: top.g.bunched, worstGap: top.g.worstGap, headway: top.g.headway });
   }
   if (node.type === 'trigger.shortBuses') {
     const lines = line ? [s.routes[line]].filter(Boolean) : Object.values(s.routes);

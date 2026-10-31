@@ -36,6 +36,7 @@ import { checkExpr } from './expr.ts';
 import { approveProposal, daySummary, declineProposal, processAutomation, refreshWants, runNow, validation, weekSummary } from './automation/executor.ts';
 import { clearPending } from './automation/watch.ts';
 import { simEvent } from './automation/events.ts';
+import { detourClock, endDetours } from './operations.ts';
 import * as auto from './automation/manage.ts';
 import type { RunRecord, Workflow } from './automation/types.ts';
 import type { Validation } from './automation/validate.ts';
@@ -280,6 +281,7 @@ export class Game {
   private minute() {
     const t = this.t;
     if (t >= this.eventNext) this.eventClock();
+    detourClock(this);
     for (const r of Object.values(this.state.routes)) this.ensureTrips(r.id);
     dispatch(this);
     // demand inputs depend only on saved state and the hour slot, so a loaded game rebuilds the same rates
@@ -524,7 +526,7 @@ export class Game {
   /** What automation sees of an event. */
   eventData(ev: GameEvent): Record<string, string | number | boolean | null> {
     return {
-      event: ev.id, eventKind: ev.kind, eventTitle: ev.title, place: ev.place, venue: ev.venue, people: ev.people,
+      event: ev.id, eventKind: ev.kind, eventTitle: ev.title, place: ev.place, venue: ev.venue, people: ev.people, lng: ev.at?.[0] ?? null, lat: ev.at?.[1] ?? null,
       start: hhmm(ev.start), end: hhmm(actualEnd(ev)), day: Math.floor(ev.start / DAY), when: whenLabel(ev, this.state.clock.t, this.state.clock.startWeekday), reason: ev.reason ?? null,
     };
   }
@@ -833,7 +835,7 @@ export class Game {
     const have = this.state.tripDay[id] ?? sdNow - 1;
     if (have >= sdNow + 1) return;
     const list = (this.state.trips[id] ??= []);
-    const taken = new Set(list.filter((x) => x.state !== TripState.Planned).map((x) => `${x.pat}@${x.dep}`));
+    const taken = new Set(list.filter((x) => x.state !== TripState.Planned).flatMap((x) => (x.adj ? [`${x.pat}@${x.dep}`, `${x.pat}@${x.adj.from}`] : [`${x.pat}@${x.dep}`])));
     const pats = this.patterns.get(id) ?? [];
     for (let sd = have + 1; sd <= sdNow + 1; sd++) {
       const d = this.dayPlan(id, sd);
@@ -857,6 +859,20 @@ export class Game {
         return !old;
       });
     }
+  }
+
+  /** Add a trip made outside the timetable (a bus turning back runs one part-way). */
+  addTrip(trip: Trip) {
+    const list = (this.state.trips[trip.route] ??= []);
+    list.push(trip);
+    list.sort((a, b) => a.dep - b.dep || a.pat - b.pat);
+    this.tripIndex.set(trip.id, trip);
+  }
+
+  /** Rebuild a line's paths and run times after its waypoints changed (temporary detours). */
+  rebuildLine(id: Id) {
+    this.rebuildDerived(id);
+    this.changed();
   }
 
   /** Drop future unassigned trips and regenerate them from the current timetable. */
@@ -1133,6 +1149,8 @@ export class Game {
     const problems = this.routeProblems(r);
     if (problems.length) return fail(problems[0]);
     const geometry = JSON.stringify([old.kind, old.stops, old.returnStops, old.via]) !== JSON.stringify([r.kind, r.stops, r.returnStops, r.via]);
+    const detour = geometry ? (this.state.detours ?? []).find((d) => d.route === id) : undefined;
+    if (detour) return fail(`Line ${old.number} is on a temporary detour until ${hhmm(detour.until)}. End the detour on the line first, then change its route.`);
     if (geometry) {
       const pats = buildPatterns(this.state, this.region, this.geo, r);
       const bad = pats.find((p) => !p.valid);
@@ -1212,6 +1230,7 @@ export class Game {
   deleteRoute(id: Id): Result {
     const r = this.state.routes[id];
     if (!r) return fail('That line no longer exists.');
+    if (this.state.detours) this.state.detours = this.state.detours.filter((d) => d.route !== id);
     this.reshapeRoute(id, () => {
       for (const v of this.vehicleList()) if (v.route === id) v.route = null;
       delete this.state.routes[id];
@@ -1360,6 +1379,25 @@ export class Game {
   /** Extra departures scheduled on a line that have not left yet (a bus may already be on its way). */
   scheduledExtras(route: Id): Trip[] {
     return (this.state.trips[route] ?? []).filter((x) => x.extra && (x.state === TripState.Planned || x.state === TripState.Assigned) && x.dep > this.t);
+  }
+
+  /** End a line's temporary detour (each stretch goes back to its usual road once no bus is on it). */
+  endDetour(route: Id): Result {
+    const r = endDetours(this, route);
+    if (!r.ok) return r;
+    this.notePlayerChange(`route:${route}`, 'detour', 'detour:off');
+    this.changed();
+    return ok(undefined);
+  }
+
+  /** Call off a bus's planned hold at a stop, or its early turn back. */
+  cancelControl(vehicle: Id, what: 'hold' | 'turn'): Result {
+    const v = this.state.vehicles[vehicle];
+    if (!v || !v[what]) return fail(what === 'hold' ? 'That bus is not being held.' : 'That bus is not turning back early.');
+    delete v[what];
+    this.notePlayerChange(`vehicle:${vehicle}`, what === 'hold' ? 'hold_vehicle' : 'short_turn', 'cancelled');
+    this.changed();
+    return ok(undefined);
   }
 
   /** Cancel a scheduled extra departure that no bus has been given yet. */

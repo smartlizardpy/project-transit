@@ -167,7 +167,15 @@ export interface Vehicle {
   /** heading for maintenance after the current work */
   wantsService: boolean;
   /** pattern this vehicle will start when its deadhead arrives */
-  target?: { route: Id; pat: number };
+  target?: { route: Id; pat: number; at?: number };
+  /**
+   * Hold at a stop (control-room holding, e.g. to even out bunched buses or wait for a
+   * connection): `min` minutes after its normal stop time at `stop` (null: the next stop it
+   * serves) on trip `trip`. `until` is set when the hold starts.
+   */
+  hold?: { stop: Id | null; min: number; trip: number | null; until?: number; src: string; set: number };
+  /** Turn back early (a short turn): end trip `trip` at stop index `at` and run back from there. */
+  turn?: { trip: number; at: number; src: string };
   /** sell the bus once it is back at its depot */
   sell?: boolean;
   /**
@@ -206,6 +214,34 @@ export interface Trip {
   want?: Id;
   /** a scheduled extra departure moved off a timetable departure: the time asked for */
   ask?: number;
+  /** first stop index served (a bus that turned back joins the other direction part-way) */
+  from?: number;
+  /** a timetable departure moved earlier or later: its timetable time and who moved it */
+  adj?: { from: number; src: string };
+  /** the trip was ended early at this stop index (a short turn) */
+  short?: number;
+}
+
+/** A temporary detour: one leg of a line drives another way until `until`, then goes back. */
+export interface Detour {
+  id: number;
+  route: Id;
+  /** pattern and leg (from stop `leg` to stop `leg + 1`), and its key in Route.via */
+  pat: number;
+  leg: number;
+  key: string;
+  /** waypoints for the detour, and the leg's own waypoints to put back */
+  via: LngLat[];
+  prev: LngLat[] | null;
+  from: number;
+  until: number;
+  /** 'player' or the workflow that asked */
+  src: string;
+  /** waiting for the leg to be clear of buses before switching ('start' or 'end'), or running */
+  state: 'start' | 'on' | 'end';
+  why: string;
+  /** extra driving on the leg, seconds (free-flow) */
+  extra: number;
 }
 
 // ─────────────────────────────────────────── passengers
@@ -386,6 +422,8 @@ export interface GameState {
   trips: Record<Id, Trip[]>;
   /** service day the trips were generated for, per route */
   tripDay: Record<Id, number>;
+  /** temporary detours (absent in older saves) */
+  detours?: Detour[];
   pax: PassengerState;
   finance: FinanceState;
   stats: StatsState;
@@ -393,7 +431,7 @@ export interface GameState {
   territory: { owned: string[]; home: string; start?: string[] };
   objectives: Record<string, ObjectiveState>;
   notifications: Notification[];
-  counters: { stop: number; route: number; vehicle: number; depot: number; ledger: number; trip: number; notification: number };
+  counters: { stop: number; route: number; vehicle: number; depot: number; ledger: number; trip: number; notification: number; detour?: number };
   settings: { autoService: boolean; serviceBelow: number };
   onboarding: { active: boolean; step: number; flags: Record<string, boolean> };
   /** operational history, recorded from day one (save version 2) */

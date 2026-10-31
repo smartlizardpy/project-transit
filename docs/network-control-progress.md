@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-31 (blocks for building your own strategies).
+Last updated: 2026-10-31 (control-room blocks, and why reputation fell).
 
 ## A. Foundations: save version 2, analytics recording, unlock ✅
 
@@ -154,7 +154,43 @@ The owner asked for blocks that make Automation Studio a programming environment
 | Screenshots in the real UI (`scripts/capture-programming.mjs`, 6 checks, no page errors) | ✅ | `automation-programming-gallery.png`, `automation-programming-predictive.png` (a test run: forecast, join "3 of 3 matched on id = id", formula, filter), `automation-programming-line-extras.png` (the line panel: "06:45 from Eminönü, planned by …"), `automation-programming-journeys.png` (a test run: "about 327 journeys a day, by area… Busiest: Within Tünel, 123 a day") |
 
 In the demo company the forecast is low (about 41 boardings on the network in the next three hours), so *Predictive extra departures* finds no line over 90% and plans nothing; its screenshot shows that test run as it is. The extra on the line panel was planned by a two-block workflow the capture script makes (Manual trigger → Schedule extra departure in 45 minutes) and runs for real.
-| Not built yet from the owner's list: nearby stops, route between two points, coverage, transfer finder, occupancy of one departure, missed connections, wait until, queue, optimise allocation, hold, adjust or short-turn a departure, temporary detour, route proposals | ⬜ | each needs its own simulation support first (the owner asked not to fake actions) |
+| The rest of the owner's list (nearby stops, route between two points, coverage, transfers, occupancy of one departure, missed connections, wait, queue, optimise allocation, hold, adjust or short-turn a departure, temporary detour, route proposals) | ✅ | built with their own simulation support in section J |
+
+## J. Control room: blocks that act on buses and timetables (requested 2026-10-31) 🟡
+
+The rest of the owner's list from section I. Each action has its own support in the vehicle and timetable simulation, as the owner asked ("I wouldn't fake them by simply changing a UI label"). Each one is also a command, so it goes through the same checks, limits, cooldowns and Observe/Suggest/Automatic modes as every other action. 🟡 until the owner has played it.
+
+| Item | Status | Evidence |
+|---|---|---|
+| **Hold a bus** (at most 10 min) at a stop ahead, after its normal stop; it boards people while it waits, then carries on. The bus panel says how long, where and which workflow asked, with *Call off* | ✅ | `automation-operations.test.ts` "keeps the bus at the stop…", "refuses a hold that is too long…"; screenshot `automation-control-hold.png` |
+| **Turn a bus back early** at a stop ahead: the trip ends there, riders going further get off without paying again, and it runs back from there as a timetabled trip from the middle of the line | ✅ | test "ends the trip at the stop, lets riders going further off…", "refuses a loop line, a stop behind the bus and the last stop" |
+| **Move one departure** (up to 15 min earlier or later, not into the next 5 minutes, not onto another departure); the timetable slot it left is not filled again | ✅ | test "moves a departure later and it runs then…", "will not move a departure into the next five minutes…" |
+| **Temporary detour** round an area (100–800 m across, 15 min to 6 h): other roads, the same stops. A stretch switches only once no bus is on it, and goes back by itself. A stop next to the area may be served from the other side of the road, and the stretch after it then gets a way round too. Refused when a stop is inside the area, when the only way round is more than three times as long plus 5 minutes, or when it would send the line into the area elsewhere. The line panel shows it with *End now*; its long-way-round warnings are not shown while it lasts; a line's route cannot be edited during one | ✅ | test "drives round the area on other roads with the same stops, then goes back…", "refuses an area the line does not pass and one around one of its stops"; screenshot `automation-control-detour.png` (line 2, one stretch, about 1 min a trip) |
+| **Route-change suggestions** (add or drop a stop, or a new line through your stops): automations can only suggest them, even in Automatic mode, and they stay open for 3 game days. The text gives the extra km over both directions, the minutes a trip and the buses needed at the busiest time. A stop is added where it adds the least distance | ✅ | test "an automation can only suggest a route change; approving it changes the line", "adds a stop where it adds the least distance"; screenshot `automation-control-proposal.png` |
+| **Gaps between buses** and a **Buses bunch or a gap opens** trigger: the time to the bus ahead and behind (in timetabled minutes), the hold that evens them out, and a late bus going the other way that could turn back into a gap | ✅ | test "a long hold makes the bus behind catch up…", "the bunching trigger fires and holds the bus that caught up" |
+| Read-only blocks: **Connections at risk** (people on board who would miss the bus they change to), **Occupancy forecast** for the next departures (labelled an estimate), **Nearby stops**, **Road route**, **Coverage** (share of residents and jobs within reach, and the places left out), **Transfers** (where people change lines) | ✅ | tests in "reading the network for control" (4) |
+| **Best pairs** (the cheapest one-to-one assignment, Hungarian method, not greedy), feeding *Move bus to line* | ✅ | test "finds the cheapest one-to-one assignment, not the greedy one", "pairs spare buses with lines short of buses and moves them" |
+| **Wait** (a number of minutes, or until a figure crosses a value, with a time limit) and **One at a time** (passes items on one by one, the next when the last has finished): the workflow carries on later with only the steps after the block, nothing before it runs again. At most 30 waiting per workflow and 200 in all; the node shows how many are waiting and when the next carries on | ✅ | tests "Wait carries on later with only the steps after it…", "Wait until a figure crosses a value, or gives up", "One at a time passes items on one by one…"; screenshot `automation-control-wait.png` |
+| Eleven starter workflows in a new *Control room* gallery group (49 in all): *Even out bunched buses*, *Hold for people changing lines*, *Turn a late bus back into a gap*, *Extra bus before a crowded departure*, *Wait for the crowd after an event*, *Drive round a big event*, *Send spare buses to lines short of buses*, *Check back after an extra bus*, *Service worn buses one at a time*, *Suggest a line for an unserved corridor* (Suggest mode) and *Weekly coverage report* | ✅ | test "every control-room template is valid on a new network" and four end-to-end template tests; screenshot `automation-control-gallery.png` |
+| Screenshots in the real UI (`scripts/capture-operations.mjs`, 7 checks, no page errors) | ✅ | the six `automation-control-*.png` files |
+
+How the screenshots were made: the company from `scripts/capture-network.mjs sim`, on the next weekday morning. For the hold, line 1 was given a bus every 3 minutes from 06:00 to 10:00, with three more buses bought (the company could not afford the four more it needed), and one bus was held for 7 minutes so the next caught up. The lines in that company take about 5 minutes end to end, so the *Even out bunched buses* trigger was set to react after 1 minute of bunching instead of 3; with 3, the bus is at its last stop by then and the hold is refused ("about to finish its trip"). The timetable was set back before the detour. Nothing is drawn or staged.
+
+**Known gaps:**
+- On very short lines the bunching template rarely acts with its default 3 minutes; the trigger's *for* setting is there to lower it.
+- Most stretches on the Golden Horn shore road have no way round within the limit, so a detour is refused there; the refusal says why.
+- A detour is planned on free-flow times; traffic on the way round is what the simulation makes of it.
+
+## K. Why reputation fell (requested 2026-10-31) ✅
+
+The owner's reputation kept dropping, and the daily notice blamed slow journeys when the cause was missed departures (two lines had a timetable and no buses).
+
+| Item | Status | Evidence |
+|---|---|---|
+| The daily notice splits the change into missed departures (up to −4 points a day) and how passengers rated their journeys, largest first. It names the lines with the most missed departures, and says why: no buses at all, or how many the timetable needs at the busiest time against how many it has. A line with a timetable and no buses gets the advice to give it buses or suspend it | ✅ | `reputation.test.ts` "names the lines with a timetable and no buses, not slow journeys", "a line with too few buses is named with what its timetable needs" |
+| The notice opens the line with the most missed departures | ✅ | same tests |
+
+Example from the test: "243 timetabled departures were missed (−4.0 points), most on line 2 (136), line 3 (102) and line 1 (5). Lines 2 and 3 have a timetable but no buses, so every departure is missed: give them buses, or suspend them until you do. Line 1: its timetable needs 4 buses at the busiest time and it has 3."
 
 ## Mandatory scenarios
 

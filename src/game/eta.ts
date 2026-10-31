@@ -118,6 +118,8 @@ export function arrivalsAt(game: Game, stop: Id, limit = 8, horizon = 3 * 3600):
         for (const j of idxs) {
           // at a loop terminus show departures, not the arrival that ends the previous lap
           if (isLoop && j === p.stops.length - 1) continue;
+          // a trip that starts part-way (a bus that turned back) does not call before its first stop
+          if (j < (trip.from ?? 0)) continue;
           const sched = trip.dep + (j === 0 ? 0 : sch[j]);
           let eta = sched;
           // future trips get a bus from the dispatcher shortly before departure
@@ -181,7 +183,7 @@ export function vehicleStops(game: Game, v: Vehicle): StopEta[] {
   const now = game.t;
   const out: StopEta[] = [];
   const dwell = v.status === 'at_stop' ? Math.max(0, v.until - now) : 0;
-  const start = trip.state === TripState.Running ? v.stopIdx : 0;
+  const start = trip.state === TripState.Running ? v.stopIdx : trip.from ?? 0;
   for (let j = start; j < p.stops.length; j++) {
     const sched = trip.dep + (j === 0 ? 0 : sch ? sch[j] : 0);
     let eta: number;

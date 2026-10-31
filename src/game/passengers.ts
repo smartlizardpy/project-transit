@@ -796,12 +796,13 @@ function wantsThisBus(g: PaxGroup, p: Pattern, idx: number): Leg | null {
 }
 
 /** Alight, transfer and board at stop `idx` of pattern `p`. */
-export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number): StopEvent {
+export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number, opts: { end?: boolean } = {}): StopEvent {
   const state = game.state;
   const t = state.clock.t;
   const stop = p.stops[idx];
   const cap = MODEL[v.model].capacity;
-  const last = idx === p.stops.length - 1;
+  // `end`: the trip ends here early (a short turn): everyone gets off, nobody boards
+  const last = !!opts.end || idx === p.stops.length - 1;
   const ev: StopEvent = { alight: 0, board: 0, leftBehind: 0 };
   const onboard = (state.pax.onboard[v.id] ??= []);
   const lfNow = occupied(v) / cap;

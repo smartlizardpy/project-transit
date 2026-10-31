@@ -9,6 +9,8 @@ import { ECON, MODEL } from './content.ts';
 import { requirement } from './timetable.ts';
 import { hhmm } from './time.ts';
 import { workEnds } from './vehicles.ts';
+import type { LngLat } from './world/graph.ts';
+import { adjustDeparture, adjustPlan, applyRouteChange, detourPlan, detoursOf, endDetours, holdPlan, holdVehicle, routeChangePlan, shortTurn, startDetour, turnPlan, type RouteChange } from './operations.ts';
 
 export type Command =
   | { type: 'assign_vehicle'; vehicle: Id; route: Id | null; after?: 'trips' | 'now' }
@@ -19,7 +21,13 @@ export type Command =
   | { type: 'service_plan'; route: Id; plan: string; on: boolean }
   | { type: 'set_fare'; fare: number }
   | { type: 'service_vehicle'; vehicle: Id }
-  | { type: 'move_depot'; vehicle: Id; depot: Id };
+  | { type: 'move_depot'; vehicle: Id; depot: Id }
+  | { type: 'hold_vehicle'; vehicle: Id; minutes: number; stop?: Id }
+  | { type: 'adjust_departure'; route: Id; trip: number; minutes: number }
+  | { type: 'short_turn'; vehicle: Id; stop: Id }
+  | { type: 'detour'; route: Id; at: LngLat; radius: number; minutes: number; why?: string }
+  | { type: 'end_detour'; route: Id }
+  | { type: 'change_route'; change: RouteChange };
 
 export type Impact = 'low' | 'high';
 
@@ -54,10 +62,19 @@ export const COMMAND_LABEL: Record<Command['type'], string> = {
   set_fare: 'Change the fare',
   service_vehicle: 'Send a bus for maintenance',
   move_depot: 'Move a bus to another depot',
+  hold_vehicle: 'Hold a bus at a stop',
+  adjust_departure: 'Move a departure',
+  short_turn: 'Turn a bus back early',
+  detour: 'Temporary detour',
+  end_detour: 'End a detour',
+  change_route: 'Change a route (for your approval)',
 };
 
 /** High-impact commands change what passengers are offered or pay; automations need permission. */
-export const HIGH_IMPACT = new Set<Command['type']>(['set_headway', 'suspend_line', 'service_plan', 'set_fare']);
+export const HIGH_IMPACT = new Set<Command['type']>(['set_headway', 'suspend_line', 'service_plan', 'set_fare', 'change_route']);
+
+/** Commands an automation can only ever suggest: the player reviews and approves each one. */
+export const ALWAYS_ASK = new Set<Command['type']>(['change_route']);
 
 /** A line's service plan by id or name (names are matched without regard to case). */
 export function findPlan(game: Game, route: Id, plan: string) {
@@ -212,6 +229,68 @@ export function checkCommand(game: Game, cmd: Command): CommandCheck {
       const cost = plan.value.now && plan.value.km !== null && m ? Math.round(plan.value.km * m.energyPerKm * (m.electric ? ECON.electricPrice : ECON.fuelPrice) + (plan.value.km / 20) * ECON.driverPerHour) : 0;
       return { ...base, ok: true, summary, transition: plan.value.text, deferred: !plan.value.now, cost, target, key };
     }
+    case 'hold_vehicle': {
+      const v = s.vehicles[cmd.vehicle];
+      const target = `vehicle:${cmd.vehicle}`;
+      const key = 'hold';
+      const summary = `Hold ${v?.fleetNo ?? 'a bus'} for ${Math.round(cmd.minutes)} min${cmd.stop ? ` at ${s.stops[cmd.stop]?.name ?? 'a stop'}` : ''}`;
+      const plan = holdPlan(game, cmd.vehicle, cmd.minutes, cmd.stop ?? null);
+      if (!plan.ok) return { ...base, ok: false, summary, reason: plan.error, target, key };
+      const same = v?.hold && v.hold.trip === plan.value.trip && v.hold.stop === plan.value.stop && v.hold.min === Math.round(cmd.minutes);
+      if (same) return { ...base, ok: true, noop: true, summary, transition: `${v!.fleetNo} is already being held there.`, target, key };
+      return { ...base, ok: true, summary, transition: plan.value.text, deferred: true, target, key };
+    }
+    case 'adjust_departure': {
+      const r = s.routes[cmd.route];
+      const trip = game.trip(cmd.trip);
+      const target = `trip:${cmd.trip}`;
+      const key = `adjust:${Math.round(cmd.minutes)}`;
+      const summary = `Move ${trip ? `the ${hhmm(trip.dep)}` : 'a'} departure on ${lineName(game, cmd.route)} by ${Math.round(cmd.minutes) > 0 ? '+' : ''}${Math.round(cmd.minutes)} min`;
+      if (!r) return { ...base, ok: false, summary, reason: 'That line no longer exists.', target, key };
+      const plan = adjustPlan(game, cmd.route, cmd.trip, cmd.minutes);
+      if (!plan.ok) return { ...base, ok: false, summary, reason: plan.error, target, key };
+      return { ...base, ok: true, summary, transition: plan.value.text, target, key };
+    }
+    case 'short_turn': {
+      const v = s.vehicles[cmd.vehicle];
+      const target = `vehicle:${cmd.vehicle}`;
+      const key = 'turn';
+      const summary = `Turn ${v?.fleetNo ?? 'a bus'} back at ${s.stops[cmd.stop]?.name ?? 'a stop'}`;
+      if (v?.turn && v.turn.trip === v.trip && v.pos.kind === 'pattern' && game.pattern(v.pos.route, v.pos.pat)?.stops[v.turn.at] === cmd.stop) return { ...base, ok: true, noop: true, summary, transition: `${v.fleetNo} is already turning back there.`, target, key };
+      const plan = turnPlan(game, cmd.vehicle, cmd.stop);
+      if (!plan.ok) return { ...base, ok: false, summary, reason: plan.error, target, key };
+      return { ...base, ok: true, summary, transition: plan.value.text, deferred: true, target, key };
+    }
+    case 'detour': {
+      const target = `route:${cmd.route}`;
+      const key = 'detour:on';
+      const summary = `Detour ${lineName(game, cmd.route)} for ${Math.round(cmd.minutes)} min`;
+      const plan = detourPlan(game, cmd.route, cmd.at, cmd.radius, cmd.minutes);
+      if (!plan.ok) {
+        const already = detoursOf(game, cmd.route).length > 0 && plan.error.includes('already on a detour');
+        return already ? { ...base, ok: true, noop: true, summary, transition: plan.error, target, key } : { ...base, ok: false, summary, reason: plan.error, target, key };
+      }
+      return { ...base, ok: true, summary, transition: plan.value.text, deferred: true, target, key };
+    }
+    case 'end_detour': {
+      const target = `route:${cmd.route}`;
+      const key = 'detour:off';
+      const summary = `End the detour on ${lineName(game, cmd.route)}`;
+      if (!s.routes[cmd.route]) return { ...base, ok: false, summary, reason: 'That line no longer exists.', target, key };
+      if (!detoursOf(game, cmd.route).length) return { ...base, ok: true, noop: true, summary, transition: 'That line is not on a detour.', target, key };
+      return { ...base, ok: true, summary, transition: 'Each changed stretch goes back to its usual road as soon as no bus is on it.', deferred: true, target, key };
+    }
+    case 'change_route': {
+      const ch = cmd.change;
+      const target = ch.op === 'new_line' ? `newline:${ch.stops.join(',')}` : `route:${ch.route}`;
+      const key = ch.op === 'new_line' ? 'new_line' : `${ch.op}:${ch.stop}`;
+      const summary = ch.op === 'new_line'
+        ? `New line from ${s.stops[ch.stops[0]]?.name ?? 'a stop'} to ${s.stops[ch.stops[ch.stops.length - 1]]?.name ?? 'a stop'}`
+        : `${ch.op === 'add_stop' ? 'Add' : 'Remove'} ${s.stops[ch.stop]?.name ?? 'a stop'} ${ch.op === 'add_stop' ? 'to' : 'from'} ${lineName(game, ch.route)}`;
+      const plan = routeChangePlan(game, ch);
+      if (!plan.ok) return { ...base, ok: false, summary, reason: plan.error, target, key };
+      return { ...base, ok: true, summary, transition: plan.value.text, cost: plan.value.cost, target, key };
+    }
   }
 }
 
@@ -245,6 +324,16 @@ export function runCommand(game: Game, cmd: Command, src = 'player'): Result<{ c
     case 'set_fare': r = game.setFare(cmd.fare); break;
     case 'service_vehicle': r = game.serviceVehicle(cmd.vehicle); break;
     case 'move_depot': r = game.moveToDepot(cmd.vehicle, cmd.depot); break;
+    case 'hold_vehicle': r = holdVehicle(game, cmd.vehicle, cmd.minutes, cmd.stop ?? null, src); break;
+    case 'adjust_departure': r = adjustDeparture(game, cmd.route, cmd.trip, cmd.minutes, src); break;
+    case 'short_turn': r = shortTurn(game, cmd.vehicle, cmd.stop, src); break;
+    case 'detour': r = startDetour(game, cmd.route, cmd.at, cmd.radius, cmd.minutes, src, cmd.why ?? ''); break;
+    case 'end_detour': r = endDetours(game, cmd.route); break;
+    case 'change_route': {
+      const x = applyRouteChange(game, cmd.change);
+      if (!x.ok) return x;
+      return { ok: true, value: { check, effect: x.value } };
+    }
   }
   if (!r.ok) return r;
   return { ok: true, value: { check, effect: check.transition ?? check.summary } };

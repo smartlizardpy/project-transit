@@ -13,6 +13,7 @@ import { routeWindow } from '../progress.ts';
 import { companyLevel } from '../control.ts';
 import { dayTotals } from '../finance.ts';
 import { nextPeakFire, periodLabel } from './peaks.ts';
+import { gapOptions, lineGaps } from './ops.ts';
 
 export type Scope = 'line' | 'stop' | 'bus' | 'company';
 
@@ -40,6 +41,8 @@ export const FIGURES: Figure[] = [
   { id: 'line.missedToday', scope: 'line', label: 'Departures missed today', unit: 'departures', def: 3, op: 'above' },
   { id: 'line.short', scope: 'line', label: 'Buses short of its timetable now', unit: 'buses', def: 0, op: 'above' },
   { id: 'line.congestion', scope: 'line', label: 'Road traffic along it', unit: '%', def: 60, op: 'above' },
+  { id: 'line.bunched', scope: 'line', label: 'Bunched buses (pairs closer than a third of the timetable gap)', unit: 'pairs', def: 0, op: 'above' },
+  { id: 'line.gap', scope: 'line', label: 'Longest gap between buses, share of the timetable gap', unit: '%', def: 160, op: 'above' },
   { id: 'stop.waiting', scope: 'stop', label: 'People waiting', unit: 'people', def: 40, op: 'above' },
   { id: 'stop.longestWait', scope: 'stop', label: 'Longest wait now', unit: 'min', def: 20, op: 'above' },
   { id: 'stop.gaveUpHour', scope: 'stop', label: 'People who gave up, last hour', unit: 'people', def: 8, op: 'above' },
@@ -131,6 +134,8 @@ function lineValue(game: Game, id: Id, f: string): number | null {
     }
     case 'line.missedToday': return sum(s.analytics.today.routes[id]?.m);
     case 'line.short': return shortOf(game, id);
+    case 'line.bunched': return lineGaps(game, id).bunched;
+    case 'line.gap': return lineGaps(game, id).worstGap;
     case 'line.congestion': {
       const p = game.patterns.get(id)?.find((x) => x.valid);
       if (!p) return null;
@@ -171,6 +176,19 @@ function companyValue(game: Game, f: string): number | null {
     case 'company.resultToday': return Math.round(dayTotals(s, Math.floor(game.t / DAY)).result);
   }
   return null;
+}
+
+/** One figure for one line, stop or bus (or the company): what "Wait until" checks each minute. */
+export function figureValue(game: Game, figId: string, id: string | null): number | null {
+  const fig = FIGURE[figId];
+  if (!fig) return null;
+  if (fig.scope === 'line') return id ? lineValue(game, id, figId) : null;
+  if (fig.scope === 'stop') return id ? stopValue(game, id, figId) : null;
+  if (fig.scope === 'bus') {
+    const v = id ? game.state.vehicles[id] : undefined;
+    return v ? busValue(v, figId) : null;
+  }
+  return companyValue(game, figId);
 }
 
 export interface Watched {
@@ -337,6 +355,22 @@ function nextClock(game: Game, node: WfNode): number | null {
 }
 
 /** A plain-words status for a trigger node of a saved workflow, for the canvas. */
+/** What a Wait or One-at-a-time node is holding now, for the editor. */
+export function pendingStatus(game: Game, wf: Workflow, node: WfNode): { state: 'waiting' | 'building' | 'off'; text: string } {
+  const a = game.state.automation;
+  if (!wf.enabled || a.paused) return { state: 'off', text: a.paused ? 'All automation paused' : 'Switched off: nothing waits' };
+  const list = (a.pending ?? []).filter((p) => p.wf === wf.id && p.node === node.id);
+  const next = list.reduce<number | null>((m, p) => (m === null || p.due < m ? p.due : m), null);
+  if (node.type === 'logic.queue') {
+    const q = a.memory[wf.id]?.[`@queue:${node.id}`];
+    const n = q && typeof q === 'object' && !Array.isArray(q) && Array.isArray(q.items) ? q.items.length : 0;
+    return n ? { state: 'building', text: `${n} waiting${next !== null ? ` · next at ${hhmm(next)}` : ''}` } : { state: 'waiting', text: 'Nothing waiting' };
+  }
+  if (!list.length) return { state: 'waiting', text: 'Nothing waiting' };
+  const until = list.some((p) => p.until);
+  return { state: 'building', text: `${list.length} waiting · ${until ? 'at the latest' : 'next'} ${hhmm(next!)}${list.length === 1 ? ` (${list[0].label})` : ''}` };
+}
+
 export function triggerStatus(game: Game, wf: Workflow, node: WfNode): TriggerStatus {
   const a = game.state.automation;
   const today = Math.floor(game.t / DAY);
@@ -419,6 +453,15 @@ function condItems(game: Game, node: WfNode): { items: { key: string }[]; readin
     }
     case 'trigger.balance':
       return { items: [{ key: 'balance' }], reading: `Now ${game.money(Math.round(s.finance.balance), { compact: true })} · ` };
+    case 'trigger.bunching': {
+      const lines = (typeof c.line === 'string' && c.line && s.routes[c.line] ? [s.routes[c.line]] : Object.values(s.routes)).filter((r) => !r.suspended);
+      const o = gapOptions(c);
+      const gap = String(c.what ?? 'bunch') === 'gap';
+      const read = lines.map((r) => ({ key: r.id, r, g: lineGaps(game, r.id, o) }));
+      const top = read.sort((p, q) => (gap ? (q.g.worstGap ?? 0) - (p.g.worstGap ?? 0) : q.g.bunched - p.g.bunched))[0];
+      const reading = !top ? '' : gap ? (top.g.worstGap !== null ? `Line ${top.r.number}: longest gap ${top.g.worstGap}% · ` : 'No line has two buses out · ') : top.g.bunched ? `Line ${top.r.number}: ${top.g.bunched} close pair${top.g.bunched === 1 ? '' : 's'} · ` : 'No buses close together · ';
+      return { items: read, reading };
+    }
   }
   return null;
 }

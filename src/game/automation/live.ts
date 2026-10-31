@@ -96,7 +96,7 @@ export class LiveData {
     const today = s.analytics.today.stops[id];
     const lines = Object.values(s.routes).filter((r) => r.stops.includes(id) || r.returnStops?.includes(id)).map((r) => r.number);
     return {
-      kind: 'stop', id, name: st.name, area: this.game.geo.zone(st.zone)?.name ?? null, areaId: st.zone, waiting, longestWait: r1(oldest), lines,
+      kind: 'stop', id, name: st.name, area: this.game.geo.zone(st.zone)?.name ?? null, areaId: st.zone, waiting, longestWait: r1(oldest), lines, lng: st.lngLat[0], lat: st.lngLat[1],
       boardingsToday: today ? sum(today.b) : 0, gaveUpToday: today ? sum(today.g) : 0,
       avgWaitToday: today && today.wn ? r1(today.ws / today.wn) : null,
       gaveUpHour: gaveUpLastHour(this.game, id), leftBehindToday: today ? today.lb : 0,
