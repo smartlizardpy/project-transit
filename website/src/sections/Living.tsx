@@ -10,7 +10,7 @@ export function Living() {
           id="living"
           split
           title="A city that never stops."
-          lead="Buses leave the depot, keep to the timetable and stop for passengers. People travel between where they live and where they work, and choose between your bus, walking and driving by time, price, crowding and reliability."
+          lead="Buses leave the depot, keep to the timetable and stop for passengers. People go to work, school, the shops, hospitals, the airport and matches, and choose between walking, cycling, driving, a taxi, the city’s metro and trams, and your bus by time, price, crowding and reliability. The weather changes who travels and how."
         />
         <div className="living-grid" ref={ref}>
           <figure className="living-board">
