@@ -31,10 +31,10 @@ export function NodeInspector({ game, node, edgesIn, trace, issues, stale, onCon
 
       {issues.length > 0 && <div className="st-sec">{issues.map((i, k) => <div key={k} className={`pn-warn ${i.level === 'error' ? 'bad' : ''}`}>{i.message}</div>)}</div>}
 
-      {def.config.length > 0 && (
-        <div className="st-sec">
-          <h4>Settings</h4>
-          {def.config.map((f) => {
+      {[{ title: 'Settings', fields: def.config.filter((f) => f.section !== 'timing') }, { title: 'When it may fire', fields: def.config.filter((f) => f.section === 'timing') }].filter((g) => g.fields.length).map((g) => (
+        <div className="st-sec" key={g.title}>
+          <h4>{g.title}</h4>
+          {g.fields.map((f) => {
             const port = def.inputs.find((p) => p.id === f.id);
             const wired = port ? edgesIn.has(port.id) : false;
             return (
@@ -47,7 +47,7 @@ export function NodeInspector({ game, node, edgesIn, trace, issues, stale, onCon
             );
           })}
         </div>
-      )}
+      ))}
 
       <div className="st-sec">
         <h4>Connection points</h4>

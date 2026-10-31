@@ -33,7 +33,8 @@ import { emptyAutomation } from './automation/types.ts';
 import { upgradeState } from './upgrade.ts';
 import { METRIC_VARIABLES, type CustomMetric, type SavedReport } from './analytics/query.ts';
 import { checkExpr } from './expr.ts';
-import { approveProposal, daySummary, declineProposal, processAutomation, refreshWants, runNow, validation } from './automation/executor.ts';
+import { approveProposal, daySummary, declineProposal, processAutomation, refreshWants, runNow, validation, weekSummary } from './automation/executor.ts';
+import { clearPending } from './automation/watch.ts';
 import { simEvent } from './automation/events.ts';
 import * as auto from './automation/manage.ts';
 import type { RunRecord, Workflow } from './automation/types.ts';
@@ -326,6 +327,8 @@ export class Game {
     if (c.status === 'insolvent' && c.redDays > ECON.graceDays + 7) this.bankrupt('The company stayed insolvent for too long and has been wound up.');
     this.dailyCosts();
     simEvent(this, 'day', daySummary(this, ended) as Record<string, number>);
+    // a game week ends when tomorrow starts a new one (weekly figures were just rolled up)
+    if (this.autoWants.has('week') && this.calendarAt((ended + 1) * DAY + DAY / 2).week !== this.calendarAt(ended * DAY + DAY / 2).week) simEvent(this, 'week', weekSummary(this) as Record<string, number>);
     this.emit('day', ended);
   }
 
@@ -1634,6 +1637,7 @@ export class Game {
   /** Pause or resume every workflow. */
   setAutomationPaused(paused: boolean) {
     this.state.automation.paused = paused;
+    clearPending(this.state.automation); // nothing builds up while paused
     refreshWants(this);
     this.changed();
   }

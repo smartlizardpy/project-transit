@@ -22,6 +22,7 @@ import { waitingAt } from '../passengers.ts';
 import { dayMatches, eventKindMatches, forecastMatches, linesNearEvent, weatherChangeMatches, weatherRecs } from './city.ts';
 import { actualEnd, type GameEvent } from '../events.ts';
 import { CONDITION_LABEL, hourCondition } from '../weather.ts';
+import { FIGURE, REPEAT_PER, condStep, firedKey, gaveUpLastHour, markFired, pendingKey, repeatOk, shortOf, busesAvailable, busesNeededNow, timeOk, watchTest, watchedItems } from './watch.ts';
 
 export const RUN_LIMITS = {
   /** node evaluations and list items handled per run */
@@ -476,10 +477,9 @@ export function processAutomation(game: Game) {
   let budget = RUN_LIMITS.perMinute;
   const minute = Math.floor(t / 60);
   const mod = Math.floor((t % DAY) / 60);
-  const hod = Math.floor((t % DAY) / HOUR);
   const wd = weekdayOf(game.state.clock.startWeekday, t);
-  // event trigger keys (`ev:` …) hold the time they can be forgotten
-  if (mod === 0) for (const [k, v] of Object.entries(a.schedule)) if (k.startsWith('ev:') && v < t) delete a.schedule[k];
+  // event trigger keys (`ev:` …) and repeat limits (`rp:` …) hold the time they can be forgotten
+  if (mod === 0) for (const [k, v] of Object.entries(a.schedule)) if ((k.startsWith('ev:') || k.startsWith('rp:')) && v < t) delete a.schedule[k];
   const fire = (wf: Workflow, nodeId: string, event: Rec): boolean => {
     if (budget <= 0) return false;
     const n = (a.hourly.byWf[wf.id] ?? 0) + 1;
@@ -497,6 +497,24 @@ export function processAutomation(game: Game) {
     return true;
   };
 
+  /**
+   * A condition trigger for one item this minute: fires once the condition has held for the
+   * node's "for at least", then waits for it to clear. Outside its hours nothing builds up.
+   */
+  const cond = (wf: Workflow, node: Workflow['nodes'][number], item: string, on: boolean, off: boolean, event: () => Rec, allowed = true): boolean => {
+    const k = firedKey(wf.id, node.id, item), pk = pendingKey(wf.id, node.id, item);
+    if (!allowed) {
+      if (a.schedule[pk] !== undefined) delete a.schedule[pk];
+      if (a.schedule[k] && off) delete a.schedule[k];
+      return false;
+    }
+    if (!condStep(a, k, pk, t, on, off, Number(node.config.for ?? 0) || 0)) return false;
+    if (budget <= 0) return false; // try again next minute
+    fire(wf, node.id, event());
+    markFired(a, k, pk);
+    return true;
+  };
+
   // 1. clock and condition triggers
   // An enabled workflow with problems still "fires": the run is recorded as failed with the
   // reason, and after a few failures in a row the workflow switches itself off and says why.
@@ -507,9 +525,7 @@ export function processAutomation(game: Game) {
       switch (node.type) {
         case 'trigger.every': {
           const every = Math.max(5, Number(c.minutes) || 15);
-          const from = Number(c.from ?? 0), to = Number(c.to ?? 24);
-          const inHours = from <= to ? hod >= from && hod < to : hod >= from || hod < to;
-          if (minute % every === 0 && inHours) fire(wf, node.id, { kind: 'event', source: 'clock' });
+          if (minute % every === 0 && timeOk(game, c, t)) fire(wf, node.id, { kind: 'event', source: 'clock' });
           break;
         }
         case 'trigger.time': {
@@ -522,15 +538,55 @@ export function processAutomation(game: Game) {
           const thr = Math.max(2, Number(c.threshold) || 30);
           const line = typeof c.line === 'string' && c.line ? game.state.routes[c.line] : null;
           const ids = line ? [...new Set([...line.stops, ...(line.returnStops ?? [])])] : Object.keys(game.state.stops);
+          const ok = timeOk(game, c, t);
           let fired = 0;
           for (const stop of ids) {
-            const k = `${wf.id}:${node.id}:${stop}`;
             const w = waitingAt(game.state, stop);
-            if (w >= thr && !a.schedule[k] && fired < 3) {
-              a.schedule[k] = 1;
-              fired++;
-              fire(wf, node.id, { kind: 'event', source: 'waiting', stop, stopName: game.state.stops[stop]?.name ?? '', waiting: w, line: line?.id ?? null });
-            } else if (w < thr * 0.7 && a.schedule[k]) delete a.schedule[k];
+            if (cond(wf, node, stop, w >= thr, w < thr * 0.7, () => ({ kind: 'event', source: 'waiting', stop, stopName: game.state.stops[stop]?.name ?? '', waiting: w, line: line?.id ?? null }), ok && fired < 3)) fired++;
+          }
+          break;
+        }
+        case 'trigger.gaveUp': {
+          const thr = Math.max(1, Number(c.people) || 8);
+          const line = typeof c.line === 'string' && c.line ? game.state.routes[c.line] : null;
+          const ids = line ? [...new Set([...line.stops, ...(line.returnStops ?? [])])] : Object.keys(game.state.stops);
+          const ok = timeOk(game, c, t);
+          let fired = 0;
+          for (const stop of ids) {
+            const g = gaveUpLastHour(game, stop);
+            const event = () => {
+              const first = line ?? Object.values(game.state.routes).find((r) => r.stops.includes(stop) || r.returnStops?.includes(stop));
+              return { kind: 'event', source: 'gaveUp', stop, stopName: game.state.stops[stop]?.name ?? '', gaveUp: g, line: first?.id ?? null, lineNumber: first?.number ?? '' };
+            };
+            if (cond(wf, node, stop, g >= thr, g < thr * 0.7, event, ok && fired < 3)) fired++;
+          }
+          break;
+        }
+        case 'trigger.shortBuses': {
+          const only = typeof c.line === 'string' && c.line ? game.state.routes[c.line] : null;
+          const ok = timeOk(game, c, t);
+          for (const r of only ? [only] : Object.values(game.state.routes)) {
+            const short = shortOf(game, r.id);
+            cond(wf, node, r.id, short > 0, short === 0, () => ({ kind: 'event', source: 'shortBuses', line: r.id, lineNumber: r.number, lineName: r.name || `Line ${r.number}`, short, needed: busesNeededNow(game, r.id), buses: busesAvailable(game, r.id) }), ok);
+          }
+          break;
+        }
+        case 'trigger.watch': {
+          const fig = FIGURE[String(c.figure ?? '')];
+          if (!fig) break;
+          const ok = timeOk(game, c, t);
+          let fired = 0;
+          for (const it of watchedItems(game, c)) {
+            const { on, off } = watchTest(c, it.value);
+            const ln = it.line ? game.state.routes[it.line] : null;
+            const shown = it.value === null ? '' : fig.unit === 'money' ? game.money(it.value, { compact: true }) : fig.unit === '%' ? `${it.value}%` : `${it.value} ${fig.unit}`;
+            const thr = Number(c.value) || 0;
+            if (cond(wf, node, it.key, on, off, () => ({
+              kind: 'event', source: 'watch', figure: fig.id, figureLabel: fig.label, scope: it.kind, itemId: it.id, name: it.name, label: it.name, value: it.value, reading: shown,
+              op: String(c.op ?? 'above'), threshold: fig.unit === 'money' ? game.money(thr, { compact: true }) : fig.unit === '%' ? `${thr}%` : `${thr} ${fig.unit}`, for: Number(c.for ?? 0) || 0,
+              line: it.line, lineNumber: ln?.number ?? '', stop: it.stop, stopName: it.stop ? game.state.stops[it.stop]?.name ?? '' : '', vehicle: it.vehicle,
+              fleetNo: it.vehicle ? game.state.vehicles[it.vehicle]?.fleetNo ?? '' : '',
+            }), ok && fired < 3)) fired++;
           }
           break;
         }
@@ -560,12 +616,10 @@ export function processAutomation(game: Game) {
         }
         case 'trigger.balance': {
           const amt = Number(c.amount) || 0;
-          const k = `${wf.id}:${node.id}`;
+          const old = `${wf.id}:${node.id}`; // before trigger timing (0.3)
+          if (a.schedule[old]) { a.schedule[firedKey(wf.id, node.id, 'balance')] = 1; delete a.schedule[old]; }
           const bal = game.state.finance.balance;
-          if (bal < amt && !a.schedule[k]) {
-            a.schedule[k] = 1;
-            fire(wf, node.id, { kind: 'event', source: 'balance', balance: Math.round(bal) });
-          } else if (bal >= amt + Math.max(1000, Math.abs(amt) * 0.1) && a.schedule[k]) delete a.schedule[k];
+          cond(wf, node, 'balance', bal < amt, bal >= amt + Math.max(1000, Math.abs(amt) * 0.1), () => ({ kind: 'event', source: 'balance', balance: Math.round(bal) }));
           break;
         }
       }
@@ -581,7 +635,10 @@ export function processAutomation(game: Game) {
         if (node.disabled) continue;
         const def = NODE[node.type];
         if (def?.trigger?.source !== ev.kind) continue;
+        const per = REPEAT_PER[node.type];
+        if (per && !timeOk(game, node.config, ev.t)) continue;
         if (!matches(game, wf, node, ev.data)) continue;
+        if (per && !repeatOk(a, wf.id, node.id, String(ev.data[per.field] ?? ''), ev.t, Number(node.config.repeat ?? 0) || 0)) continue;
         fire(wf, node.id, { kind: 'event', source: ev.kind, ...ev.data });
       }
     }
@@ -615,6 +672,7 @@ function matches(game: Game, wf: Workflow, node: Workflow['nodes'][number], d: R
   switch (node.type) {
     case 'trigger.arrive': return !(typeof c.stop === 'string' && c.stop && d.stop !== c.stop);
     case 'trigger.crowded': return Number(d.occupancy ?? 0) >= (Number(c.load) || 85);
+    case 'trigger.leftBehind': return Number(d.leftBehind ?? 0) >= (Number(c.people) || 5);
     case 'trigger.late': {
       if (Number(d.delay ?? 0) < (Number(c.minutes) || 5)) return false;
       const k = `${wf.id}:${node.id}:v:${d.vehicle}`;
@@ -637,6 +695,11 @@ function eventLabel(game: Game, node: Workflow['nodes'][number], e: Rec): string
     case 'trigger.waiting': return `${e.waiting} waiting at ${e.stopName}`;
     case 'trigger.balance': return `Balance ${game.money(Number(e.balance) || 0, { compact: true })}`;
     case 'trigger.day': return `Day ${e.dayNumber} ended`;
+    case 'trigger.week': return `Week ${e.week} ended`;
+    case 'trigger.leftBehind': return `${e.leftBehind} left behind at ${e.stopName} (line ${e.lineNumber})`;
+    case 'trigger.gaveUp': return `${e.gaveUp} gave up waiting at ${e.stopName}`;
+    case 'trigger.shortBuses': return `Line ${e.lineNumber} short of ${e.short} bus${e.short === 1 ? '' : 'es'}`;
+    case 'trigger.watch': return `${e.name}: ${String(e.figureLabel ?? '').toLowerCase()} ${e.reading}`;
     case 'trigger.forecast': return `Forecast for tomorrow: ${e.label}`;
     case 'trigger.weather': return `${e.label} from ${e.time ?? hhmm(game.t)}`;
     case 'trigger.eventAnnounced': return `Announced: ${e.eventTitle}, ${e.when}`;
@@ -677,6 +740,33 @@ export function sampleEvent(game: Game, node: Workflow['nodes'][number]): Rec {
   if (node.type === 'trigger.balance') base.balance = Math.round(s.finance.balance);
   if (node.type === 'trigger.missed' && r) base.dep = hhmm(game.t);
   if (node.type === 'trigger.day') Object.assign(base, daySummary(game, Math.floor(game.t / DAY) - 1));
+  if (node.type === 'trigger.week') Object.assign(base, weekSummary(game));
+  if (node.type === 'trigger.leftBehind') base.leftBehind = Math.max(1, Number(c.people) || 5);
+  if (node.type === 'trigger.gaveUp') {
+    const ids = line ? [...new Set([...(s.routes[line]?.stops ?? []), ...(s.routes[line]?.returnStops ?? [])])] : Object.keys(s.stops);
+    const top = ids.map((id) => ({ id, g: gaveUpLastHour(game, id) })).sort((x, y) => y.g - x.g)[0];
+    if (top) Object.assign(base, { stop: top.id, stopName: s.stops[top.id]?.name ?? '', gaveUp: top.g });
+  }
+  if (node.type === 'trigger.shortBuses') {
+    const lines = line ? [s.routes[line]].filter(Boolean) : Object.values(s.routes);
+    const top = lines.map((x) => ({ r: x, n: shortOf(game, x.id) })).sort((x, y) => y.n - x.n)[0];
+    if (top) Object.assign(base, { line: top.r.id, lineNumber: top.r.number, lineName: top.r.name || `Line ${top.r.number}`, short: top.n, needed: busesNeededNow(game, top.r.id), buses: busesAvailable(game, top.r.id) });
+  }
+  if (node.type === 'trigger.watch') {
+    const fig = FIGURE[String(c.figure ?? '')];
+    const items = watchedItems(game, c).filter((x) => x.value !== null);
+    const below = String(c.op ?? 'above') === 'below';
+    const it = items.sort((x, y) => (below ? x.value! - y.value! : y.value! - x.value!))[0];
+    if (fig && it) {
+      const ln = it.line ? s.routes[it.line] : null;
+      const show = (v: number) => (fig.unit === 'money' ? game.money(v, { compact: true }) : fig.unit === '%' ? `${v}%` : `${v} ${fig.unit}`);
+      Object.assign(base, {
+        figure: fig.id, figureLabel: fig.label, scope: it.kind, itemId: it.id, name: it.name, label: it.name, value: it.value, reading: show(it.value!),
+        op: below ? 'below' : 'above', threshold: show(Number(c.value) || 0), for: Number(c.for ?? 0) || 0,
+        line: it.line, lineNumber: ln?.number ?? '', stop: it.stop, stopName: it.stop ? s.stops[it.stop]?.name ?? '' : '', vehicle: it.vehicle, fleetNo: it.vehicle ? s.vehicles[it.vehicle]?.fleetNo ?? '' : '',
+      });
+    }
+  }
   // weather and events: the real forecast, weather and next event in the game
   if (node.type === 'trigger.forecast') {
     const w = weatherRecs(game);
@@ -695,6 +785,31 @@ export function sampleEvent(game: Game, node: Workflow['nodes'][number]): Rec {
   return base;
 }
 
+
+/** The latest game week's figures and the change on the week before (for the end-of-week trigger). */
+export function weekSummary(game: Game): Rec {
+  const weeks = game.state.analytics.weeks ?? [];
+  const w = weeks.at(-1);
+  if (!w) return { week: null, days: 0, journeys: 0 };
+  const prev = weeks.at(-2);
+  const fares = (x: typeof w) => Math.round(x.net[4]);
+  const perDay = (x: typeof w) => (x.n ? x.net[0] / x.n : 0);
+  const change = (now: number, before: number | null) => (before ? Math.round(((now - before) / before) * 1000) / 10 : null);
+  let busiest: { id: string; b: number } | null = null;
+  for (const [id, row] of Object.entries(w.r)) if (!busiest || row[0] > busiest.b) busiest = { id, b: row[0] };
+  const br = busiest ? game.state.routes[busiest.id] : null;
+  return {
+    week: w.w, year: w.y, season: w.season, days: w.n,
+    journeys: w.net[0], gaveUp: w.net[1], fares: fares(w),
+    satisfaction: w.net[3] ? Math.round((w.net[2] / w.net[3]) * 1000) / 10 : null,
+    journeysPerDay: Math.round(perDay(w)),
+    journeysChange: prev ? change(perDay(w), perDay(prev)) : null,
+    changeText: (() => { const c = prev ? change(perDay(w), perDay(prev)) : null; return c === null ? 'the first week recorded' : `${c >= 0 ? '+' : ''}${c}% a day on the week before`; })(),
+    faresChange: prev && prev.n ? change(fares(w) / w.n, fares(prev) / prev.n) : null,
+    wetDays: w.wx[2] + w.wx[4],
+    busiestLine: br ? br.number : null, busiestLineBoardings: busiest?.b ?? 0,
+  };
+}
 
 /** The figures of a finished day (for the end-of-day trigger). */
 export function daySummary(game: Game, day: number): Rec {

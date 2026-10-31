@@ -13,6 +13,7 @@ import { aggregate, estimatedDemand, MEASURE, type GroupBy } from '../analytics/
 import { extraOption } from '../vehicles.ts';
 import { DAY, HOUR } from '../content.ts';
 import { hhmm } from '../time.ts';
+import { DAYS_OPTIONS, FIGURE, FIGURE_OPTIONS, REPEAT_PER } from './watch.ts';
 import { DAY_FILTER, EVENT_FILTER, EVENT_FILTER_SHORT, FORECAST_FILTER, PLACE_FILTER, PLACE_SERVED_M, WEATHER_FILTER, calendarRec, demandForecast, eventRec, eventsAhead, linesNearEvent, placeRec, placesOf, weatherRecs } from './city.ts';
 
 /** Marker for "this branch is not active". Never stored in the save. */
@@ -40,7 +41,7 @@ export interface ConfigField {
   label: string;
   kind: FieldKind;
   default: Value;
-  options?: { value: string; label: string }[];
+  options?: { value: string; label: string; group?: string }[];
   min?: number;
   max?: number;
   step?: number;
@@ -50,6 +51,8 @@ export interface ConfigField {
   vars?: string[];
   /** a picker that may be left empty (= any) */
   allowAny?: boolean;
+  /** shown under "When it may fire" in the inspector */
+  section?: 'timing';
 }
 
 export type Category = 'trigger' | 'data' | 'logic' | 'math' | 'state' | 'action' | 'advanced';
@@ -92,7 +95,7 @@ export interface NodeResult {
 
 export interface TriggerSpec {
   /** the game event it listens to (queued), or 'clock' / 'condition' (checked each minute), or 'manual' */
-  source: 'clock' | 'condition' | 'manual' | 'arrive' | 'depart' | 'missed' | 'breakdown' | 'day' | 'forecast' | 'weather' | 'eventAnnounced';
+  source: 'clock' | 'condition' | 'manual' | 'arrive' | 'depart' | 'missed' | 'breakdown' | 'day' | 'week' | 'forecast' | 'weather' | 'eventAnnounced' | 'leftBehind';
 }
 
 export interface NodeDef {
@@ -125,7 +128,7 @@ const fmt = (v: Value | undefined): string => {
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(1);
   if (typeof v === 'boolean') return v ? 'yes' : 'no';
   if (Array.isArray(v)) return `${v.length} item${v.length === 1 ? '' : 's'}`;
-  if (typeof v === 'object') return String(v.name ?? v.fleetNo ?? (v.number !== undefined ? `Line ${v.number}` : v.label ?? 'a record'));
+  if (typeof v === 'object') return String(v.name || v.fleetNo || (v.number !== undefined && v.number !== null ? `Line ${v.number}` : v.label || 'a record'));
   return `"${v}"`;
 };
 export const describeValue = fmt;
@@ -183,6 +186,29 @@ const eventScope = (game: Game, c: WfNode['config']) => {
 const nearLineCfg: ConfigField = { id: 'line', label: 'Near line', kind: 'line', default: '', allowAny: true, help: 'Only events within a kilometre of this line’s stops. Leave empty for any event.' };
 const eventOuts: PortDef[] = [{ id: 'event', label: 'Event', type: 'event' }, { id: 'details', label: 'Event details', type: 'record' }, { id: 'lines', label: 'Lines nearby', type: 'list', help: 'Your lines with a stop within 1 km. When there are none, nothing connected here runs.' }];
 
+// ── trigger timing: hours, kinds of day, "for at least" and "at most once every"
+const fromCfg: ConfigField = { id: 'from', label: 'From', kind: 'number', default: 0, min: 0, max: 23, unit: 'h', section: 'timing', help: 'Only between these hours of the day (0 to 24: all day).' };
+const toCfg: ConfigField = { id: 'to', label: 'Until', kind: 'number', default: 24, min: 1, max: 24, unit: 'h', section: 'timing' };
+const daysCfg: ConfigField = { id: 'days', label: 'On', kind: 'select', default: 'all', options: DAYS_OPTIONS, section: 'timing' };
+const forCfg = (def = 0): ConfigField => ({ id: 'for', label: 'For at least', kind: 'number', default: def, min: 0, max: 240, step: 5, unit: 'min', section: 'timing', help: 'It must stay that way this long before the trigger fires, so a short spike does not set it off. 0: straight away. It fires again only once things are back to normal.' });
+const repeatCfg = (type: string, def = 0): ConfigField => ({ id: 'repeat', label: 'At most once every', kind: 'number', default: def, min: 0, max: 1440, step: 5, unit: 'min', section: 'timing', help: `Counted ${REPEAT_PER[type]?.label ?? 'for each item'}. 0: every time.` });
+const hoursDays = [fromCfg, toCfg, daysCfg];
+const eventTiming = (type: string, repeat = 0) => [repeatCfg(type, repeat), ...hoursDays];
+
+/** Timing settings in words, for trigger labels ("" when unrestricted). */
+function timingWords(c: WfNode['config'], opts: { hours?: boolean } = {}): string {
+  const out: string[] = [];
+  const f = Number(c.for ?? 0) || 0;
+  if (f > 0) out.push(`for ${f}+ min`);
+  const from = Number(c.from ?? 0), to = Number(c.to ?? 24);
+  if (opts.hours !== false && !(from === 0 && to === 24) && from !== to) out.push(`${String(from).padStart(2, '0')}:00–${String(to).padStart(2, '0')}:00`);
+  const d = String(c.days ?? 'all');
+  if (d !== 'all') out.push(d === 'weekdays' ? 'weekdays' : 'weekends');
+  const r = Number(c.repeat ?? 0) || 0;
+  if (r > 0) out.push(`at most every ${r} min`);
+  return out.length ? ` · ${out.join(', ')}` : '';
+}
+
 function actionOut(rec: Rec | Rec[]): NodeResult {
   const list = Array.isArray(rec) ? rec : [rec];
   const done = list.some((r) => r.outcome === 'executed' || r.outcome === 'deferred');
@@ -206,8 +232,7 @@ export const NODES: NodeDef[] = [
     inputs: [], outputs: [eventOut], trigger: { source: 'clock' },
     config: [
       { id: 'minutes', label: 'Every', kind: 'number', default: 15, min: 5, max: 720, step: 5, unit: 'min' },
-      { id: 'from', label: 'From', kind: 'number', default: 0, min: 0, max: 23, unit: 'h', help: 'Only between these hours of the day.' },
-      { id: 'to', label: 'Until', kind: 'number', default: 24, min: 1, max: 24, unit: 'h' },
+      ...hoursDays,
     ],
     run: (ctx) => ({ out: { event: ctx.event }, note: `Ran at ${str(ctx.event.time)}.` }),
   },
@@ -226,44 +251,92 @@ export const NODES: NodeDef[] = [
     run: (ctx) => ({ out: { event: ctx.event, summary: ctx.event }, note: `Day ${str(ctx.event.dayNumber)} ended.` }),
   },
   {
+    type: 'trigger.week', category: 'trigger', label: 'End of the week', description: 'Runs at midnight when a game week ends, with the week’s journeys, fares and satisfaction and the change on the week before.',
+    inputs: [], outputs: [eventOut, { id: 'summary', label: 'Week summary', type: 'record' }], trigger: { source: 'week' }, config: [],
+    run: (ctx) => ({ out: { event: ctx.event, summary: ctx.event }, note: `Week ${str(ctx.event.week)} ended: ${str(ctx.event.journeys)} journeys.` }),
+  },
+  {
     type: 'trigger.arrive', category: 'trigger', label: 'A bus arrives at a stop', description: 'Runs every time a bus on a trip reaches a stop (filter by line and stop).',
     inputs: [], outputs: [eventOut, { id: 'bus', label: 'Bus', type: 'vehicle' }, { id: 'line', label: 'Line', type: 'line' }, { id: 'stop', label: 'Stop', type: 'stop' }],
-    trigger: { source: 'arrive' }, config: [lineCfg('Line', true), { id: 'stop', label: 'Stop', kind: 'stop', default: '', allowAny: true, help: 'Leave empty for any stop.' }],
+    trigger: { source: 'arrive' }, config: [lineCfg('Line', true), { id: 'stop', label: 'Stop', kind: 'stop', default: '', allowAny: true, help: 'Leave empty for any stop.' }, ...eventTiming('trigger.arrive')],
     run: (ctx) => ({ out: { event: ctx.event, ...triggerEntity(ctx) }, note: `${str(ctx.event.fleetNo)} arrived at ${str(ctx.event.stopName)}.` }),
   },
   {
     type: 'trigger.crowded', category: 'trigger', label: 'A crowded bus leaves', description: 'Runs when a bus leaves a stop at or above a load.',
     inputs: [], outputs: [eventOut, { id: 'bus', label: 'Bus', type: 'vehicle' }, { id: 'line', label: 'Line', type: 'line' }, { id: 'stop', label: 'Stop', type: 'stop' }],
-    trigger: { source: 'depart' }, config: [{ id: 'load', label: 'Load at least', kind: 'number', default: 85, min: 10, max: 100, unit: '%' }, lineCfg('Line', true)],
+    trigger: { source: 'depart' }, config: [{ id: 'load', label: 'Load at least', kind: 'number', default: 85, min: 10, max: 100, unit: '%' }, lineCfg('Line', true), ...eventTiming('trigger.crowded')],
     run: (ctx) => ({ out: { event: ctx.event, ...triggerEntity(ctx) }, note: `${str(ctx.event.fleetNo)} left ${str(ctx.event.stopName)} ${str(ctx.event.occupancy)}% full${num(ctx.event.leftBehind) ? `, ${ctx.event.leftBehind} left behind` : ''}.` }),
   },
   {
     type: 'trigger.late', category: 'trigger', label: 'A bus is running late', description: 'Runs once per trip when a bus leaves a stop later than the threshold.',
     inputs: [], outputs: [eventOut, { id: 'bus', label: 'Bus', type: 'vehicle' }, { id: 'line', label: 'Line', type: 'line' }],
-    trigger: { source: 'depart' }, config: [{ id: 'minutes', label: 'Late by at least', kind: 'number', default: 5, min: 1, max: 60, unit: 'min' }, lineCfg('Line', true)],
+    trigger: { source: 'depart' }, config: [{ id: 'minutes', label: 'Late by at least', kind: 'number', default: 5, min: 1, max: 60, unit: 'min' }, lineCfg('Line', true), ...eventTiming('trigger.late')],
     run: (ctx) => ({ out: { event: ctx.event, ...triggerEntity(ctx) }, note: `${str(ctx.event.fleetNo)} is ${str(ctx.event.delay)} min late at ${str(ctx.event.stopName)}.` }),
   },
   {
     type: 'trigger.missed', category: 'trigger', label: 'A departure is missed', description: 'Runs when a timetabled departure does not run.',
-    inputs: [], outputs: [eventOut, { id: 'line', label: 'Line', type: 'line' }], trigger: { source: 'missed' }, config: [lineCfg('Line', true)],
+    inputs: [], outputs: [eventOut, { id: 'line', label: 'Line', type: 'line' }], trigger: { source: 'missed' }, config: [lineCfg('Line', true), ...eventTiming('trigger.missed')],
     run: (ctx) => ({ out: { event: ctx.event, line: triggerEntity(ctx).line }, note: `Line ${str(ctx.event.lineNumber)} missed the ${str(ctx.event.dep)} departure.` }),
   },
   {
     type: 'trigger.breakdown', category: 'trigger', label: 'A bus breaks down', description: 'Runs when a bus breaks down.',
-    inputs: [], outputs: [eventOut, { id: 'bus', label: 'Bus', type: 'vehicle' }, { id: 'line', label: 'Line', type: 'line' }], trigger: { source: 'breakdown' }, config: [lineCfg('Line', true)],
+    inputs: [], outputs: [eventOut, { id: 'bus', label: 'Bus', type: 'vehicle' }, { id: 'line', label: 'Line', type: 'line' }], trigger: { source: 'breakdown' }, config: [lineCfg('Line', true), ...eventTiming('trigger.breakdown')],
     run: (ctx) => ({ out: { event: ctx.event, ...triggerEntity(ctx) }, note: `${str(ctx.event.fleetNo)} broke down.` }),
   },
   {
     type: 'trigger.waiting', category: 'trigger', label: 'Many people waiting', description: 'Runs when the number waiting at a stop rises above a threshold (again only after it has dropped well below).',
     inputs: [], outputs: [eventOut, { id: 'stop', label: 'Stop', type: 'stop' }], trigger: { source: 'condition' },
-    config: [{ id: 'threshold', label: 'At least', kind: 'number', default: 30, min: 2, max: 500, unit: 'people' }, lineCfg('On line', true)],
+    config: [{ id: 'threshold', label: 'At least', kind: 'number', default: 30, min: 2, max: 500, unit: 'people' }, lineCfg('On line', true), forCfg(0), ...hoursDays],
     run: (ctx) => ({ out: { event: ctx.event, stop: triggerEntity(ctx).stop }, note: `${str(ctx.event.waiting)} people waiting at ${str(ctx.event.stopName)}.` }),
   },
   {
     type: 'trigger.balance', category: 'trigger', label: 'Balance falls below', description: 'Runs when the bank balance drops below an amount.',
     inputs: [], outputs: [eventOut, { id: 'company', label: 'Company', type: 'record' }], trigger: { source: 'condition' },
-    config: [{ id: 'amount', label: 'Below', kind: 'number', default: 20000, min: -1_000_000, max: 100_000_000, step: 1000 }],
+    config: [{ id: 'amount', label: 'Below', kind: 'number', default: 20000, min: -1_000_000, max: 100_000_000, step: 1000 }, forCfg(0)],
     run: (ctx) => ({ out: { event: ctx.event, company: ctx.live.company() }, note: `Balance ${str(ctx.event.balance)}.` }),
+  },
+  {
+    type: 'trigger.watch', category: 'trigger', label: 'Watch a figure',
+    description: 'Runs when a figure goes above or below a value and stays there: a line’s load or punctuality, people waiting at a stop, a bus’s condition, your reputation… Checked every minute, for each line, stop or bus. It fires again only once the figure is back to normal.',
+    inputs: [], outputs: [eventOut, { id: 'item', label: 'Line, stop or bus', type: 'record', help: 'The line, stop or bus (or the company) whose figure crossed the value, with its live figures.' }, { id: 'value', label: 'Figure', type: 'number' }],
+    trigger: { source: 'condition' },
+    config: [
+      { id: 'figure', label: 'Watch', kind: 'select', default: 'line.load3h', options: FIGURE_OPTIONS },
+      { id: 'line', label: 'Only on line', kind: 'line', default: '', allowAny: true, help: 'For line, stop and bus figures: only this line, its stops or its buses. Leave empty for all.' },
+      { id: 'op', label: 'When it goes', kind: 'select', default: 'above', options: [{ value: 'above', label: 'Above' }, { value: 'below', label: 'Below' }] },
+      { id: 'value', label: 'Value', kind: 'number', default: 85, min: -100_000_000, max: 100_000_000 },
+      forCfg(10),
+      { id: 'again', label: 'Fire again', kind: 'select', default: 'margin', section: 'timing', options: [{ value: 'margin', label: 'Once it is clearly back (by a tenth)' }, { value: 'clear', label: 'As soon as it is back' }], help: 'After firing it waits for the figure to come back before it can fire again for the same line, stop or bus.' },
+      ...hoursDays,
+    ],
+    run: (ctx) => {
+      const e = ctx.event;
+      const kind = str(e.scope), id = str(e.itemId);
+      const item = kind === 'line' ? ctx.live.line(id) : kind === 'stop' ? ctx.live.stop(id) : kind === 'bus' ? ctx.live.busById(id) : ctx.live.company();
+      const fig = FIGURE[str(e.figure)];
+      return { out: { event: e, item: item ?? OFF, value: num(e.value) ?? OFF }, note: `${str(e.name)}: ${fig?.label.toLowerCase() ?? 'figure'} ${str(e.reading)} (${str(e.op) === 'below' ? 'below' : 'above'} ${str(e.threshold)}${num(e.for) ? ` for ${e.for} min` : ''}).` };
+    },
+  },
+  {
+    type: 'trigger.shortBuses', category: 'trigger', label: 'A line is short of buses',
+    description: 'Runs when a line has fewer working buses than its timetable needs right now (buses under maintenance or broken down do not count). Every departure it cannot run is missed, and missed departures cost reputation. Fires again only once the line is covered.',
+    inputs: [], outputs: [eventOut, { id: 'line', label: 'Line', type: 'line' }, { id: 'short', label: 'Buses short', type: 'number' }], trigger: { source: 'condition' },
+    config: [lineCfg('Line', true), forCfg(0), ...hoursDays],
+    run: (ctx) => ({ out: { event: ctx.event, line: triggerEntity(ctx).line, short: num(ctx.event.short) ?? 0 }, note: `Line ${str(ctx.event.lineNumber)} needs ${str(ctx.event.needed)} buses now and has ${str(ctx.event.buses)} working.` }),
+  },
+  {
+    type: 'trigger.leftBehind', category: 'trigger', label: 'People left behind',
+    description: 'Runs when a full bus leaves people behind at a stop.',
+    inputs: [], outputs: [eventOut, { id: 'bus', label: 'Bus', type: 'vehicle' }, { id: 'line', label: 'Line', type: 'line' }, { id: 'stop', label: 'Stop', type: 'stop' }], trigger: { source: 'leftBehind' },
+    config: [{ id: 'people', label: 'At least', kind: 'number', default: 5, min: 1, max: 200, unit: 'people' }, lineCfg('Line', true), ...eventTiming('trigger.leftBehind', 20)],
+    run: (ctx) => ({ out: { event: ctx.event, ...triggerEntity(ctx) }, note: `${str(ctx.event.fleetNo)} was full at ${str(ctx.event.stopName)}: ${str(ctx.event.leftBehind)} left behind.` }),
+  },
+  {
+    type: 'trigger.gaveUp', category: 'trigger', label: 'People give up waiting',
+    description: 'Runs when people waiting at a stop give up and travel another way: at least this many at one stop within the last hour. Fires again for that stop only once it has calmed down.',
+    inputs: [], outputs: [eventOut, { id: 'stop', label: 'Stop', type: 'stop' }], trigger: { source: 'condition' },
+    config: [{ id: 'people', label: 'At least', kind: 'number', default: 8, min: 1, max: 500, unit: 'people' }, lineCfg('On line', true), forCfg(0), ...hoursDays],
+    run: (ctx) => ({ out: { event: ctx.event, stop: triggerEntity(ctx).stop }, note: `${str(ctx.event.gaveUp)} people gave up waiting at ${str(ctx.event.stopName)} in the last hour.` }),
   },
   {
     type: 'trigger.forecast', category: 'trigger', label: 'Tomorrow’s forecast', description: 'Runs at 18:00 when tomorrow’s weather forecast comes out. About 8 forecasts in 10 are right; a miss is usually close.',
@@ -968,16 +1041,28 @@ export function triggerLabel(game: Game, node: WfNode): string {
   const c = node.config;
   const line = typeof c.line === 'string' && c.line ? ` on line ${game.state.routes[c.line]?.number ?? '?'}` : '';
   switch (node.type) {
-    case 'trigger.every': return `Every ${c.minutes} minutes${(c.from ?? 0) !== 0 || (c.to ?? 24) !== 24 ? `, ${c.from}:00–${c.to}:00` : ''}`;
+    case 'trigger.every': return `Every ${c.minutes} minutes${timingWords(c)}`;
     case 'trigger.time': return `Every day at ${c.time}${c.days === 'weekdays' ? ' (weekdays)' : c.days === 'weekend' ? ' (weekends)' : ''}`;
     case 'trigger.day': return 'At the end of each day';
-    case 'trigger.arrive': return `A bus arrives${line}`;
-    case 'trigger.crowded': return `A bus leaves ${c.load}% full${line}`;
-    case 'trigger.late': return `A bus is ${c.minutes}+ min late${line}`;
-    case 'trigger.missed': return `A departure is missed${line}`;
-    case 'trigger.breakdown': return `A bus breaks down${line}`;
-    case 'trigger.waiting': return `${c.threshold}+ people waiting${line}`;
-    case 'trigger.balance': return `Balance below ${game.money(Number(c.amount) || 0, { compact: true })}`;
+    case 'trigger.week': return 'At the end of each week';
+    case 'trigger.arrive': return `A bus arrives${line}${timingWords(c)}`;
+    case 'trigger.crowded': return `A bus leaves ${c.load}% full${line}${timingWords(c)}`;
+    case 'trigger.late': return `A bus is ${c.minutes}+ min late${line}${timingWords(c)}`;
+    case 'trigger.missed': return `A departure is missed${line}${timingWords(c)}`;
+    case 'trigger.breakdown': return `A bus breaks down${line}${timingWords(c)}`;
+    case 'trigger.waiting': return `${c.threshold}+ people waiting${line}${timingWords(c)}`;
+    case 'trigger.balance': return `Balance below ${game.money(Number(c.amount) || 0, { compact: true })}${timingWords(c)}`;
+    case 'trigger.leftBehind': return `${c.people}+ people left behind${line}${timingWords(c)}`;
+    case 'trigger.gaveUp': return `${c.people}+ give up waiting at a stop${line}${timingWords(c)}`;
+    case 'trigger.shortBuses': return `${line ? `Line ${game.state.routes[String(c.line)]?.number ?? '?'}` : 'A line'} short of buses${timingWords(c)}`;
+    case 'trigger.watch': {
+      const f = FIGURE[String(c.figure ?? '')];
+      if (!f) return 'Watch a figure';
+      const v = Number(c.value) || 0;
+      const shown = f.unit === 'money' ? game.money(v, { compact: true }) : f.unit === '%' ? `${v}%` : `${v} ${f.unit}`;
+      const who = f.scope === 'company' ? '' : line ? ` (line ${game.state.routes[String(c.line)]?.number ?? '?'})` : f.scope === 'line' ? ' (any line)' : f.scope === 'stop' ? ' (any stop)' : ' (any bus)';
+      return `${f.label}${who} ${String(c.op) === 'below' ? 'below' : 'above'} ${shown}${timingWords(c)}`;
+    }
     case 'trigger.manual': return 'Run by hand';
     case 'trigger.forecast': {
       const f = String(c.when ?? 'any');

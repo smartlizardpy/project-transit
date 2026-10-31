@@ -108,7 +108,7 @@ Fallbacks:
 Tracked in detail in [`docs/network-control-progress.md`](network-control-progress.md), with evidence for each item.
 
 - **Network Control** unlocks after 30 operating days at company level 3. Analytics are recorded from day one and reconcile with the simulation and the ledger. The panel covers overview, passengers (observed journeys and estimated demand, drawn on the map), stops, lines, fleet, custom metrics and saved reports.
-- **Automation Studio**: workflows of typed nodes run on game time through the same commands as the player, in Observe, Suggest or Automatic mode, within safety limits, with history, traces and a Simulation Lab. Reference: [`docs/automation-api.md`](automation-api.md).
+- **Automation Studio**: workflows of typed nodes run on game time through the same commands as the player, in Observe, Suggest or Automatic mode, within safety limits, with history, traces and a Simulation Lab. Triggers can wait for a condition to last, keep to hours and days, and limit repeats; *Watch a figure* covers 18 figures; each trigger shows its live state; 28 starter workflows in six groups. Reference: [`docs/automation-api.md`](automation-api.md).
 - **Route diagnostics** (not locked): clickable route warnings with the cause, a map overlay, fixes with before/after, and undo. See [`docs/route-diagnostics.md`](route-diagnostics.md).
 - **Depot moves**: a bus can be based at another depot and drives there on the road.
 

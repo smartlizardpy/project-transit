@@ -7,6 +7,10 @@ import { DEFAULT_LIMITS } from './types.ts';
 import { NODE, defaultConfig, trim } from './registry.ts';
 import { GRAPH_LIMITS } from './validate.ts';
 import { invalidate, refreshWants } from './executor.ts';
+import { clearPending } from './watch.ts';
+
+/** Trigger settings, to tell a moved node from a changed condition. */
+const triggerSig = (nodes: WfNode[]) => JSON.stringify(nodes.filter((n) => NODE[n.type]?.trigger).map((n) => [n.id, n.type, n.config, !!n.disabled]));
 
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const fail = (error: string): Result<never> => ({ ok: false, error });
@@ -83,6 +87,7 @@ export function updateWorkflow(game: Game, id: string, patch: WorkflowPatch): Re
       if (wf.kind === 'function' && NODE[n.type].trigger) return fail('A function cannot contain triggers.');
     }
   }
+  const sigBefore = patch.nodes ? triggerSig(wf.nodes) : '';
   const nodes = patch.nodes ?? wf.nodes;
   const nodeIds = new Set(nodes.map((n) => n.id));
   let edges = patch.edges ?? wf.edges;
@@ -114,6 +119,8 @@ export function updateWorkflow(game: Game, id: string, patch: WorkflowPatch): Re
     }
   }
   const structural = !!(patch.nodes || patch.edges);
+  // half-built "for at least" conditions start again: the trigger changed, or nothing was watched
+  if ((patch.nodes && triggerSig(wf.nodes) !== sigBefore) || patch.enabled === false) clearPending(a, id);
   if (structural || patch.mode || patch.allowHighImpact !== undefined || patch.limits) wf.rev++;
   wf.updated = game.t;
   invalidate(game, id);

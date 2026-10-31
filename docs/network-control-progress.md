@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-30.
+Last updated: 2026-10-31 (smarter triggers and starter workflows).
 
 ## A. Foundations: save version 2, analytics recording, unlock ✅
 
@@ -94,6 +94,31 @@ Data nodes have an optional **After** input so a template shows its trigger wire
 | Bus inspector: depot picker with spaces used, the plan in words, Move / Cancel | ✅ | `depot-move-plan.png` |
 | The bus drives to its new depot on the road, drawn as a hollow ring like other depot runs | ✅ | `depot-move-driving.png` |
 | Available to automations (`Move bus to depot` node) | ✅ | registry; command checks shared |
+
+## G. Smarter triggers and starter workflows (requested 2026-10-31) 🟡
+
+The owner found the triggers too basic and asked for more ready-made flows. Research (Home Assistant, Node-RED, n8n, Prometheus and Grafana alert rules, Oxygen Not Included, Factorio, OpenTTD, TfL's excess wait time, transit holding research) led to a recommended first batch, built here. 🟡 until the owner has played it.
+
+| Item | Status | Evidence |
+|---|---|---|
+| **For at least N minutes** on condition triggers (watch a figure, people waiting, people giving up, a line short of buses, balance): a short spike does not fire; it fires once and then waits for the condition to clear (a tenth of the value back, or as chosen) before it can fire again for the same line, stop or bus | ✅ | `automation-triggers.test.ts` "waits for the condition to hold, ignores a shorter spike, and fires once until it clears" (5-minute dip: nothing; 10 minutes: one run; back by less than a tenth: still waits; clearly back: re-arms) |
+| **Hours and days** (From, Until, every day / weekdays / weekends) on every condition and event trigger and on *Every few minutes*; outside them nothing builds up | ✅ | tests "only builds up and fires within its hours", "skips weekdays for a weekend-only trigger" |
+| **At most once every N minutes** for each stop, line or bus on event triggers | ✅ | test "runs an event trigger at most once every N minutes for each stop" (arrivals every 8 min, at most 2 an hour per stop, 30 min apart) |
+| Half-built conditions start again when a workflow is switched off, automation is paused, or its trigger settings change (not when a node is moved); saved, so a reload fires at the same minute; old workflows without the new settings behave as before | ✅ | tests "starts again when the workflow is switched off, and a reload carries on the same", "keeps an old workflow … working as before" |
+| **Watch a figure**: 18 figures (line load and punctuality over 3 hours, how full now, delay, waiting, missed today, buses short, road traffic; stop waiting, longest wait, gave up in the last hour; bus condition, delay, fullness; reputation, satisfaction today, balance, today's result), checked every minute for each line, stop or bus, or one line's; hands on the line, stop or bus record | ✅ | tests "watches each bus and hands the bus on…", "reads line, stop and company figures…" |
+| New triggers: **A line is short of buses** (fewer working buses than the timetable needs right now; buses in the workshop or broken down do not count), **People left behind**, **People give up waiting** (in the last 60 minutes at one stop), **End of the week** (journeys, change on the week before, satisfaction, fares, busiest line) | ✅ | tests in "new triggers" (4) |
+| **Live state on every trigger card**: the current reading (for many lines or stops, the one closest to firing), *Watching*, *Building up: 11 of 30 min*, *Fired, waits to clear*, the next run for schedules, last fired and runs today, from the running game | ✅ | `automation-trigger-live.png`, `automation-rebalance-flow.png` ("Next 09:00") |
+| Inspector: timing settings under **When it may fire**; the figure list grouped by lines, stops, buses and the company | ✅ | `automation-trigger-live.png` |
+| New figures on records for Filter and Expression blocks: line `neededNow`, `working`, `short`; stop `gaveUpHour`, `leftBehindToday`; company `satisfactionToday`, `spareBuses` | ✅ | `docs/automation-api.md` |
+| **13 new starter workflows** (28 in all), in a gallery grouped by topic: crowding and waiting, reliability, fleet and maintenance, money and reputation, events/weather/calendar, reports and briefings | ✅ | test "every template has a group, validates and test-runs without failing"; `automation-template-groups.png`; list in `docs/automation-api.md` |
+| *Move a bus from a quiet line to a busy one* takes a free bus only from a line with more working buses than its timetable needs | ✅ | test (measured: one move, at 17:00 on the first day of the crowded test line) |
+| *Find out why reputation is falling* names the line missing the most departures, or says none is | ✅ | `automation-reputation-flow.png` |
+| *Service worn buses between the peaks* sends buses below 78% between 09:00 and 16:00, ahead of the game's own automatic service at 70% (which can strike in the rush hour) | ✅ | test (a bus at 76% at 08:00 is sent at 09:00) |
+| Performance: eight of the new workflows on a three-line company add nothing measurable (about 360 ms per 3 game hours with or without) | ✅ | measured with a throwaway benchmark |
+
+The live-state screenshot uses a custom workflow, *Reputation slipping*, whose threshold (60) is the next round ten above the demo company's real reputation (58.1), so the trigger is building up in the shot. Everything else in it is the engine's real state.
+
+**Not built yet (second batch, recommended):** bus bunching and gaps between buses on frequent lines, with a *Hold this bus* action; *Check back later* (a workflow re-checks its own fix N minutes on); a preview of how often a trigger would have fired over the last week; a trigger for another workflow acting or being blocked by a limit; a *collect, then send one summary* block.
 
 ## Mandatory scenarios
 

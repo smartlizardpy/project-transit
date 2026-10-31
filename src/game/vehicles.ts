@@ -571,6 +571,10 @@ function arriveStop(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
   v.until = now + dwell;
   if (v.stopIdx === 0) v.until = Math.max(v.until, trip.dep);
   game.emitStop(p.stops[v.stopIdx], v.id, ev);
+  if (ev.leftBehind && game.autoWants.has('leftBehind')) {
+    const stop = p.stops[v.stopIdx];
+    simEvent(game, 'leftBehind', { vehicle: v.id, fleetNo: v.fleetNo, line: p.route, lineNumber: game.state.routes[p.route]?.number ?? '', stop, stopName: game.state.stops[stop]?.name ?? '', leftBehind: ev.leftBehind, occupancy: Math.round((occupied(v) / MODEL[v.model].capacity) * 100), trip: trip.id });
+  }
   if (game.autoWants.has('arrive')) {
     const stop = p.stops[v.stopIdx];
     simEvent(game, 'arrive', { vehicle: v.id, fleetNo: v.fleetNo, line: p.route, lineNumber: game.state.routes[p.route]?.number ?? '', stop, stopName: game.state.stops[stop]?.name ?? '', load: v.load, occupancy: Math.round((occupied(v) / MODEL[v.model].capacity) * 100), delay: Math.round(Math.max(0, v.delay) / 6) / 10, boarded: ev.board, alighted: ev.alight, leftBehind: ev.leftBehind, trip: trip.id });

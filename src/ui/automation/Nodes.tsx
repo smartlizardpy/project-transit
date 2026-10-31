@@ -1,10 +1,27 @@
 // The node cards drawn on the canvas.
-import { memo } from 'react';
+import { memo, useEffect, useReducer } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
 import type { Game } from '../../game/engine.ts';
 import { NODE, triggerLabel, describeValue } from '../../game/automation/registry.ts';
 import type { NodeTrace, WfGroup, WfNode } from '../../game/automation/types.ts';
 import { CatChip, nodeTitle } from './common.tsx';
+import { triggerStatus } from '../../game/automation/watch.ts';
+
+/** A trigger's live state (watching, building up, fired), refreshed as game minutes pass. */
+function TriggerLive({ game, wfId, node }: { game: Game; wfId: string; node: WfNode }) {
+  const [, force] = useReducer((x: number) => x + 1, 0);
+  useEffect(() => {
+    let last = 0;
+    return game.on('minute', () => {
+      const now = performance.now();
+      if (now - last > 500) { last = now; force(); }
+    });
+  }, [game]);
+  const wf = game.state.automation.workflows[wfId];
+  if (!wf) return null;
+  const st = triggerStatus(game, wf, node);
+  return <div className={`st-node-live s-${st.state}`} title="Live: what this trigger is doing in the running game">{st.text}</div>;
+}
 
 /** A line of what the node is set to, in the game's words. */
 export function summarise(game: Game, node: WfNode, wired?: Set<string>): string {
@@ -40,10 +57,12 @@ export interface StNodeData extends Record<string, unknown> {
   ran: boolean;
   /** input ports that have a connection */
   wired?: Set<string>;
+  /** the saved workflow, for a trigger's live state */
+  wfId?: string;
 }
 
 function StNodeView({ data, selected }: NodeProps) {
-  const { node, game, trace, issue, ran, wired } = data as StNodeData;
+  const { node, game, trace, issue, ran, wired, wfId } = data as StNodeData;
   const def = NODE[node.type];
   if (!def) return <div className="st-node has-error"><div className="st-node-head"><b>Unknown node</b></div></div>;
   const run = ran && trace ? trace.status : null;
@@ -59,6 +78,7 @@ function StNodeView({ data, selected }: NodeProps) {
         </div>
       </div>
       {sum && <div className="st-node-sum">{sum}</div>}
+      {def.trigger && wfId && <TriggerLive game={game} wfId={wfId} node={node} />}
       {ran && trace?.note && trace.status === 'ok' && <div className="st-node-note">{trace.note}</div>}
       {ran && trace?.status === 'error' && <div className="st-node-note err">{trace.error}</div>}
       {ran && trace?.status === 'inactive' && <div className="st-node-note off">Not reached</div>}

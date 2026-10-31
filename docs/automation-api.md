@@ -2,15 +2,40 @@
 
 How Automation Studio workflows run, what they can read and do, and the rules that keep them safe. The node and function tables at the end are generated from the code (`node scripts/dev/automation-reference.mjs`).
 
-Engine code: `src/game/automation/` (types, registry, validate, executor, manage, templates, lab, live, events, city) and `src/game/expr.ts`. Commands: `src/game/commands.ts`. Tests: `src/game/test/automation.test.ts`, `src/game/test/automation-city.test.ts`, `src/game/test/automation-forecast.test.ts`, `src/game/test/commands.test.ts`.
+Engine code: `src/game/automation/` (types, registry, validate, executor, manage, templates, lab, live, events, city, watch) and `src/game/expr.ts`. Commands: `src/game/commands.ts`. Tests: `src/game/test/automation.test.ts`, `src/game/test/automation-city.test.ts`, `src/game/test/automation-forecast.test.ts`, `src/game/test/automation-triggers.test.ts`, `src/game/test/commands.test.ts`.
 
 ## How a workflow runs
 
 - A workflow is a graph of nodes saved with the company (`state.automation`). Connections carry values from an output to an input; each input takes one connection.
 - **Game time only.** Schedules and conditions are checked once per game minute, inside the simulation step. Pausing the game pauses automation; faster speeds run it faster. Nothing uses wall-clock timers.
-- **Simulation events** (a bus arrives, departs, breaks down; a departure is missed; the day ends; tomorrow's forecast comes out at 18:00; the weather changes on the hour; an event is announced) are queued in the save and handled at the next game minute, so a reload neither loses nor repeats them. Events are only recorded when an enabled workflow listens for that kind.
+- **Simulation events** (a bus arrives, departs, breaks down; a full bus leaves people behind; a departure is missed; the day or the game week ends; tomorrow's forecast comes out at 18:00; the weather changes on the hour; an event is announced) are queued in the save and handled at the next game minute, so a reload neither loses nor repeats them. Events are only recorded when an enabled workflow listens for that kind.
 - **One run** evaluates every enabled node in a fixed topological order. Nodes hanging off a trigger that did not fire receive *not active* and are skipped, as are nodes on the branch an If did not take. Nodes not attached to any trigger (shared data) run on every trigger. Data nodes have an optional **After** input: connect a trigger to it and the node reads its figures only when that trigger fired (the templates do this, so the canvas shows what starts what). The same state always gives the same result; runs are part of the deterministic simulation and continue identically after a reload (tested).
 - **Validation** (`validate.ts`) runs before every run and live in the editor: required inputs, port types, loops, unknown or deleted lines/stops/buses/depots, expression syntax, size limits. An enabled workflow with problems records a failed run instead of acting.
+
+## Trigger timing
+
+Triggers that watch a condition (*Watch a figure*, *Many people waiting*, *People give up waiting*, *A line is short of buses*, *Balance falls below*) work like alert rules:
+
+- **For at least N minutes**: the condition must hold that long before the trigger fires (0: straight away). While it builds up, the node on the canvas says so ("Building up: 6 of 10 min").
+- **Fires once, then waits to clear**: after firing it fires again for the same line, stop or bus only once the condition has cleared. *Watch a figure* clears once the figure is back by a tenth of the value (or, if chosen, as soon as it is back); people waiting and giving up clear below 70% of the threshold; a line short of buses clears once it is covered; the balance clears a tenth (at least 1,000) above the amount.
+- **From / Until / On**: hours of the day and every day, weekdays or weekends. Outside them nothing builds up and nothing fires.
+- Half-built conditions start again when the workflow is switched off, all automation is paused, or the trigger's settings change (moving the node does not count). The state is saved, so a reload carries on at the same minute (tested).
+
+Event triggers (*A bus arrives*, *A crowded bus leaves*, *A bus is running late*, *A departure is missed*, *A bus breaks down*, *People left behind*) take the same hours and days, and **At most once every N minutes** for each stop (arrivals, people left behind), line (crowded, late, missed) or bus (breakdowns). 0: every time.
+
+Workflows saved before these settings existed behave as before: missing settings mean "straight away, all day, every time" (tested).
+
+**Live status.** Each trigger on the canvas shows what it is doing in the running game: the current reading for condition triggers (for many lines or stops, the one closest to firing), *Watching*, *Building up*, *Fired, waits to clear*, the next time for schedules, when it last fired and how many times today. It reads the saved workflow, so it is the real state, not a preview.
+
+### Watch a figure
+
+One trigger for any figure the game keeps, checked every minute for each line, stop or bus (or the company), optionally only one line, its stops or its buses:
+
+| Lines | Stops | Buses | The company |
+|---|---|---|---|
+| average load, last 3 hours; how full its buses are now; trips on time, last 3 hours; average delay now; people waiting for it; departures missed today; buses short of its timetable now; road traffic along it | people waiting; longest wait now; people who gave up, last hour | condition; how late it is; how full it is | reputation; passenger satisfaction today; balance; today's result so far |
+
+Its outputs are the event, the line, stop or bus (or company) record with its live figures, and the figure. The event carries `figure`, `figureLabel`, `name`, `value`, `reading` (formatted), `threshold`, `op`, `for`, and `line`, `lineNumber`, `stop`, `stopName`, `vehicle`, `fleetNo` where they apply.
 
 ## Values and records
 
@@ -18,12 +43,13 @@ Values are numbers, yes/no, text, records and lists. Records are plain objects w
 
 | Record | Fields |
 |---|---|
-| line | `id`, `number`, `name`, `colour`, `buses`, `needed` (peak requirement), `running`, `occupancy` (% average of buses on a trip now), `waiting`, `delay` (min, average), `headway` (min, now), `suspended`, `onTime3h` (%), `load3h` (%), `boardingsToday`, `tripsToday`, `missedToday`, `plan` (the service plan running today, or `null` for the normal timetable), `plans` (names of the enabled plans), `holidayPlan` (has an enabled school-holidays plan), `congestion` (% simulated traffic along the line) |
-| stop | `id`, `name`, `waiting`, `longestWait` (min), `lines` (numbers), `boardingsToday`, `gaveUpToday`, `avgWaitToday` (min) |
+| line | `id`, `number`, `name`, `colour`, `buses`, `needed` (peak requirement), `running`, `occupancy` (% average of buses on a trip now), `waiting`, `delay` (min, average), `headway` (min, now), `suspended`, `onTime3h` (%), `load3h` (%), `boardingsToday`, `tripsToday`, `missedToday`, `plan` (the service plan running today, or `null` for the normal timetable), `plans` (names of the enabled plans), `holidayPlan` (has an enabled school-holidays plan), `congestion` (% simulated traffic along the line), `neededNow` (buses the timetable needs at this moment), `working` (buses on the line not under maintenance, broken down or leaving), `short` (buses short of the timetable now; 0 when suspended) |
+| stop | `id`, `name`, `waiting`, `longestWait` (min), `lines` (numbers), `boardingsToday`, `gaveUpToday`, `avgWaitToday` (min), `gaveUpHour` (people who gave up here in the last 60 minutes), `leftBehindToday` |
 | bus (`vehicle`) | `id`, `fleetNo`, `model`, `capacity`, `line`, `lineNumber`, `status`, `statusLabel`, `load`, `occupancy` (%), `condition` (%), `delay` (min), `depot`, `depotName`, `spare`, `free` (could start an extra trip now), `carrying` |
-| company | `balance`, `reputation`, `level`, `fare`, `resultToday`, `buses`, `lines` |
+| company | `balance`, `reputation`, `level`, `fare`, `resultToday`, `buses`, `lines`, `satisfactionToday` (% of today's finished journeys, or `null`), `spareBuses` (buses with no line) |
+| week summary (end-of-week trigger) | `week`, `year`, `season`, `days`, `journeys`, `gaveUp`, `fares`, `satisfaction` (%), `journeysPerDay`, `journeysChange` and `faresChange` (% a day on the week before, `null` for the first week), `changeText` (the change in words), `wetDays`, `busiestLine`, `busiestLineBoardings` |
 | time | `t`, `time` (HH:MM), `hour`, `minute`, `weekday`, `weekend`, `day` |
-| event | depends on the trigger, e.g. `vehicle`, `fleetNo`, `line`, `lineNumber`, `stop`, `stopName`, `load`, `occupancy`, `delay`, `trip`; the end-of-day event carries the day's `boardings`, `journeys`, `gaveUp`, `trips`, `missed`, `onTime`, `satisfaction`, `fares`, `costs`, `result`; city event triggers carry `event`, `eventKind`, `eventTitle`, `venue`, `people`, `start`, `end`, `when`, `reason`; the forecast trigger carries the forecast fields below; the weather trigger carries `from`, `to` (0 dry, 1 light rain, 2 rain, 3 heavy rain, 4 snow), `label`, `wasLabel`, `time`, `temp` |
+| event | depends on the trigger, e.g. `vehicle`, `fleetNo`, `line`, `lineNumber`, `stop`, `stopName`, `load`, `occupancy`, `delay`, `trip`; the left-behind event carries `leftBehind`; the give-up event `gaveUp`; the short-of-buses event `short`, `needed`, `buses`; the end-of-day event carries the day's `boardings`, `journeys`, `gaveUp`, `trips`, `missed`, `onTime`, `satisfaction`, `fares`, `costs`, `result`; city event triggers carry `event`, `eventKind`, `eventTitle`, `venue`, `people`, `start`, `end`, `when`, `reason`; the forecast trigger carries the forecast fields below; the weather trigger carries `from`, `to` (0 dry, 1 light rain, 2 rain, 3 heavy rain, 4 snow), `label`, `wasLabel`, `time`, `temp` |
 | event details (`event` record from the event triggers and `data.events`) | `id`, `type` (football, concert, festival, gathering, rail, flight), `label`, `title`, `venue`, `place`, `people` (expected), `day`, `start`, `end` (HH:MM, with extra time once known), `when`, `startsIn`, `endsIn` (min), `underWay`, `over`, `cancelled`, `reason`, `lines` (how many of your lines are within 1 km; for a rail disruption, within 600 m of the closed stations) |
 | weather now | `condition` (0–4 as above), `label`, `raining`, `heavy`, `snow`, `temp` (°C), `rain` (mm this hour) |
 | weather today | `type`, `label`, `high`, `low`, `rain` (mm in the day), `wet` |
@@ -82,6 +108,21 @@ Used by the Expression, Filter and Calculate-for-each nodes and by custom metric
 - Dividing by zero gives `null`. Comparisons involving `null` are false. Missing fields are `null`.
 - **Sandbox**: expressions are parsed by the game's own interpreter. There is no `eval` or `Function`, and no route to JavaScript objects, the file system, the network, Tauri commands or the page. `__proto__`, `prototype` and `constructor` are refused. Every evaluation has a step budget and size limits (below), so an expression cannot hang the game.
 
+## Starter workflows
+
+Automation Studio offers 28 starter workflows (`templates.ts`), grouped in the gallery. Each is an ordinary workflow built from the nodes below and can be changed freely. They start in the mode shown and switched off.
+
+| Group | Workflows |
+|---|---|
+| Crowding and waiting | Extra bus when a line is crowded (observe) · Watch every line for crowding (suggest) · Busy hour ahead (automatic) · Extra bus when people are left behind (suggest) · Crowded stop alert (automatic) · People giving up at a stop (automatic) · Move a bus from a quiet line to a busy one (suggest) |
+| Reliability | Tell me when a bus runs late (automatic) · Warn me when a line is short of buses (automatic) · Send a spare bus to a line that is short (suggest) · Unreliable line alert (automatic) · Tell me when a whole line runs late (automatic) · Missed departures at the end of the day (automatic) |
+| Fleet and maintenance | Cover a breakdown (suggest) · Service worn buses between the peaks (suggest) |
+| Money and reputation | Low balance warning (automatic) · Find out why reputation is falling (automatic) |
+| Events, weather and the calendar | Extra buses for big events (suggest) · Rain plan when a storm is forecast (observe) · Extra bus when heavy rain starts (suggest) · Cover a rail disruption (suggest) · Events in the next three days (automatic) · School holidays check (automatic) · Early-morning airport boost (suggest) |
+| Reports and briefings | Daily summary (automatic) · Unserved corridors report (automatic) · Weekly report (automatic) · Morning briefing (automatic) |
+
+Tested (`automation-triggers.test.ts`): every template validates and test-runs without failing on a two-line company; *Move a bus from a quiet line to a busy one* only takes a free bus from a line with more working buses than its timetable needs (measured: one move, at 17:00 on the first day of the crowded test line); *Service worn buses between the peaks* sends a bus below 78% only from 09:00 (the game's own automatic service is at 70%).
+
 ## Reference (generated)
 
 <!-- generated: node scripts/dev/automation-reference.mjs -->
@@ -94,16 +135,21 @@ Start a workflow: on a schedule or when something happens in the game.
 
 | Node | What it does | Inputs | Outputs | Settings |
 |---|---|---|---|---|
-| Every few minutes `trigger.every` | Runs on a regular game-time schedule, e.g. every 15 minutes. Pauses and speeds up with the game. | – | Event (event) | Every, From, Until |
+| Every few minutes `trigger.every` | Runs on a regular game-time schedule, e.g. every 15 minutes. Pauses and speeds up with the game. | – | Event (event) | Every, From, Until, On |
 | At a time of day `trigger.time` | Runs once a day at a set time. | – | Event (event) | At, On |
 | End of the day `trigger.day` | Runs at midnight with the day that just ended: boardings, journeys, fares and costs. | – | Event (event), Day summary (record) | – |
-| A bus arrives at a stop `trigger.arrive` | Runs every time a bus on a trip reaches a stop (filter by line and stop). | – | Event (event), Bus (bus), Line (line), Stop (stop) | Line, Stop |
-| A crowded bus leaves `trigger.crowded` | Runs when a bus leaves a stop at or above a load. | – | Event (event), Bus (bus), Line (line), Stop (stop) | Load at least, Line |
-| A bus is running late `trigger.late` | Runs once per trip when a bus leaves a stop later than the threshold. | – | Event (event), Bus (bus), Line (line) | Late by at least, Line |
-| A departure is missed `trigger.missed` | Runs when a timetabled departure does not run. | – | Event (event), Line (line) | Line |
-| A bus breaks down `trigger.breakdown` | Runs when a bus breaks down. | – | Event (event), Bus (bus), Line (line) | Line |
-| Many people waiting `trigger.waiting` | Runs when the number waiting at a stop rises above a threshold (again only after it has dropped well below). | – | Event (event), Stop (stop) | At least, On line |
-| Balance falls below `trigger.balance` | Runs when the bank balance drops below an amount. | – | Event (event), Company (record) | Below |
+| End of the week `trigger.week` | Runs at midnight when a game week ends, with the week’s journeys, fares and satisfaction and the change on the week before. | – | Event (event), Week summary (record) | – |
+| A bus arrives at a stop `trigger.arrive` | Runs every time a bus on a trip reaches a stop (filter by line and stop). | – | Event (event), Bus (bus), Line (line), Stop (stop) | Line, Stop, At most once every, From, Until, On |
+| A crowded bus leaves `trigger.crowded` | Runs when a bus leaves a stop at or above a load. | – | Event (event), Bus (bus), Line (line), Stop (stop) | Load at least, Line, At most once every, From, Until, On |
+| A bus is running late `trigger.late` | Runs once per trip when a bus leaves a stop later than the threshold. | – | Event (event), Bus (bus), Line (line) | Late by at least, Line, At most once every, From, Until, On |
+| A departure is missed `trigger.missed` | Runs when a timetabled departure does not run. | – | Event (event), Line (line) | Line, At most once every, From, Until, On |
+| A bus breaks down `trigger.breakdown` | Runs when a bus breaks down. | – | Event (event), Bus (bus), Line (line) | Line, At most once every, From, Until, On |
+| Many people waiting `trigger.waiting` | Runs when the number waiting at a stop rises above a threshold (again only after it has dropped well below). | – | Event (event), Stop (stop) | At least, On line, For at least, From, Until, On |
+| Balance falls below `trigger.balance` | Runs when the bank balance drops below an amount. | – | Event (event), Company (record) | Below, For at least |
+| Watch a figure `trigger.watch` | Runs when a figure goes above or below a value and stays there: a line’s load or punctuality, people waiting at a stop, a bus’s condition, your reputation… Checked every minute, for each line, stop or bus. It fires again only once the figure is back to normal. | – | Event (event), Line, stop or bus (record), Figure (number) | Watch, Only on line, When it goes, Value, For at least, Fire again, From, Until, On |
+| A line is short of buses `trigger.shortBuses` | Runs when a line has fewer working buses than its timetable needs right now (buses under maintenance or broken down do not count). Every departure it cannot run is missed, and missed departures cost reputation. Fires again only once the line is covered. | – | Event (event), Line (line), Buses short (number) | Line, For at least, From, Until, On |
+| People left behind `trigger.leftBehind` | Runs when a full bus leaves people behind at a stop. | – | Event (event), Bus (bus), Line (line), Stop (stop) | At least, Line, At most once every, From, Until, On |
+| People give up waiting `trigger.gaveUp` | Runs when people waiting at a stop give up and travel another way: at least this many at one stop within the last hour. Fires again for that stop only once it has calmed down. | – | Event (event), Stop (stop) | At least, On line, For at least, From, Until, On |
 | Tomorrow’s forecast `trigger.forecast` | Runs at 18:00 when tomorrow’s weather forecast comes out. About 8 forecasts in 10 are right; a miss is usually close. | – | Event (event), Forecast (record) | When it says |
 | The weather changes `trigger.weather` | Runs on the hour when the weather changes: rain starts, heavy rain or snow starts, or it dries up. Roads are slower in rain and fewer people walk or cycle. | – | Event (event), Weather now (record) | When, From, Until |
 | An event is announced `trigger.eventAnnounced` | Runs when a match, concert, festival or gathering is announced (usually 3 to 10 days ahead, short-notice ones the day before), or when a rail or flight disruption begins. | – | Event (event), Event details (record), Lines nearby (list) | Events, At least, Near line |
@@ -131,8 +177,8 @@ Read live lines, stops, buses, the company and Network Control analytics.
 | Calendar `data.calendar` | Today’s season and week, and the kind of day: weekend, public holiday, school day or holidays, university teaching, exams or break (a typical pattern). | After (anything, optional) | Calendar (record), School holidays (yes/no), Public holiday (yes/no) | – |
 | Events `data.events` | Announced events under way or coming up, soonest first: matches, concerts, festivals, gatherings and disruptions. | After (anything, optional) | Events (list), Next event (record), How many (number) | Within, Events, Near line |
 | Places `data.place` | Airports, stations, hospitals, universities, stadiums and other places of a kind, largest first: your nearest stop, the lines there, and the model’s estimate of trips today and how busy the place is this hour. | After (anything, optional) | Places (list), Largest (record), Lines at the largest (list), Not served (list), How many (number) | Kind, Near line, At most |
-| Unserved trips (estimate) `data.unserved` | The busiest connections between areas that your network does not link today, from the demand model: trips a day by every mode and purpose, and whether a stop or a line is missing. | After (anything, optional) | Connections (list), Busiest (record), How many (number), Trips (number) | At most |
-| Demand forecast (estimate) `data.demandForecast` | Expected riders per line for each of the next few hours, from the demand model: the lines running then, today’s weather, announced events and people due home. An estimate: riders also depend on how your buses perform. | After (anything, optional) | Lines (list), Network by hour (list), Busiest line (record), Riders (number) | Line, Next |
+| Unserved trips `data.unserved` | The busiest connections between two of your areas that your network does not link today, from the demand model: trips a day by every mode and purpose, and whether a stop or a line is missing. | After (anything, optional) | Connections (list), Busiest (record), How many (number), Trips (number) | Busiest (estimate) |
+| Demand forecast `data.demandForecast` | Expected riders per line for each of the next few hours, from the demand model: the lines running then, today’s weather, announced events and people due home. An estimate: riders also depend on how your buses perform. | After (anything, optional) | Lines (list), By hour (list), Busiest line (record), Riders (number) | Estimate for, Line |
 | Network Control figure `data.analytics` | A measure from Network Control’s recorded history, e.g. average wait per stop over the last 7 days. | After (anything, optional) | Rows (list), Total (number) | Measure, For each, Days |
 
 #### Logic
