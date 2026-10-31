@@ -8,17 +8,23 @@
 //   limits, cooldowns, duplicates, conflicts between workflows, and the workflow's mode.
 
 import type { Game } from '../engine.ts';
-import type { ActionOutcome, ActionRecord, AutomationState, Mode, NodeTrace, Proposal, RunRecord, Value, Workflow } from './types.ts';
-import { NODE, OFF, isOff, trim, triggerLabel, type Flow, type NodeCtx } from './registry.ts';
+import type { ActionOutcome, ActionRecord, AutomationState, Mode, NodeTrace, Pending, Proposal, RunRecord, Value, Workflow } from './types.ts';
+import { NODE, OFF, isOff, trim, triggerLabel, type Flow, type LaterSpec, type NodeCtx } from './registry.ts';
 import { validateWorkflow, GRAPH_LIMITS, type Validation } from './validate.ts';
 import { LiveData, type Rec } from './live.ts';
 import { setDepartGate } from './events.ts';
-import { checkCommand, runCommand, type Command } from '../commands.ts';
+import { ALWAYS_ASK, checkCommand, runCommand, type Command } from '../commands.ts';
 import { DAY, HOUR, MODEL } from '../content.ts';
 import { dayTotals } from '../finance.ts';
-import { hhmm, weekdayOf } from '../time.ts';
+import { hhmm, serviceDayOf, weekdayOf } from '../time.ts';
+import { linePeaks, nowMinute, peakEvent, peakFireTime, nextPeakFire, timetablePeaks, type Peak } from './peaks.ts';
 import { notify } from '../progress.ts';
 import { waitingAt } from '../passengers.ts';
+import { dayMatches, eventKindMatches, forecastMatches, linesNearEvent, weatherChangeMatches, weatherRecs } from './city.ts';
+import { actualEnd, type GameEvent } from '../events.ts';
+import { CONDITION_LABEL, hourCondition } from '../weather.ts';
+import { gapOptions, lineGaps } from './ops.ts';
+import { FIGURE, REPEAT_PER, condStep, figureValue, firedKey, gaveUpLastHour, markFired, pendingKey, repeatOk, shortOf, busesAvailable, busesNeededNow, timeOk, watchTest, watchedItems } from './watch.ts';
 
 export const RUN_LIMITS = {
   /** node evaluations and list items handled per run */
@@ -108,7 +114,12 @@ export interface RunOptions {
   allowHighImpact?: boolean;
   /** an unsaved copy from the editor: validate it afresh instead of using the cache */
   draft?: boolean;
+  /** carry on from a Wait or One-at-a-time node */
+  resume?: Pending;
 }
+
+/** Workflows waiting at a Wait or One-at-a-time node: at most this many at once. */
+export const PENDING_LIMITS = { perWorkflow: 30, total: 200 };
 
 interface RunState {
   game: Game;
@@ -122,6 +133,8 @@ interface RunState {
   /** target+key acted on in this run */
   seen: Set<string>;
   memory: Record<string, Value>;
+  event: Rec;
+  resume: Pending | null;
 }
 
 export function runWorkflow(game: Game, wf: Workflow, trigger: { node: string | null; event: Rec; label: string }, opts: RunOptions = {}): RunRecord {
@@ -139,6 +152,7 @@ export function runWorkflow(game: Game, wf: Workflow, trigger: { node: string | 
     actions: [],
     trace: [],
     test: test || undefined,
+    resumed: opts.resume ? true : undefined,
   };
   const val = opts.draft ? validateWorkflow(wf, game.state) : validation(game, wf);
   if (!val.ok) {
@@ -147,7 +161,7 @@ export function runWorkflow(game: Game, wf: Workflow, trigger: { node: string | 
     return finish(game, wf, run, test);
   }
   const memory = test ? structuredClone(a.memory[wf.id] ?? {}) : (a.memory[wf.id] ??= {});
-  const rs: RunState = { game, wf, mode: run.mode, test, allowHigh: opts.allowHighImpact ?? wf.allowHighImpact, run, work: 0, live: new LiveData(game), seen: new Set(), memory };
+  const rs: RunState = { game, wf, mode: run.mode, test, allowHigh: opts.allowHighImpact ?? wf.allowHighImpact, run, work: 0, live: new LiveData(game), seen: new Set(), memory, event: trigger.event, resume: opts.resume ?? null };
   try {
     evaluateGraph(rs, wf, val, trigger.node, trigger.event, memory, run.trace!, 0);
   } catch (e) {
@@ -206,6 +220,31 @@ function evaluateGraph(rs: RunState, wf: Workflow, val: Validation, start: strin
   const needed = new Set(val.order);
   const values = new Map<string, Flow>();
   const game = rs.game;
+  // carrying on after a Wait: only the steps after it run, plus data and logic they read that
+  // does not come before the Wait. Nothing before it runs again, so no action is repeated.
+  const resume = rs.resume && depth === 0 ? rs.resume : null;
+  let after: Set<string> = new Set(), reads: Set<string> = new Set();
+  if (resume) {
+    const outs = new Map<string, string[]>(), ins = new Map<string, string[]>();
+    for (const e of wf.edges) {
+      outs.set(e.from, [...(outs.get(e.from) ?? []), e.to]);
+      ins.set(e.to, [...(ins.get(e.to) ?? []), e.from]);
+    }
+    const walk = (from: string[], m: Map<string, string[]>) => {
+      const seen = new Set<string>();
+      const stack = from.flatMap((x) => m.get(x) ?? []);
+      while (stack.length) {
+        const x = stack.pop()!;
+        if (seen.has(x)) continue;
+        seen.add(x);
+        stack.push(...(m.get(x) ?? []));
+      }
+      return seen;
+    };
+    after = walk([resume.node], outs);
+    const before = walk([resume.node], ins);
+    reads = new Set([...walk([...after], ins)].filter((x) => !before.has(x) && x !== resume.node && !after.has(x)));
+  }
   const ctxBase = (nodeId: string): NodeCtx => ({
     game, live: rs.live, event, memory,
     key: `${wf.id}:${nodeId}`,
@@ -222,6 +261,8 @@ function evaluateGraph(rs: RunState, wf: Workflow, val: Validation, start: strin
     },
     notify: (tone, title, body) => notice(rs, nodeId, tone, title, body),
     spend: (n) => spend(rs, n),
+    test: rs.test,
+    later: (spec) => later(rs, wf, nodeId, spec, depth),
   });
   let result: Value = null;
   for (const id of val.order) {
@@ -231,6 +272,26 @@ function evaluateGraph(rs: RunState, wf: Workflow, val: Validation, start: strin
     spend(rs, 1);
     rs.run.evaluated++;
     const offAll = () => { for (const p of def.outputs) values.set(`${id}:${p.id}`, OFF); };
+    if (resume) {
+      if (id === resume.node) {
+        try {
+          const res = def.resume ? def.resume(ctxBase(id), resume, { ...defaultsFor(node.type), ...node.config }, node) : { out: {} };
+          for (const p of def.outputs) values.set(`${id}:${p.id}`, p.id in res.out ? res.out[p.id] : OFF);
+          trace.push({ node: id, status: 'ok', outputs: Object.fromEntries(def.outputs.map((p) => [p.id, preview(res.out[p.id])])), note: res.note });
+        } catch (e) {
+          if (e instanceof Stop) throw e;
+          const msg = e instanceof Error ? e.message : 'This node failed.';
+          trace.push({ node: id, status: 'error', error: msg });
+          throw new Error(`${node.label || def.label}: ${msg}`);
+        }
+        continue;
+      }
+      const reader = reads.has(id) && !def.trigger && def.category !== 'action' && !def.resume && !CHANGES.has(def.type);
+      if (!after.has(id) && !reader) {
+        offAll();
+        continue;
+      }
+    }
     if (def.trigger && id !== start) {
       offAll();
       continue;
@@ -269,6 +330,44 @@ function evaluateGraph(rs: RunState, wf: Workflow, val: Validation, start: strin
     }
   }
   return result;
+}
+
+/** Nodes that change something (memory, or a function that may act): after a Wait they run only if they come after it. */
+const CHANGES = new Set(['state.set', 'state.counter', 'state.changed', 'state.cooldown', 'state.once', 'adv.function', 'adv.forEach']);
+
+/** Pause the run's workflow at a node; it carries on from there when due (see processAutomation). */
+function later(rs: RunState, wf: Workflow, node: string, spec: LaterSpec, depth: number): { ok: boolean; note: string } {
+  if (depth > 0) throw new Error('Wait and One at a time cannot be used inside a function: put them in the workflow that calls it.');
+  if (rs.test) return { ok: false, note: 'test' };
+  const a = rs.game.state.automation;
+  const list = (a.pending ??= []);
+  const same = list.find((p) => p.wf === wf.id && p.node === node && p.key === spec.key);
+  if (same) {
+    if (spec.kind === 'queue') same.due = Math.min(same.due, spec.due);
+    return { ok: false, note: `Already waiting for ${same.label} since ${hhmm(same.from)}.` };
+  }
+  if (list.filter((p) => p.wf === wf.id).length >= PENDING_LIMITS.perWorkflow) return { ok: false, note: `This workflow is already waiting in ${PENDING_LIMITS.perWorkflow} places: nothing more is added until one carries on.` };
+  if (list.length >= PENDING_LIMITS.total) return { ok: false, note: `Your workflows are already waiting in ${PENDING_LIMITS.total} places: nothing more is added until one carries on.` };
+  const id = (a.counters.pending = (a.counters.pending ?? 0) + 1);
+  list.push({ id, wf: wf.id, node, kind: spec.kind, due: spec.due, from: rs.game.t, event: rs.event, label: spec.label, key: spec.key, ...(spec.value === undefined ? {} : { value: spec.value }), ...(spec.until ? { until: spec.until } : {}) });
+  return { ok: true, note: '' };
+}
+
+/** Is a pending wait ready to carry on? */
+function pendingOutcome(game: Game, p: Pending): 'then' | 'timeout' | null {
+  const t = game.t;
+  if (p.kind === 'queue' || !p.until) return t >= p.due ? 'then' : null;
+  const v = figureValue(game, p.until.figure, p.until.item);
+  if (v !== null && (p.until.op === 'above' ? v > p.until.value : v < p.until.value)) return 'then';
+  return t >= p.due ? 'timeout' : null;
+}
+
+function resumeLabel(game: Game, p: Pending): string {
+  const mins = Math.round((game.t - p.from) / 60);
+  if (p.kind === 'queue') return `Next one from “One at a time” (${p.label})`;
+  if (!p.until) return `Carried on after waiting ${mins} min (${p.label})`;
+  const fig = FIGURE[p.until.figure]?.label.toLowerCase() ?? 'the figure';
+  return p.outcome === 'timeout' ? `Gave up waiting after ${mins} min: ${p.label}, ${fig} not ${p.until.op} ${p.until.value}` : `${p.label}: ${fig} ${p.until.op} ${p.until.value} after ${mins} min`;
 }
 
 const defaultCache = new Map<string, Record<string, Value>>();
@@ -350,15 +449,19 @@ function act(rs: RunState, node: string, cmd: Command): Rec {
   // modes
   if (rs.test) return record('observed', check.summary, { reason: 'Test run: nothing was changed.', effect: check.transition, cost: check.cost });
   if (rs.mode === 'observe') return record('observed', check.summary, { reason: 'Observe mode: nothing was changed.', effect: check.transition, cost: check.cost });
-  const needsApproval = rs.mode === 'suggest' || (check.impact === 'high' && !rs.allowHigh);
+  // route changes are always the player's call, whatever the workflow's mode
+  const always = ALWAYS_ASK.has(cmd.type);
+  const needsApproval = always || rs.mode === 'suggest' || (check.impact === 'high' && !rs.allowHigh);
   if (needsApproval) {
     const dup = a.proposals.find((p) => p.status === 'open' && p.wf === wf.id && JSON.stringify(p.cmd) === JSON.stringify(cmd));
     if (dup) return record('duplicate', check.summary, { reason: 'The same suggestion is already waiting for your approval.' });
-    const p: Proposal = { id: ++a.counters.proposal, wf: wf.id, node, t, expires: t + RUN_LIMITS.proposalMin * 60, cmd, summary: check.summary, detail: check.transition, impact: check.impact, status: 'open' };
+    // a route change takes some thought, so it stays open for three days
+    const p: Proposal = { id: ++a.counters.proposal, wf: wf.id, node, t, expires: t + (always ? 3 * DAY : RUN_LIMITS.proposalMin * 60), cmd, summary: check.summary, detail: check.transition, impact: check.impact, status: 'open' };
     a.proposals.push(p);
     trimProposals(a);
     d.actions++;
-    return record('proposed', check.summary, { reason: rs.mode === 'suggest' ? 'Suggest mode: approve it in Network Control → Automation.' : 'A big change: it needs your approval.', effect: check.transition, cost: check.cost });
+    const why = always ? 'Route changes always wait for your approval: see Network Control → Automation (open for 3 days).' : rs.mode === 'suggest' ? 'Suggest mode: approve it in Network Control → Automation.' : 'A big change: it needs your approval.';
+    return record('proposed', check.summary, { reason: why, effect: check.transition, cost: check.cost });
   }
   game.automationActing = true;
   let r: ReturnType<typeof runCommand>;
@@ -383,6 +486,8 @@ function describeKey(game: Game, key: string): string {
   if (k === 'headway') return `set every ${key.split(':').pop()} min`;
   if (k === 'suspended') return v === 'true' ? 'suspended it' : 'resumed it';
   if (k === 'fare') return `set the fare to ${v}`;
+  if (k === 'cancelled') return 'cancelled it';
+  if (k === 'extra_at') return 'scheduled it';
   return key;
 }
 
@@ -466,6 +571,8 @@ export function processAutomation(game: Game) {
   const wfs = a.order.map((id) => a.workflows[id]).filter((w): w is Workflow => !!w && w.enabled && w.kind === 'workflow');
   if (a.paused || !wfs.length) {
     a.queue.length = 0;
+    // switching every workflow off ends their waits (pausing keeps them)
+    if (!wfs.length && a.pending?.length) a.pending.length = 0;
     return;
   }
   const hour = Math.floor(t / HOUR);
@@ -473,9 +580,10 @@ export function processAutomation(game: Game) {
   let budget = RUN_LIMITS.perMinute;
   const minute = Math.floor(t / 60);
   const mod = Math.floor((t % DAY) / 60);
-  const hod = Math.floor((t % DAY) / HOUR);
   const wd = weekdayOf(game.state.clock.startWeekday, t);
-  const fire = (wf: Workflow, nodeId: string, event: Rec): boolean => {
+  // event trigger keys (`ev:` …) and repeat limits (`rp:` …) hold the time they can be forgotten
+  if (mod === 0) for (const [k, v] of Object.entries(a.schedule)) if ((k.startsWith('ev:') || k.startsWith('rp:')) && v < t) delete a.schedule[k];
+  const fire = (wf: Workflow, nodeId: string, event: Rec, resume?: Pending): boolean => {
     if (budget <= 0) return false;
     const n = (a.hourly.byWf[wf.id] ?? 0) + 1;
     a.hourly.byWf[wf.id] = n;
@@ -488,7 +596,26 @@ export function processAutomation(game: Game) {
     }
     budget--;
     const node = wf.nodes.find((x) => x.id === nodeId)!;
-    runWorkflow(game, wf, { node: nodeId, event: { ...event, time: hhmm(t) }, label: eventLabel(game, node, event) });
+    if (resume) runWorkflow(game, wf, { node: nodeId, event, label: resumeLabel(game, resume) }, { resume });
+    else runWorkflow(game, wf, { node: nodeId, event: { ...event, time: hhmm(t) }, label: eventLabel(game, node, event) });
+    return true;
+  };
+
+  /**
+   * A condition trigger for one item this minute: fires once the condition has held for the
+   * node's "for at least", then waits for it to clear. Outside its hours nothing builds up.
+   */
+  const cond = (wf: Workflow, node: Workflow['nodes'][number], item: string, on: boolean, off: boolean, event: () => Rec, allowed = true): boolean => {
+    const k = firedKey(wf.id, node.id, item), pk = pendingKey(wf.id, node.id, item);
+    if (!allowed) {
+      if (a.schedule[pk] !== undefined) delete a.schedule[pk];
+      if (a.schedule[k] && off) delete a.schedule[k];
+      return false;
+    }
+    if (!condStep(a, k, pk, t, on, off, Number(node.config.for ?? 0) || 0)) return false;
+    if (budget <= 0) return false; // try again next minute
+    fire(wf, node.id, event());
+    markFired(a, k, pk);
     return true;
   };
 
@@ -502,9 +629,7 @@ export function processAutomation(game: Game) {
       switch (node.type) {
         case 'trigger.every': {
           const every = Math.max(5, Number(c.minutes) || 15);
-          const from = Number(c.from ?? 0), to = Number(c.to ?? 24);
-          const inHours = from <= to ? hod >= from && hod < to : hod >= from || hod < to;
-          if (minute % every === 0 && inHours) fire(wf, node.id, { kind: 'event', source: 'clock' });
+          if (minute % every === 0 && timeOk(game, c, t)) fire(wf, node.id, { kind: 'event', source: 'clock' });
           break;
         }
         case 'trigger.time': {
@@ -517,33 +642,152 @@ export function processAutomation(game: Game) {
           const thr = Math.max(2, Number(c.threshold) || 30);
           const line = typeof c.line === 'string' && c.line ? game.state.routes[c.line] : null;
           const ids = line ? [...new Set([...line.stops, ...(line.returnStops ?? [])])] : Object.keys(game.state.stops);
+          const ok = timeOk(game, c, t);
           let fired = 0;
           for (const stop of ids) {
-            const k = `${wf.id}:${node.id}:${stop}`;
             const w = waitingAt(game.state, stop);
-            if (w >= thr && !a.schedule[k] && fired < 3) {
-              a.schedule[k] = 1;
-              fired++;
-              fire(wf, node.id, { kind: 'event', source: 'waiting', stop, stopName: game.state.stops[stop]?.name ?? '', waiting: w, line: line?.id ?? null });
-            } else if (w < thr * 0.7 && a.schedule[k]) delete a.schedule[k];
+            if (cond(wf, node, stop, w >= thr, w < thr * 0.7, () => ({ kind: 'event', source: 'waiting', stop, stopName: game.state.stops[stop]?.name ?? '', waiting: w, line: line?.id ?? null }), ok && fired < 3)) fired++;
+          }
+          break;
+        }
+        case 'trigger.gaveUp': {
+          const thr = Math.max(1, Number(c.people) || 8);
+          const line = typeof c.line === 'string' && c.line ? game.state.routes[c.line] : null;
+          const ids = line ? [...new Set([...line.stops, ...(line.returnStops ?? [])])] : Object.keys(game.state.stops);
+          const ok = timeOk(game, c, t);
+          let fired = 0;
+          for (const stop of ids) {
+            const g = gaveUpLastHour(game, stop);
+            const event = () => {
+              const first = line ?? Object.values(game.state.routes).find((r) => r.stops.includes(stop) || r.returnStops?.includes(stop));
+              return { kind: 'event', source: 'gaveUp', stop, stopName: game.state.stops[stop]?.name ?? '', gaveUp: g, line: first?.id ?? null, lineNumber: first?.number ?? '' };
+            };
+            if (cond(wf, node, stop, g >= thr, g < thr * 0.7, event, ok && fired < 3)) fired++;
+          }
+          break;
+        }
+        case 'trigger.shortBuses': {
+          const only = typeof c.line === 'string' && c.line ? game.state.routes[c.line] : null;
+          const ok = timeOk(game, c, t);
+          for (const r of only ? [only] : Object.values(game.state.routes)) {
+            const short = shortOf(game, r.id);
+            cond(wf, node, r.id, short > 0, short === 0, () => ({ kind: 'event', source: 'shortBuses', line: r.id, lineNumber: r.number, lineName: r.name || `Line ${r.number}`, short, needed: busesNeededNow(game, r.id), buses: busesAvailable(game, r.id) }), ok);
+          }
+          break;
+        }
+        case 'trigger.watch': {
+          const fig = FIGURE[String(c.figure ?? '')];
+          if (!fig) break;
+          const ok = timeOk(game, c, t);
+          let fired = 0;
+          for (const it of watchedItems(game, c)) {
+            const { on, off } = watchTest(c, it.value);
+            const ln = it.line ? game.state.routes[it.line] : null;
+            const shown = it.value === null ? '' : fig.unit === 'money' ? game.money(it.value, { compact: true }) : fig.unit === '%' ? `${it.value}%` : `${it.value} ${fig.unit}`;
+            const thr = Number(c.value) || 0;
+            if (cond(wf, node, it.key, on, off, () => ({
+              kind: 'event', source: 'watch', figure: fig.id, figureLabel: fig.label, scope: it.kind, itemId: it.id, name: it.name, label: it.name, value: it.value, reading: shown,
+              op: String(c.op ?? 'above'), threshold: fig.unit === 'money' ? game.money(thr, { compact: true }) : fig.unit === '%' ? `${thr}%` : `${thr} ${fig.unit}`, for: Number(c.for ?? 0) || 0,
+              line: it.line, lineNumber: ln?.number ?? '', stop: it.stop, stopName: it.stop ? game.state.stops[it.stop]?.name ?? '' : '', vehicle: it.vehicle,
+              fleetNo: it.vehicle ? game.state.vehicles[it.vehicle]?.fleetNo ?? '' : '',
+            }), ok && fired < 3)) fired++;
+          }
+          break;
+        }
+        case 'trigger.eventStart':
+        case 'trigger.eventEnd': {
+          // once per event, at the set time (a game loaded a little later still catches it)
+          const mins = Number(c.minutes ?? (node.type === 'trigger.eventStart' ? 90 : -10)) || 0;
+          for (const ev of game.eventList()) {
+            if (!ev.announced || ev.cancelled) continue;
+            const at = node.type === 'trigger.eventStart' ? ev.start - mins * 60 : actualEnd(ev) + mins * 60;
+            if (t < at || t >= at + 15 * 60) continue;
+            const k = `ev:${wf.id}:${node.id}:${ev.id}`;
+            if (a.schedule[k] || !eventFilterMatches(game, c, ev)) continue;
+            a.schedule[k] = actualEnd(ev) + DAY;
+            fire(wf, node.id, { kind: 'event', source: node.type === 'trigger.eventStart' ? 'eventStart' : 'eventEnd', ...game.eventData(ev) });
+          }
+          break;
+        }
+        case 'trigger.peak': {
+          // once per line and peak, at the set time (a game loaded a little later still catches it)
+          if (!timeOk(game, c, t)) break;
+          const at = String(c.at ?? 'start') === 'end' ? 'end' : 'start';
+          const mins = Math.max(0, Number(c.minutes ?? 30) || 0);
+          const source = String(c.source ?? 'timetable') === 'riders' ? 'riders' : 'timetable';
+          const only = typeof c.line === 'string' && c.line ? game.state.routes[c.line] : null;
+          const sd = serviceDayOf(t);
+          for (const r of only ? [only] : Object.values(game.state.routes)) {
+            if (r.suspended) continue;
+            for (const p of linePeaks(game, r.id, source)) {
+              const x = peakFireTime(game, p, at, mins);
+              if (t < x || t >= x + 15 * 60) continue;
+              const k = `ev:${wf.id}:${node.id}:${r.id}:${sd}:${p.from}:${at}`;
+              if (a.schedule[k]) continue;
+              if (!fire(wf, node.id, peakEvent(game, r.id, p, at))) continue;
+              a.schedule[k] = t + DAY;
+            }
+          }
+          break;
+        }
+        case 'trigger.calendar': {
+          const [hh, mm] = String(c.time ?? '05:00').split(':').map(Number);
+          if (mod !== (hh || 0) * 60 + (mm || 0)) break;
+          const today = Math.floor(t / DAY), kind = String(c.day ?? 'school_holidays');
+          if (!dayMatches(game, kind, today)) break;
+          if (c.first !== false && dayMatches(game, kind, today - 1)) break;
+          fire(wf, node.id, { kind: 'event', source: 'calendar', day: kind });
+          break;
+        }
+        case 'trigger.bunching': {
+          const only = typeof c.line === 'string' && c.line ? game.state.routes[c.line] : null;
+          const ok = timeOk(game, c, t);
+          const o = gapOptions(c);
+          const gap = String(c.what ?? 'bunch') === 'gap';
+          for (const r of only ? [only] : Object.values(game.state.routes)) {
+            if (r.suspended) continue;
+            const gp = lineGaps(game, r.id, o);
+            const worst = gp.worstGap ?? 0;
+            const on = gap ? worst >= o.gap * 100 : gp.bunched > 0;
+            const off = gap ? worst < o.gap * 85 : gp.bunched === 0;
+            cond(wf, node, r.id, on, off, () => ({ kind: 'event', source: 'bunching', line: r.id, lineNumber: r.number, lineName: r.name || `Line ${r.number}`, bunched: gp.bunched, worstGap: gp.worstGap, headway: gp.headway }), ok);
           }
           break;
         }
         case 'trigger.balance': {
           const amt = Number(c.amount) || 0;
-          const k = `${wf.id}:${node.id}`;
+          const old = `${wf.id}:${node.id}`; // before trigger timing (0.3)
+          if (a.schedule[old]) { a.schedule[firedKey(wf.id, node.id, 'balance')] = 1; delete a.schedule[old]; }
           const bal = game.state.finance.balance;
-          if (bal < amt && !a.schedule[k]) {
-            a.schedule[k] = 1;
-            fire(wf, node.id, { kind: 'event', source: 'balance', balance: Math.round(bal) });
-          } else if (bal >= amt + Math.max(1000, Math.abs(amt) * 0.1) && a.schedule[k]) delete a.schedule[k];
+          cond(wf, node, 'balance', bal < amt, bal >= amt + Math.max(1000, Math.abs(amt) * 0.1), () => ({ kind: 'event', source: 'balance', balance: Math.round(bal) }));
           break;
         }
       }
     }
   }
 
-  // 2. queued simulation events
+  // 2. workflows waiting at a Wait or One-at-a-time node
+  if (a.pending?.length) {
+    const live = new Set(wfs.map((w) => w.id));
+    for (const p of [...a.pending]) {
+      const wf = a.workflows[p.wf];
+      const node = wf?.nodes.find((x) => x.id === p.node);
+      const drop = () => a.pending!.splice(a.pending!.indexOf(p), 1);
+      // the workflow was switched off or deleted, or the node removed or switched off
+      if (!wf || !live.has(wf.id) || !node || node.disabled) {
+        drop();
+        continue;
+      }
+      if (budget <= 0) break;
+      const outcome = pendingOutcome(game, p);
+      if (!outcome) continue;
+      drop();
+      p.outcome = outcome;
+      fire(wf, p.node, p.event, p);
+    }
+  }
+
+  // 3. queued simulation events
   let i = 0;
   for (; i < a.queue.length && budget > 0; i++) {
     const ev = a.queue[i];
@@ -552,7 +796,10 @@ export function processAutomation(game: Game) {
         if (node.disabled) continue;
         const def = NODE[node.type];
         if (def?.trigger?.source !== ev.kind) continue;
+        const per = REPEAT_PER[node.type];
+        if (per && !timeOk(game, node.config, ev.t)) continue;
         if (!matches(game, wf, node, ev.data)) continue;
+        if (per && !repeatOk(a, wf.id, node.id, String(ev.data[per.field] ?? ''), ev.t, Number(node.config.repeat ?? 0) || 0)) continue;
         fire(wf, node.id, { kind: 'event', source: ev.kind, ...ev.data });
       }
     }
@@ -560,12 +807,33 @@ export function processAutomation(game: Game) {
   a.queue.splice(0, i);
 }
 
+/** Event triggers' settings: kind of event, size and a line near it. */
+function eventFilterMatches(game: Game, c: Workflow['nodes'][number]['config'], ev: GameEvent): boolean {
+  if (!eventKindMatches(String(c.kinds ?? 'crowds'), ev)) return false;
+  if ((Number(c.people) || 0) > ev.people) return false;
+  if (typeof c.line === 'string' && c.line && !linesNearEvent(game, ev).includes(c.line)) return false;
+  return true;
+}
+
 function matches(game: Game, wf: Workflow, node: Workflow['nodes'][number], d: Record<string, string | number | boolean | null>): boolean {
   const c = node.config;
+  switch (node.type) {
+    case 'trigger.eventAnnounced': {
+      const ev = game.eventList().find((x) => x.id === d.event);
+      return !!ev && eventFilterMatches(game, c, ev);
+    }
+    case 'trigger.forecast': return forecastMatches(String(c.when ?? 'any'), d);
+    case 'trigger.weather': {
+      const h = Number(d.hour ?? 0), from = Number(c.from ?? 0), to = Number(c.to ?? 24);
+      const inHours = from <= to ? h >= from && h < to : h >= from || h < to;
+      return inHours && weatherChangeMatches(String(c.when ?? 'rain'), Number(d.from ?? 0), Number(d.to ?? 0));
+    }
+  }
   if (typeof c.line === 'string' && c.line && d.line !== c.line) return false;
   switch (node.type) {
     case 'trigger.arrive': return !(typeof c.stop === 'string' && c.stop && d.stop !== c.stop);
     case 'trigger.crowded': return Number(d.occupancy ?? 0) >= (Number(c.load) || 85);
+    case 'trigger.leftBehind': return Number(d.leftBehind ?? 0) >= (Number(c.people) || 5);
     case 'trigger.late': {
       if (Number(d.delay ?? 0) < (Number(c.minutes) || 5)) return false;
       const k = `${wf.id}:${node.id}:v:${d.vehicle}`;
@@ -588,6 +856,17 @@ function eventLabel(game: Game, node: Workflow['nodes'][number], e: Rec): string
     case 'trigger.waiting': return `${e.waiting} waiting at ${e.stopName}`;
     case 'trigger.balance': return `Balance ${game.money(Number(e.balance) || 0, { compact: true })}`;
     case 'trigger.day': return `Day ${e.dayNumber} ended`;
+    case 'trigger.week': return `Week ${e.week} ended`;
+    case 'trigger.leftBehind': return `${e.leftBehind} left behind at ${e.stopName} (line ${e.lineNumber})`;
+    case 'trigger.gaveUp': return `${e.gaveUp} gave up waiting at ${e.stopName}`;
+    case 'trigger.peak': return e.at === 'end' ? `Line ${e.lineNumber}’s peak ${e.period} ended` : `Line ${e.lineNumber}’s peak ${e.period} is coming`;
+    case 'trigger.shortBuses': return `Line ${e.lineNumber} short of ${e.short} bus${e.short === 1 ? '' : 'es'}`;
+    case 'trigger.watch': return `${e.name}: ${String(e.figureLabel ?? '').toLowerCase()} ${e.reading}`;
+    case 'trigger.forecast': return `Forecast for tomorrow: ${e.label}`;
+    case 'trigger.weather': return `${e.label} from ${e.time ?? hhmm(game.t)}`;
+    case 'trigger.eventAnnounced': return `Announced: ${e.eventTitle}, ${e.when}`;
+    case 'trigger.eventStart': return `${e.eventTitle} starts at ${e.start}`;
+    case 'trigger.eventEnd': return `${e.eventTitle} ends at ${e.end}`;
     default: return triggerLabel(game, node);
   }
 }
@@ -616,16 +895,113 @@ export function sampleEvent(game: Game, node: Workflow['nodes'][number]): Rec {
   const stop = p ? p.stops[Math.min(v!.stopIdx, p.stops.length - 1)] : line ? s.routes[line]?.stops[0] : Object.keys(s.stops)[0];
   const r = v?.route ? s.routes[v.route] : line ? s.routes[line] : null;
   const base: Rec = { kind: 'event', source: 'test', sample: true };
-  if (v) Object.assign(base, { vehicle: v.id, fleetNo: v.fleetNo, load: v.load, occupancy: Math.round((v.load / MODEL[v.model].capacity) * 100), delay: Math.round(Math.max(0, v.delay) / 6) / 10, trip: v.trip ?? -1 });
+  if (v) Object.assign(base, { vehicle: v.id, fleetNo: v.fleetNo, load: v.load, occupancy: Math.round(((v.sp ?? v.load) / MODEL[v.model].capacity) * 100), delay: Math.round(Math.max(0, v.delay) / 6) / 10, trip: v.trip ?? -1 });
   if (r) Object.assign(base, { line: r.id, lineNumber: r.number });
   if (stop) Object.assign(base, { stop, stopName: s.stops[stop]?.name ?? '' });
   if (node.type === 'trigger.waiting' && stop) base.waiting = waitingAt(s, stop);
   if (node.type === 'trigger.balance') base.balance = Math.round(s.finance.balance);
   if (node.type === 'trigger.missed' && r) base.dep = hhmm(game.t);
   if (node.type === 'trigger.day') Object.assign(base, daySummary(game, Math.floor(game.t / DAY) - 1));
+  if (node.type === 'trigger.week') Object.assign(base, weekSummary(game));
+  if (node.type === 'trigger.leftBehind') base.leftBehind = Math.max(1, Number(c.people) || 5);
+  if (node.type === 'trigger.gaveUp') {
+    const ids = line ? [...new Set([...(s.routes[line]?.stops ?? []), ...(s.routes[line]?.returnStops ?? [])])] : Object.keys(s.stops);
+    const top = ids.map((id) => ({ id, g: gaveUpLastHour(game, id) })).sort((x, y) => y.g - x.g)[0];
+    if (top) Object.assign(base, { stop: top.id, stopName: s.stops[top.id]?.name ?? '', gaveUp: top.g });
+  }
+  if (node.type === 'trigger.bunching') {
+    // the line whose buses are closest together (or with the biggest gap) now
+    const lines = (line ? [s.routes[line]].filter(Boolean) : Object.values(s.routes)).filter((x) => !x.suspended);
+    const o = gapOptions(c);
+    const gap = String(c.what ?? 'bunch') === 'gap';
+    const top = lines.map((x) => ({ r: x, g: lineGaps(game, x.id, o) })).sort((p, q) => (gap ? (q.g.worstGap ?? 0) - (p.g.worstGap ?? 0) : q.g.bunched - p.g.bunched))[0];
+    if (top) Object.assign(base, { line: top.r.id, lineNumber: top.r.number, lineName: top.r.name || `Line ${top.r.number}`, bunched: top.g.bunched, worstGap: top.g.worstGap, headway: top.g.headway });
+  }
+  if (node.type === 'trigger.shortBuses') {
+    const lines = line ? [s.routes[line]].filter(Boolean) : Object.values(s.routes);
+    const top = lines.map((x) => ({ r: x, n: shortOf(game, x.id) })).sort((x, y) => y.n - x.n)[0];
+    if (top) Object.assign(base, { line: top.r.id, lineNumber: top.r.number, lineName: top.r.name || `Line ${top.r.number}`, short: top.n, needed: busesNeededNow(game, top.r.id), buses: busesAvailable(game, top.r.id) });
+  }
+  if (node.type === 'trigger.watch') {
+    const fig = FIGURE[String(c.figure ?? '')];
+    const items = watchedItems(game, c).filter((x) => x.value !== null);
+    const below = String(c.op ?? 'above') === 'below';
+    const it = items.sort((x, y) => (below ? x.value! - y.value! : y.value! - x.value!))[0];
+    if (fig && it) {
+      const ln = it.line ? s.routes[it.line] : null;
+      const show = (v: number) => (fig.unit === 'money' ? game.money(v, { compact: true }) : fig.unit === '%' ? `${v}%` : `${v} ${fig.unit}`);
+      Object.assign(base, {
+        figure: fig.id, figureLabel: fig.label, scope: it.kind, itemId: it.id, name: it.name, label: it.name, value: it.value, reading: show(it.value!),
+        op: below ? 'below' : 'above', threshold: show(Number(c.value) || 0), for: Number(c.for ?? 0) || 0,
+        line: it.line, lineNumber: ln?.number ?? '', stop: it.stop, stopName: it.stop ? s.stops[it.stop]?.name ?? '' : '', vehicle: it.vehicle, fleetNo: it.vehicle ? s.vehicles[it.vehicle]?.fleetNo ?? '' : '',
+      });
+    }
+  }
+  if (node.type === 'trigger.peak') {
+    // the next peak this trigger would fire for, or any line's first peak today
+    const nx = nextPeakFire(game, c);
+    const at = c.at === 'end' ? 'end' : 'start';
+    const any = nx ?? (() => {
+      for (const x of line ? [s.routes[line]].filter(Boolean) : Object.values(s.routes)) {
+        const pk = linePeaks(game, x.id, c.source === 'riders' ? 'riders' : 'timetable')[0] ?? timetablePeaks(game, x.id)[0];
+        if (pk) return { t: game.t, line: x.id, peak: pk };
+      }
+      return null;
+    })();
+    if (any) Object.assign(base, peakEvent(game, any.line, any.peak, at), { source: 'test', sample: true });
+    else {
+      // no line has peak hours today: an example peak an hour from now, so a test run can go through
+      const r = (line ? s.routes[line] : null) ?? Object.values(s.routes)[0];
+      if (r) {
+        const from = Math.ceil(nowMinute(game) / 60) * 60 + 60;
+        const pk: Peak = { line: r.id, source: 'timetable', from, to: from + 120, need: Math.max(1, game.requirement(r.id)?.peak ?? r.vehicles.length), riders: null };
+        Object.assign(base, peakEvent(game, r.id, pk, at), { source: 'test', sample: true, example: true });
+      }
+    }
+  }
+  // weather and events: the real forecast, weather and next event in the game
+  if (node.type === 'trigger.forecast') {
+    const w = weatherRecs(game);
+    Object.assign(base, w.tomorrow ?? w.today);
+  }
+  if (node.type === 'trigger.weather') {
+    const day = Math.floor(game.t / DAY), h = Math.floor((game.t % DAY) / HOUR);
+    const w = game.weatherDay(day)?.actual;
+    const to = w ? hourCondition(w, h) : 0, from = w && h > 0 ? hourCondition(w, h - 1) : to;
+    Object.assign(base, { from, to, label: CONDITION_LABEL[to], wasLabel: CONDITION_LABEL[from], hour: h, time: hhmm(day * DAY + h * HOUR) });
+  }
+  if (node.type === 'trigger.eventAnnounced' || node.type === 'trigger.eventStart' || node.type === 'trigger.eventEnd') {
+    const ev = game.upcomingEvents().find((x) => eventFilterMatches(game, c, x)) ?? game.upcomingEvents()[0];
+    if (ev) Object.assign(base, game.eventData(ev));
+  }
   return base;
 }
 
+
+/** The latest game week's figures and the change on the week before (for the end-of-week trigger). */
+export function weekSummary(game: Game): Rec {
+  const weeks = game.state.analytics.weeks ?? [];
+  const w = weeks.at(-1);
+  if (!w) return { week: null, days: 0, journeys: 0 };
+  const prev = weeks.at(-2);
+  const fares = (x: typeof w) => Math.round(x.net[4]);
+  const perDay = (x: typeof w) => (x.n ? x.net[0] / x.n : 0);
+  const change = (now: number, before: number | null) => (before ? Math.round(((now - before) / before) * 1000) / 10 : null);
+  let busiest: { id: string; b: number } | null = null;
+  for (const [id, row] of Object.entries(w.r)) if (!busiest || row[0] > busiest.b) busiest = { id, b: row[0] };
+  const br = busiest ? game.state.routes[busiest.id] : null;
+  return {
+    week: w.w, year: w.y, season: w.season, days: w.n,
+    journeys: w.net[0], gaveUp: w.net[1], fares: fares(w),
+    satisfaction: w.net[3] ? Math.round((w.net[2] / w.net[3]) * 1000) / 10 : null,
+    journeysPerDay: Math.round(perDay(w)),
+    journeysChange: prev ? change(perDay(w), perDay(prev)) : null,
+    changeText: (() => { const c = prev ? change(perDay(w), perDay(prev)) : null; return c === null ? 'the first week recorded' : `${c >= 0 ? '+' : ''}${c}% a day on the week before`; })(),
+    faresChange: prev && prev.n ? change(fares(w) / w.n, fares(prev) / prev.n) : null,
+    wetDays: w.wx[2] + w.wx[4],
+    busiestLine: br ? br.number : null, busiestLineBoardings: busiest?.b ?? 0,
+  };
+}
 
 /** The figures of a finished day (for the end-of-day trigger). */
 export function daySummary(game: Game, day: number): Rec {

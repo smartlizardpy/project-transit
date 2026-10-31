@@ -5,12 +5,14 @@ import type { Game } from '../engine.ts';
 import type { Id, Vehicle } from '../types.ts';
 import type { Value } from './types.ts';
 import { DAY, HOUR, MODEL } from '../content.ts';
-import { hhmm, weekdayOf } from '../time.ts';
+import { hhmm, serviceDayOf, weekdayOf } from '../time.ts';
 import { routeWindow } from '../progress.ts';
 import { STATUS_LABEL, extraOption } from '../vehicles.ts';
 import { companyLevel } from '../control.ts';
 import { dayTotals } from '../finance.ts';
 import { weekdayName } from '../analytics/query.ts';
+import { busesAvailable, busesNeededNow, gaveUpLastHour, satisfactionToday } from './watch.ts';
+import { linePeakFields } from './peaks.ts';
 
 export type Rec = { [k: string]: Value };
 
@@ -45,19 +47,26 @@ export class LiveData {
     if (!r) return null;
     const buses = r.vehicles.map((v) => s.vehicles[v]).filter(Boolean);
     const running = buses.filter((v) => (v.status === 'in_service' || v.status === 'at_stop') && v.pos.kind === 'pattern' && v.pos.route === id);
-    const occ = running.length ? sum(running.map((v) => v.load / MODEL[v.model].capacity)) / running.length : 0;
+    const occ = running.length ? sum(running.map((v) => (v.sp ?? v.load) / MODEL[v.model].capacity)) / running.length : 0;
     const delay = running.length ? sum(running.map((v) => Math.max(0, v.delay))) / running.length / 60 : 0;
     const w = routeWindow(s, id, 3);
     const req = game.requirement(id);
     const today = s.analytics.today.routes[id];
+    const plan = game.dayPlan(id, serviceDayOf(game.t));
     return {
-      kind: 'line', id, number: r.number, name: r.name ?? `Line ${r.number}`, colour: r.colour,
+      kind: 'line', id, number: r.number, name: r.name || `Line ${r.number}`, colour: r.colour,
       buses: buses.length, needed: req?.peak ?? 0, running: running.length,
+      capacity: buses.length ? Math.round(buses.reduce((a, v) => a + (MODEL[v.model]?.capacity ?? 0), 0) / buses.length) : null,
       occupancy: r1(occ * 100), waiting: this.waitingFor(id), delay: r1(delay),
       headway: game.headwayAt(id, 0, game.t), suspended: r.suspended,
       onTime3h: w.ontime === null ? null : r1(w.ontime * 100), load3h: w.load === null ? null : r1(w.load * 100),
       boardingsToday: today ? sum(today.b) : 0, tripsToday: today ? sum(today.d) : 0, missedToday: today ? sum(today.m) : 0,
+      plan: plan.planId ? plan.name : null, plans: (r.timetable.plans ?? []).filter((p) => p.enabled).map((p) => p.name),
+      holidayPlan: (r.timetable.plans ?? []).some((p) => p.enabled && p.when.kind === 'school_holidays'),
       congestion: this.congestion(id),
+      neededNow: busesNeededNow(game, id), working: busesAvailable(game, id),
+      short: r.suspended ? 0 : Math.max(0, busesNeededNow(game, id) - busesAvailable(game, id)),
+      ...linePeakFields(game, id),
     };
   }
 
@@ -81,15 +90,17 @@ export class LiveData {
     if (!st) return null;
     let waiting = 0, oldest = 0;
     for (const g of s.pax.waiting[id] ?? []) {
+      if (g.tl > s.clock.t) continue; // still walking here to change lines
       waiting += g.n;
       oldest = Math.max(oldest, (s.clock.t - g.tl) / 60);
     }
     const today = s.analytics.today.stops[id];
     const lines = Object.values(s.routes).filter((r) => r.stops.includes(id) || r.returnStops?.includes(id)).map((r) => r.number);
     return {
-      kind: 'stop', id, name: st.name, waiting, longestWait: r1(oldest), lines,
+      kind: 'stop', id, name: st.name, area: this.game.geo.zone(st.zone)?.name ?? null, areaId: st.zone, waiting, longestWait: r1(oldest), lines, lng: st.lngLat[0], lat: st.lngLat[1],
       boardingsToday: today ? sum(today.b) : 0, gaveUpToday: today ? sum(today.g) : 0,
       avgWaitToday: today && today.wn ? r1(today.ws / today.wn) : null,
+      gaveUpHour: gaveUpLastHour(this.game, id), leftBehindToday: today ? today.lb : 0,
     };
   }
 
@@ -101,7 +112,7 @@ export class LiveData {
     return {
       kind: 'vehicle', id: v.id, fleetNo: v.fleetNo, model: m.name, capacity: m.capacity,
       line: v.route, lineNumber: r?.number ?? null, status: v.status, statusLabel: STATUS_LABEL[v.status],
-      load: v.load, occupancy: r1((v.load / m.capacity) * 100), condition: Math.round(v.condition * 100),
+      load: v.load, occupancy: r1(((v.sp ?? v.load) / m.capacity) * 100), condition: Math.round(v.condition * 100),
       delay: r1(Math.max(0, v.delay) / 60), depot: v.depot, depotName: s.depots[v.depot]?.name ?? null,
       spare: v.route === null, free, carrying: v.load > 0,
     };
@@ -120,6 +131,7 @@ export class LiveData {
     return {
       kind: 'company', balance: Math.round(s.finance.balance), reputation: r1(s.company.reputation), level: lv.level,
       fare: s.company.fare, resultToday: Math.round(tot.result), buses: Object.keys(s.vehicles).length, lines: Object.keys(s.routes).length,
+      satisfactionToday: satisfactionToday(this.game), spareBuses: Object.values(s.vehicles).filter((v) => v.route === null && !v.sell).length,
     };
   }
 

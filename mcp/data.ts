@@ -12,6 +12,12 @@ import { WEEKDAYS_LONG, hhmm, secondOfDay, serviceDayOf, serviceDayWeekend, week
 import { SERVICE_MIN, bandAt } from '../src/game/timetable.ts';
 import { ZONE_Z, zoneTile } from '../src/game/world/zoneTiles.ts';
 import { tileCenterLat } from '../src/geo/tiles.ts';
+import { PLACE_LABEL, SCALE_LABEL } from '../src/game/world/places.ts';
+import { CONDITION_LABEL, WEATHER_LABEL, hourCondition, hourTemp } from '../src/game/weather.ts';
+import { SEASON_LABEL, calendarDay, calendarPattern, dayType, dayTypeLabel, seasonWeekLabel } from '../src/game/calendar.ts';
+import { EVENT_TEMPLATES, actualEnd, whenLabel } from '../src/game/events.ts';
+import { TRAVELLERS } from '../src/game/activity/params.ts';
+import { BANDS } from '../src/game/analytics/types.ts';
 
 const pct = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100));
 const r1 = (v: number) => Math.round(v * 10) / 10;
@@ -270,4 +276,185 @@ export function query(s: GameState, pointer: string, maxChars = 20_000) {
   if (v && typeof v === 'object' && !Array.isArray(v) && JSON.stringify(v).length > maxChars) return { keys: Object.keys(v), note: 'Too large to show in full; ask for one of these keys.' };
   const text = JSON.stringify(v);
   return text.length > maxChars ? { truncated: true, json: text.slice(0, maxChars) } : { value: v };
+}
+
+// ───────────────────────────────────────────── city activity
+
+/** Straight-line metres between two [lng, lat] points (equirectangular, fine at city scale). */
+function metresBetween(a: [number, number], b: [number, number]) {
+  const k = Math.PI / 180;
+  const x = (b[0] - a[0]) * k * Math.cos(((a[1] + b[1]) / 2) * k);
+  const y = (b[1] - a[1]) * k;
+  return Math.hypot(x, y) * 6371000;
+}
+
+export function places(s: GameState, opts: { category?: string; query?: string; limit?: number } = {}) {
+  const all = s.world?.places?.significant ?? [];
+  const q = opts.query?.trim().toLowerCase();
+  const cat = opts.category?.trim().toLowerCase();
+  const hits = all.filter((p) => (!cat || p.category === cat || PLACE_LABEL[p.category].toLowerCase() === cat) && (!q || p.name.toLowerCase().includes(q)));
+  const limit = Math.max(1, Math.min(300, opts.limit ?? 50));
+  const stopList = Object.values(s.stops);
+  return {
+    total: all.length,
+    matching: hits.length,
+    categories: [...new Set(all.map((p) => p.category))].sort(),
+    note: 'The most significant places on the map (at most 300). Sizes are real where measured, otherwise estimated; tier 1 is the largest of its kind.',
+    places: hits.slice(0, limit).map((p) => {
+      let near: { stop: string; metres: number } | null = null;
+      if (!p.beyond) {
+        for (const st of stopList) {
+          const d = metresBetween(p.lngLat as [number, number], st.lngLat as [number, number]);
+          if (d <= 500 && (!near || d < near.metres)) near = { stop: st.name, metres: Math.round(d) };
+        }
+      }
+      return {
+        id: p.id,
+        name: p.name,
+        category: p.category,
+        categoryLabel: PLACE_LABEL[p.category],
+        size: `${p.value.toLocaleString('en-GB')} ${SCALE_LABEL[p.unit]}`,
+        value: p.value,
+        unit: p.unit,
+        tier: p.tier,
+        lngLat: p.lngLat,
+        reachable: !p.beyond,
+        nearestOwnStop: near,
+      };
+    }),
+  };
+}
+
+export function weatherCalendar(s: GameState) {
+  const t = s.clock.t;
+  const today = Math.floor(t / DAY);
+  const pattern = calendarPattern(s.region.country);
+  const dayInfo = (d: number) => {
+    const c = calendarDay(s.world.calendar, s.clock.startWeekday, d);
+    const ty = dayType(c, pattern);
+    return {
+      day: d + 1,
+      weekday: WEEKDAYS_LONG[c.weekday],
+      season: SEASON_LABEL[c.season],
+      seasonWeek: seasonWeekLabel(c),
+      dayType: dayTypeLabel(ty) || (ty.weekend ? 'Weekend' : 'Ordinary day'),
+      weekend: ty.weekend,
+      publicHoliday: ty.holiday,
+      schoolDay: ty.school,
+      schoolHolidays: ty.schoolHolidays,
+      university: ty.uni,
+      festive: ty.festive,
+    };
+  };
+  const wd = s.world.weather?.days ?? [];
+  const w0 = wd.find((x) => x.day === today);
+  const w1 = wd.find((x) => x.day === today + 1);
+  const hr = Math.floor((t % DAY) / 3600);
+  const rainByHour = w0 ? w0.actual.mm.map((mm, h) => ({ hour: h, mm: r1(mm), condition: CONDITION_LABEL[hourCondition(w0.actual, h)] })).filter((x) => x.mm >= 0.1) : [];
+  const lastDays = [];
+  for (const d of s.stats.days.slice(-14)) if (d.wx) lastDays.push({ day: d.day + 1, weather: WEATHER_LABEL[d.wx.k], highC: r1(d.wx.hi), lowC: r1(d.wx.lo), rainMm: r1(d.wx.mm) });
+  const next14Days = [];
+  for (let d = today; d < today + 14; d++) next14Days.push(dayInfo(d));
+  return {
+    today: dayInfo(today),
+    weatherToday: w0
+      ? {
+          kind: WEATHER_LABEL[w0.actual.kind],
+          highC: r1(w0.actual.hi),
+          lowC: r1(w0.actual.lo),
+          totalRainMm: r1(w0.actual.mm.reduce((a, b) => a + b, 0)),
+          rainByHour: rainByHour.length ? rainByHour : 'dry all day',
+          now: { hour: hr, condition: CONDITION_LABEL[hourCondition(w0.actual, hr)], tempC: r1(hourTemp(w0.actual, hr)) },
+        }
+      : 'No weather recorded in this save yet.',
+    tomorrowForecast: w1?.forecast
+      ? { kind: WEATHER_LABEL[w1.forecast.kind], highC: r1(w1.forecast.hi), lowC: r1(w1.forecast.lo), chanceOfRainPct: w1.forecast.pop, issuedAt: hhmm(w1.forecast.t) }
+      : 'Not issued yet (forecasts come out at 18:00).',
+    notes: [
+      'About 8 forecasts in 10 are right.',
+      "The weather is generated from the city's climate (NASA POWER data), not live weather.",
+      'The game year has 12 weeks and no real calendar dates.',
+    ],
+    lastDays,
+    next14Days,
+  };
+}
+
+export function events(s: GameState, kind?: string) {
+  const t = s.clock.t;
+  const k = kind?.trim().toLowerCase();
+  const list = (s.world.events?.list ?? []).filter((e) => e.ann <= t && (!k || e.kind === k));
+  const row = (e: (typeof list)[number]) => ({
+    id: e.id,
+    kind: e.kind,
+    kindLabel: EVENT_TEMPLATES[e.kind]?.label ?? e.kind,
+    title: e.title,
+    venue: e.venue,
+    when: whenLabel(e, t, s.clock.startWeekday),
+    day: Math.floor(e.start / DAY) + 1,
+    start: hhmm(e.start),
+    end: hhmm(actualEnd(e)),
+    expectedPeople: e.people,
+    ...(e.series ? { festivalDay: `${e.series[0]} of ${e.series[1]}` } : {}),
+    cancelled: !!e.cancelled,
+    ...(e.cancelled ? { cancelledBecause: e.cancelled } : {}),
+    ...(e.reason ? { reason: e.reason } : {}),
+  });
+  const upcoming = list.filter((e) => actualEnd(e) > t).sort((a, b) => a.start - b.start);
+  const past = list.filter((e) => actualEnd(e) <= t).sort((a, b) => b.start - a.start).slice(0, 20);
+  return {
+    upcomingAndCurrent: upcoming.map((e) => ({ ...row(e), status: e.cancelled ? 'cancelled' : e.start <= t ? 'under way' : 'announced' })),
+    recent: past.map((e) => ({ ...row(e), journeysOnYourBuses: e.carried ?? 0, gaveUpOrStranded: e.lost ?? 0 })),
+    note: 'Only announced events are listed. Journeys on your buses count attendees you carried (both ways); gave up or stranded counts those who could not get there or home.',
+  };
+}
+
+export function lineCharacter(s: GameState, r: Route) {
+  const today = Math.floor(s.clock.t / DAY);
+  const recs = s.analytics.days.filter((d) => d.day >= today - 7 && d.day < today && !d.partial);
+  const rds = recs.map((d) => d.routes[r.id]).filter(Boolean);
+  const head = { line: `${r.number} ${r.name}`.trim(), id: r.id, daysRecorded: recs.length };
+  if (!rds.length) return { ...head, note: 'No detailed days recorded yet. Analytics keep the last 35 full days; this line needs at least one finished day.' };
+  const n = recs.length;
+  const total = rds.reduce((a, rd) => a + rd.b.reduce((x, y) => x + y, 0), 0);
+  const byType = new Array<number>(TRAVELLERS.length).fill(0);
+  const byBand = new Array<number>(BANDS.length).fill(0);
+  let anyK = false;
+  for (const rd of rds) {
+    if (!rd.k) continue;
+    anyK = true;
+    rd.k.forEach((v, i) => { byType[Math.floor(i / BANDS.length)] += v; byBand[i % BANDS.length] += v; });
+  }
+  if (!anyK) rds.forEach((rd) => rd.b.forEach((v, h) => { byBand[BANDS.findIndex((b) => h >= b.from && h < b.to)] += v; }));
+  const kTotal = byType.reduce((a, b) => a + b, 0);
+  const bandTotal = Math.max(1, byBand.reduce((a, b) => a + b, 0));
+  const hours = new Array<number>(24).fill(0);
+  rds.forEach((rd) => rd.b.forEach((v, h) => { hours[h] += v; }));
+  const busiest = hours.indexOf(Math.max(...hours));
+  // busiest hour by direction, from the per-pattern hourly boardings (newer saves)
+  const dir = new Map<number, { to: string | null; h: number[] }>();
+  for (const rd of rds) {
+    for (const [key, hrs] of Object.entries(rd.bp ?? {})) {
+      const pat = Number(key.split('|')[0]);
+      const e = dir.get(pat) ?? { to: null, h: new Array<number>(24).fill(0) };
+      const stops = rd.p[key]?.stops ?? [];
+      if (stops.length > 1 && r.kind !== 'loop') e.to = stopName(s, stops[stops.length - 1]);
+      hrs.forEach((v, h) => { e.h[h] += v ?? 0; });
+      dir.set(pat, e);
+    }
+  }
+  return {
+    ...head,
+    window: `last ${n} recorded day${n === 1 ? '' : 's'}`,
+    boardingsPerDay: r1(total / n),
+    whoRides: anyK && kTotal > 0
+      ? byType.map((v, i) => ({ type: TRAVELLERS[i].label, boardings: v, sharePct: r1((100 * v) / kTotal) })).filter((x) => x.boardings > 0).sort((a, b) => b.boardings - a.boardings)
+      : 'Not recorded for these days.',
+    boardingsByTimeBand: byBand.map((v, i) => ({ band: BANDS[i].label, hours: BANDS[i].short, perDay: r1(v / n), sharePct: r1((100 * v) / bandTotal) })),
+    busiestHour: total > 0 ? { hour: `${String(busiest).padStart(2, '0')}:00`, boardingsPerDay: r1(hours[busiest] / n) } : null,
+    busiestHourByDirection: [...dir.entries()].sort((a, b) => a[0] - b[0]).map(([pat, e]) => {
+      const m = Math.max(...e.h);
+      return { direction: e.to ? `towards ${e.to}` : `direction ${pat + 1}`, hour: `${String(e.h.indexOf(m)).padStart(2, '0')}:00`, boardingsPerDay: r1(m / n) };
+    }),
+  };
 }

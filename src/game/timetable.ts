@@ -8,7 +8,8 @@ import type { RoadGraph } from './world/graph.ts';
 import type { TrafficProvider } from './world/traffic.ts';
 import type { Pattern } from './network.ts';
 import { edgeSpeedFn, step } from './paths.ts';
-import type { Band, DayPlan, Id, Route, Timetable, Trip } from './types.ts';
+import type { Band, DayPlan, Id, PlanCondition, Route, ServicePlan, Timetable, Trip } from './types.ts';
+import { SEASON_LABEL } from './calendar.ts';
 import { TripState } from './types.ts';
 import { DAY, MODEL } from './content.ts';
 import { minutesLabel } from './time.ts';
@@ -48,6 +49,23 @@ export function normaliseBands(bands: Band[]): Band[] {
     .sort((a, b) => a.from - b.from);
   for (let i = 1; i < out.length; i++) if (out[i].from < out[i - 1].to) out[i].from = out[i - 1].to;
   return out.filter((b) => b.to - b.from >= 5);
+}
+
+/** A short plain description of when a service plan runs. */
+export function describeCondition(c: PlanCondition): string {
+  switch (c.kind) {
+    case 'season': return `In ${SEASON_LABEL[c.season].toLowerCase()}`;
+    case 'school_holidays': return 'In school holidays';
+    case 'uni_break': return 'In university breaks';
+    case 'public_holiday': return 'On public holidays';
+    case 'event_day': return 'On event days';
+    case 'manual': return c.on ? 'Switched on' : 'Switched off';
+  }
+}
+
+/** The first enabled plan whose condition holds, or null for the normal timetable. */
+export function pickPlan(tt: Timetable, holds: (c: PlanCondition) => boolean): ServicePlan | null {
+  return tt.plans?.find((p) => p.enabled && holds(p.when)) ?? null;
 }
 
 const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
@@ -121,8 +139,8 @@ export function scheduleAt(prof: RunProfile, weekend: boolean, m: number): Float
 // ───────────────────────────────────────────── trips
 
 /** Trips for one service day of a route (all patterns), departures after `after`. */
-export function generateTrips(route: Route, patterns: Pattern[], sd: number, weekend: boolean, nextId: () => number, after = -Infinity): Trip[] {
-  const plan = weekend ? route.timetable.weekend : route.timetable.weekday;
+export function generateTrips(route: Route, patterns: Pattern[], sd: number, weekend: boolean, nextId: () => number, after = -Infinity, dayPlan?: DayPlan): Trip[] {
+  const plan = dayPlan ?? (weekend ? route.timetable.weekend : route.timetable.weekday);
   const deps = departures(plan);
   const trips: Trip[] = [];
   for (const p of patterns) {
@@ -148,8 +166,8 @@ export interface Requirement {
 }
 
 /** Buses needed = round trip including layovers ÷ headway, rounded up, for each band. */
-export function requirement(route: Route, profiles: RunProfile[], weekend: boolean): Requirement {
-  const plan = weekend ? route.timetable.weekend : route.timetable.weekday;
+export function requirement(route: Route, profiles: RunProfile[], weekend: boolean, dayPlan?: DayPlan): Requirement {
+  const plan = dayPlan ?? (weekend ? route.timetable.weekend : route.timetable.weekday);
   const bands: Requirement['bands'] = [];
   let peak = 0, peakLabel = '';
   for (const b of plan.bands) {

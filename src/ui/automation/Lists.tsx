@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Plus, PencilSimple, Copy, Trash, Lightning } from '@phosphor-icons/react';
 import type { Game } from '../../game/engine.ts';
 import { NODE, triggerLabel, defaultConfig } from '../../game/automation/registry.ts';
-import { TEMPLATES, fromTemplate } from '../../game/automation/templates.ts';
+import { TEMPLATES, TEMPLATE_GROUPS, fromTemplate } from '../../game/automation/templates.ts';
 import type { WfNode, Workflow } from '../../game/automation/types.ts';
 import { DAY } from '../../game/content.ts';
 import { useUI } from '../../state/store.ts';
@@ -74,12 +74,21 @@ export function WorkflowRow({ game, wf, onOpen }: { game: Game; wf: Workflow; on
 export function TemplateList({ game, onOpen }: { game: Game; onOpen: (id: string) => void }) {
   return (
     <div className="list" style={{ gap: 6 }}>
-      {TEMPLATES.map((t) => (
-        <button key={t.id} className="st-tpl" onClick={() => { const id = startFromTemplate(game, t.id); if (id) onOpen(id); }}>
-          <b><Lightning size={13} weight="bold" style={{ color: 'var(--amber)' }} />{t.name}<ModeTag mode={t.mode} /></b>
-          <span>{t.description}</span>
-        </button>
-      ))}
+      {TEMPLATE_GROUPS.map((g) => {
+        const list = TEMPLATES.filter((t) => t.group === g.id);
+        if (!list.length) return null;
+        return (
+          <div key={g.id} className="st-tpl-group">
+            <div className="st-tpl-head"><b>{g.label}</b><span>{g.help}</span></div>
+            {list.map((t) => (
+              <button key={t.id} className="st-tpl" onClick={() => { const id = startFromTemplate(game, t.id); if (id) onOpen(id); }}>
+                <b><Lightning size={13} weight="bold" style={{ color: 'var(--amber)' }} />{t.name}<ModeTag mode={t.mode} /></b>
+                <span>{t.description}</span>
+              </button>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

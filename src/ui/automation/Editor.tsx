@@ -106,10 +106,10 @@ function EditorInner({ game, wfId, onLeave, onDirty }: { game: Game; wfId: strin
     for (const e of draft.edges) (wired.get(e.to) ?? wired.set(e.to, new Set()).get(e.to)!).add(e.in);
     const nodes: Node[] = draft.nodes.map((n) => ({
       id: n.id, type: 'stNode', position: { x: n.x, y: n.y }, selected: sel.includes(n.id), measured: dims[n.id],
-      data: { node: n, game, trace: traces.get(n.id), issue: issueOf.get(n.id), ran: fresh, wired: wired.get(n.id) } satisfies StNodeData,
+      data: { node: n, game, trace: traces.get(n.id), issue: issueOf.get(n.id), ran: fresh, wired: wired.get(n.id), wfId } satisfies StNodeData,
     }));
     return [...groups, ...nodes];
-  }, [draft.nodes, draft.edges, draft.groups, sel, dims, traces, issueOf, fresh, game, update]);
+  }, [draft.nodes, draft.edges, draft.groups, sel, dims, traces, issueOf, fresh, game, update, wfId]);
 
   const rfEdges = useMemo<Edge[]>(() => draft.edges.map((e) => {
     let cls = '';

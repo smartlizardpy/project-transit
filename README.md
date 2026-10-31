@@ -44,6 +44,7 @@ pnpm test         # game-core tests (vitest)
    - **Satisfaction:** the popover in the top bar explains what passengers dislike most.
    - **Route warnings** (in the line inspector and line editor) can be clicked: the route check shows why a line makes a detour and offers fixes with a before/after comparison.
    - **Depots:** a bus can be based at another depot from its inspector; a parked bus drives there.
+   - **The city lives by itself.** People go to work, school, university, the shops, hospitals, the airport and events, and choose between walking, cycling, car, taxi, the city's metro, tram, rail and ferries, and your buses. Click a place (airport, station, university, hospital, mall, stadium…) for its card: opening hours, busy hours and how people get there. Weather, matches, concerts and rail disruptions change who travels. Service plans switch timetables for school holidays, weekends and events.
 8. **Network Control (K).** Opens after 30 operating days at company level 3; analytics are recorded from day one. It shows where passengers travel, stop, line and fleet figures, comparisons, your own metrics and saved reports. **Automation Studio** builds workflows that watch the network and act through the same rules as you, in Observe, Suggest or Automatic mode. See [`docs/automation-api.md`](docs/automation-api.md).
 9. **Expand.** Only your own areas are shown in full. Squares you can license next sit under a light veil with their price; everything else is blank paper. Click a veiled square (or use overlay O) to license it once you have the reputation and money. The map has no fixed edge: as you expand, more of the city loads around you (downloaded from OpenFreeMap, so this needs a connection beyond the bundled part of İstanbul). Overdraw for too long and the company becomes insolvent, then bankrupt.
 
@@ -80,6 +81,8 @@ The game includes a small [Model Context Protocol](https://modelcontextprotocol.
 | `list_lines`, `line_details` | Each line's buses, frequency, riders, punctuality, crowding and profit; one line's stops, timetable and trips |
 | `list_buses`, `list_stops` | The fleet with status and condition; stops with waiting passengers |
 | `finances`, `daily_history` | Income and costs by day and category, the ledger, and one row per game day |
+| `places`, `weather_calendar` | Significant places with size and nearest stop; season, day type, weather, forecast and the next 14 days |
+| `events`, `line_character` | Announced events and their results; who rides a line and when |
 | `objectives`, `notifications`, `territory` | Goals and progress, recent messages, and the licensed map squares |
 | `query_save` | Raw save data by JSON pointer, for anything else |
 
@@ -157,6 +160,6 @@ The game's website is a separate static site in [`website/`](website/README.md).
 
 ## Data and attribution
 
-Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). Tiles from [OpenMapTiles](https://openmaptiles.org/), served by [OpenFreeMap](https://openfreemap.org/). Place search uses [Nominatim](https://nominatim.org/), only when you press Enter. Attribution is shown on the map at all times.
+Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). Tiles from [OpenMapTiles](https://openmaptiles.org/), served by [OpenFreeMap](https://openfreemap.org/). Place search uses [Nominatim](https://nominatim.org/), only when you press Enter. Attribution is shown on the map at all times. Airport types and locations come from [OurAirports](https://ourairports.com/data/) (public domain); airport passenger numbers, stadium capacities, student numbers and hospital beds from [Wikidata](https://www.wikidata.org/) (CC0). Both are bundled (`scripts/data/build-airports.mjs`, `scripts/data/build-wikidata.mjs`), so the game makes no extra requests for them.
 
 The UI font is Figtree (SIL Open Font License), and the icons are Phosphor (MIT). All art is original: the buses, markers, logos and illustrations are drawn in code.

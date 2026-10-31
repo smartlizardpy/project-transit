@@ -112,6 +112,13 @@
 .st-node-note { margin: 8px 10px 0; padding: 6px 8px; border-radius: 8px; font-size: 11.5px; font-weight: 700; line-height: 1.35; background: rgba(143,220,174,0.1); color: var(--mint); }
 .st-node-note.err { background: #3b2326; color: var(--coral); }
 .st-node-note.off { background: transparent; color: var(--text-3); padding-left: 2px; font-weight: 600; }
+.st-node-live { margin: 6px 10px 0; padding: 4px 8px 4px 18px; position: relative; border-radius: 7px; font-size: 11px; font-weight: 600; line-height: 1.35; color: var(--text-3); background: rgba(255,255,255,0.03); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.st-node-live::before { content: ''; position: absolute; left: 7px; top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+.st-node-live.s-waiting::before, .st-node-live.s-idle::before { background: var(--green); }
+.st-node-live.s-building { color: var(--amber); }
+.st-node-live.s-building::before { background: var(--amber); }
+.st-node-live.s-fired { color: var(--text-2); }
+.st-node-live.s-fired::before { background: var(--accent); }
 .st-ports { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; padding: 8px 0 9px; }
 .st-ports > div { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .st-port { position: relative; height: 16px; display: flex; align-items: center; font-size: 11.5px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
@@ -228,6 +235,11 @@
 .st-tpl:hover { background: var(--card-hover); }
 .st-tpl b { font-size: 13px; font-weight: 800; display: flex; gap: 8px; align-items: center; }
 .st-tpl span { font-size: 12px; color: var(--text-2); font-weight: 500; line-height: 1.4; }
+.st-tpl-group { display: flex; flex-direction: column; gap: 6px; }
+.st-tpl-group + .st-tpl-group { margin-top: 10px; }
+.st-tpl-head { display: flex; flex-direction: column; gap: 1px; padding: 2px 2px 2px; }
+.st-tpl-head b { font-size: 11.5px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-2); }
+.st-tpl-head span { font-size: 11.5px; color: var(--text-3); font-weight: 500; }
 .st-home { padding: 16px; display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; overflow-y: auto; flex: 1; min-height: 0; }
 .st-home > div { display: flex; flex-direction: column; gap: 8px; }
 

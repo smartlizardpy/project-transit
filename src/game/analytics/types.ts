@@ -52,6 +52,8 @@ export interface StopDay {
   /** fares sold here (journeys that started here), and boardings by line */
   rv: number;
   bl: Record<Id, number>;
+  /** boardings by traveller type (activity engine; missing on older days) */
+  k?: number[];
 }
 
 /** Per line pattern (direction) and stop sequence: loads and run times per segment. */
@@ -102,6 +104,10 @@ export interface RouteDay {
   x: number;
   /** segment detail by pattern key */
   p: Record<string, PatDay>;
+  /** boardings by hour per pattern key (same keys as `p`; missing on older days) */
+  bp?: Record<string, number[]>;
+  /** boardings by traveller type and time band: [type × BANDS.length + band] (missing on older days) */
+  k?: number[];
 }
 
 /** Per vehicle, one calendar day. Minutes by activity. */
@@ -135,7 +141,7 @@ export interface VehicleDay {
 export interface NetDay {
   /** journeys completed, by hour of completion */
   j: number[];
-  /** journeys abandoned (gave up), by hour */
+  /** journeys not completed, by hour: gave up waiting, or stranded with no bus home (`sd`) */
   ab: number[];
   /** satisfaction sum and count, component sums */
   ss: number;
@@ -146,6 +152,12 @@ export interface NetDay {
   wt: number;
   /** completed journeys that used a transfer */
   xf: number;
+  /** completed journeys, stranded travellers (no bus home) and people left behind, by traveller type */
+  jk?: number[];
+  sk?: number[];
+  lk?: number[];
+  /** stranded travellers by hour (included in `ab`; they have no origin–destination record) */
+  sd?: number[];
 }
 
 export interface DayRecord {
@@ -162,6 +174,34 @@ export interface DayRecord {
    * per time band present: [band, completed, abandoned, journey minutes, wait minutes, ...].
    */
   od: Record<string, number[]>;
+  /** completed journeys by traveller type per `od` key: [type, people, type, people, …] */
+  odk?: Record<string, number[]>;
+  /** what kind of day it was (recorded when the day closes; missing on older days) */
+  lbl?: DayLabel;
+}
+
+/** A recorded day's calendar, weather and events, for grouping and comparing days. */
+export interface DayLabel {
+  /** game year (1-based), season, week of the year (1-based) */
+  y: number;
+  season: string;
+  week: number;
+  /** flags are stored only when true */
+  weekend?: boolean;
+  /** public holiday */
+  holiday?: boolean;
+  /** pupils at school, or a weekday of the school holidays */
+  school?: boolean;
+  schoolHolidays?: boolean;
+  uni: string;
+  festive?: boolean;
+  /** the day's weather: kind, rain in mm, high and low in °C */
+  wx?: { k: string; mm: number; hi: number; lo: number };
+  /**
+   * events that started that day and touched your network (people carried, or who gave up or
+   * were stranded), and rail disruptions; results are final by the next day
+   */
+  ev?: { id: string; kind: string; venue: string; people: number; carried: number; lost: number; cancelled?: boolean }[];
 }
 
 /** Compact totals for days older than the detail window. */
@@ -173,7 +213,28 @@ export interface DaySummary {
   s: Record<Id, [number, number, number]>;
   /** network: journeys, abandoned, satisfaction sum, satisfaction count */
   n: [number, number, number, number];
+  /** the day's label, kept from the detailed record */
+  l?: DayLabel;
 }
+
+/** One game week: totals per line and for the network, kept for three game years (seasonal comparisons). */
+export interface WeekRecord {
+  /** game year (1-based), week of the year (1-based), season, first game day, and days recorded */
+  y: number;
+  w: number;
+  season: string;
+  from: number;
+  n: number;
+  /** per line: boardings, fares, then boardings by traveller type */
+  r: Record<Id, number[]>;
+  /** network: journeys, gave up or stranded, satisfaction sum, satisfaction count, fares */
+  net: [number, number, number, number, number];
+  /** by weather: days, journeys (dry, wet, storm) */
+  wx: [number, number, number, number, number, number];
+}
+
+/** Game weeks kept (three years of twelve weeks). */
+export const WEEKS_KEPT = 36;
 
 export interface AssignmentEvent {
   t: number;
@@ -192,11 +253,16 @@ export interface AnalyticsState {
   days: DayRecord[];
   summary: DaySummary[];
   assignments: AssignmentEvent[];
+  /** weekly roll-ups for seasonal comparisons (missing on older saves until the first week closes) */
+  weeks?: WeekRecord[];
   /** display names for ids that may later be removed */
   names: { s: Record<Id, string>; r: Record<Id, { n: string; c: string }>; v: Record<Id, string> };
 }
 
 export const hours0 = () => new Array<number>(24).fill(0);
+/** Traveller types recorded (see activity/params.ts TRAVELLERS). */
+export const TYPE_COUNT = 10;
+export const types0 = () => new Array<number>(TYPE_COUNT).fill(0);
 
 export function emptyDay(day: number, partial = false): DayRecord {
   const d: DayRecord = {

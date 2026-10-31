@@ -9,7 +9,7 @@ Status key (as in `docs/development-progress.md`):
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-30.
+Last updated: 2026-10-31 (control-room blocks, and why reputation fell).
 
 ## A. Foundations: save version 2, analytics recording, unlock ✅
 
@@ -95,6 +95,103 @@ Data nodes have an optional **After** input so a template shows its trigger wire
 | The bus drives to its new depot on the road, drawn as a hollow ring like other depot runs | ✅ | `depot-move-driving.png` |
 | Available to automations (`Move bus to depot` node) | ✅ | registry; command checks shared |
 
+## G. Smarter triggers and starter workflows (requested 2026-10-31) 🟡
+
+The owner found the triggers too basic and asked for more ready-made flows. Research (Home Assistant, Node-RED, n8n, Prometheus and Grafana alert rules, Oxygen Not Included, Factorio, OpenTTD, TfL's excess wait time, transit holding research) led to a recommended first batch, built here. 🟡 until the owner has played it.
+
+| Item | Status | Evidence |
+|---|---|---|
+| **For at least N minutes** on condition triggers (watch a figure, people waiting, people giving up, a line short of buses, balance): a short spike does not fire; it fires once and then waits for the condition to clear (a tenth of the value back, or as chosen) before it can fire again for the same line, stop or bus | ✅ | `automation-triggers.test.ts` "waits for the condition to hold, ignores a shorter spike, and fires once until it clears" (5-minute dip: nothing; 10 minutes: one run; back by less than a tenth: still waits; clearly back: re-arms) |
+| **Hours and days** (From, Until, every day / weekdays / weekends) on every condition and event trigger and on *Every few minutes*; outside them nothing builds up | ✅ | tests "only builds up and fires within its hours", "skips weekdays for a weekend-only trigger" |
+| **At most once every N minutes** for each stop, line or bus on event triggers | ✅ | test "runs an event trigger at most once every N minutes for each stop" (arrivals every 8 min, at most 2 an hour per stop, 30 min apart) |
+| Half-built conditions start again when a workflow is switched off, automation is paused, or its trigger settings change (not when a node is moved); saved, so a reload fires at the same minute; old workflows without the new settings behave as before | ✅ | tests "starts again when the workflow is switched off, and a reload carries on the same", "keeps an old workflow … working as before" |
+| **Watch a figure**: 18 figures (line load and punctuality over 3 hours, how full now, delay, waiting, missed today, buses short, road traffic; stop waiting, longest wait, gave up in the last hour; bus condition, delay, fullness; reputation, satisfaction today, balance, today's result), checked every minute for each line, stop or bus, or one line's; hands on the line, stop or bus record | ✅ | tests "watches each bus and hands the bus on…", "reads line, stop and company figures…" |
+| New triggers: **A line is short of buses** (fewer working buses than the timetable needs right now; buses in the workshop or broken down do not count), **People left behind**, **People give up waiting** (in the last 60 minutes at one stop), **End of the week** (journeys, change on the week before, satisfaction, fares, busiest line) | ✅ | tests in "new triggers" (4) |
+| **Live state on every trigger card**: the current reading (for many lines or stops, the one closest to firing), *Watching*, *Building up: 11 of 30 min*, *Fired, waits to clear*, the next run for schedules, last fired and runs today, from the running game | ✅ | `automation-trigger-live.png`, `automation-rebalance-flow.png` ("Next 09:00") |
+| Inspector: timing settings under **When it may fire**; the figure list grouped by lines, stops, buses and the company | ✅ | `automation-trigger-live.png` |
+| New figures on records for Filter and Expression blocks: line `neededNow`, `working`, `short`; stop `gaveUpHour`, `leftBehindToday`; company `satisfactionToday`, `spareBuses` | ✅ | `docs/automation-api.md` |
+| **13 new starter workflows** (28 in all), in a gallery grouped by topic: crowding and waiting, reliability, fleet and maintenance, money and reputation, events/weather/calendar, reports and briefings | ✅ | test "every template has a group, validates and test-runs without failing"; `automation-template-groups.png`; list in `docs/automation-api.md` |
+| *Move a bus from a quiet line to a busy one* takes a free bus only from a line with more working buses than its timetable needs | ✅ | test (measured: one move, at 17:00 on the first day of the crowded test line) |
+| *Find out why reputation is falling* names the line missing the most departures, or says none is | ✅ | `automation-reputation-flow.png` |
+| *Service worn buses between the peaks* sends buses below 78% between 09:00 and 16:00, ahead of the game's own automatic service at 70% (which can strike in the rush hour) | ✅ | test (a bus at 76% at 08:00 is sent at 09:00) |
+| Performance: eight of the new workflows on a three-line company add nothing measurable (about 360 ms per 3 game hours with or without) | ✅ | measured with a throwaway benchmark |
+
+The live-state screenshot uses a custom workflow, *Reputation slipping*, whose threshold (60) is the next round ten above the demo company's real reputation (58.1), so the trigger is building up in the shot. Everything else in it is the engine's real state.
+
+**Not built yet (second batch, recommended):** bus bunching and gaps between buses on frequent lines, with a *Hold this bus* action; *Check back later* (a workflow re-checks its own fix N minutes on); a preview of how often a trigger would have fired over the last week; a trigger for another workflow acting or being blocked by a limit; a *collect, then send one summary* block.
+
+## H. Peak hours and sharing buses (requested 2026-10-31) 🟡
+
+The owner could not build flows like "compare lines' peak hours" or "park a free bus at the depot and bring a spare in when a line's peak is coming": the blocks were missing. 🟡 until the owner has played it.
+
+| Item | Status | Evidence |
+|---|---|---|
+| Peak hours from the timetable (stretches that need clearly more buses) and from riders (busiest hours on recent days of the same kind) | ✅ | `automation-peaks.test.ts` "finds a line’s timetable peaks…", "finds the busiest hours from riders…" |
+| Trigger **Peak hours start or end**: once per line and peak, N minutes before the start or after the end, on chosen days; live "Next 06:00: line 1, peak 07:00–09:00" on the card | ✅ | tests in "Peak hours start or end" (2) |
+| **Peak hours** block (each line's peaks, hour by hour, a sentence naming lines that could share buses), **Compare peaks**, **Buses to borrow** (spares first, then lines that can do without a bus until the peak ends) | ✅ | tests "compares two lines’ peaks", "brings in a parked spare, then buses another line can do without" |
+| **Buses**: *spare and parked*, *not needed by their line for the next hour*; **Park bus at its depot** (renamed from "Take bus off line"); **Base bus at another depot** (renamed from "Move bus to depot") | ✅ | test "parks the buses a line no longer needs after its peak…" |
+| **After the trips it already has**: moving or parking a bus waits for the trips it was given, takes no new ones, then moves (default for automations; "straight away" still available). Shown on the bus panel, cancelled by a manual move, saved | ✅ | test "runs its trips, takes no new ones, then moves…"; measured: parking 4 buses straight away after a peak cost 4 missed departures in the next two hours, after their trips none |
+| Line records gain `neededSoon`, `neededMax`, `spareNow`, `peakHours`, `inPeak`, `nextPeak`, `nextPeakIn`, `busiestHours`, so Filter and Expression blocks can use them | ✅ | `docs/automation-api.md` |
+| General blocks: **Pick the highest or lowest** (one block for Sort + First item), **For each item, use a function** (at most 20), expression `join()`; a bus or peak connected where a line is wanted stands for its line | ✅ | tests in "more building blocks" (2) |
+| Four starter workflows in a new gallery group: bring in buses before a peak, park after it, warn before a peak a line cannot cover, today's peak hours | ✅ | every template validates and test-runs (existing test); the first two tested end to end |
+| Screenshots of the new blocks in the real UI (`scripts/capture-peaks.mjs`, 4 checks) | ✅ | `automation-peaks-gallery.png`, `automation-peaks-bring-in.png` (live: "Next 06:00: line 1, peak 07:00–09:00"), `automation-peaks-report.png` (a test run: "Line 1: 07:00–09:00 and 16:00–18:00 (3 buses)") |
+
+The demo company's timetables ran the same all day, so they had no timetable peaks. The capture script first gives its busiest line a weekday timetable of every 20 minutes, every 10 minutes 07:00–09:00 and 16:00–18:00, as a player would; everything after that is the engine's real state. Lines 2 and 3 have no peaks and the report leaves them out.
+
+## I. Blocks for building your own strategies (requested 2026-10-31) 🟡
+
+The owner asked for blocks that make Automation Studio a programming environment rather than a set of recipes, and named five to do first: Group By, Join Datasets, Origin–Destination Query, Compare With Baseline and Schedule Extra Service. Several others on their list already existed (place information, demand forecast, events, weather, service plans for timetable profiles). 🟡 until the owner has played it.
+
+| Item | Status | Evidence |
+|---|---|---|
+| **Schedule extra departure**: an extra trip at a time of day or in N minutes (10 min to 24 h ahead), with a shift, from text, minutes or a peak; the bus asked for, else a free line bus or a spare; dropped with a notice (not a missed departure) when no bus is free; kept through timetable changes and saves | ✅ | `automation-programming.test.ts` "runs at the set time…", "takes a time as text, minutes, or a peak…" |
+| Extras never take a bus the timetable needs: the timetable is dispatched first and an extra only uses a free bus | ✅ | test "only uses a free bus…": against the same game without the extra, the line misses exactly the same departures |
+| Planned extras on the line panel, with who asked and the bus on its way; cancelling one blocks automations re-planning it for 24 h; each time is its own target, so two workflows planning different times do not "disagree" | ✅ | tests "checks notice and range, and two workflows…", "…a cancelled one is not scheduled again" |
+| **Compare with a normal day**: 10 figures for lines, stops and the network over the last hour, three hours or today, against the same weekday, the same kind of day or last week; every line or stop, most unusual first | ✅ | test "compares the last hour with the same hour…" (worked by hand on recorded days), "as a block…" |
+| **Passenger journeys**: recorded origin–destination journeys between stops or areas, a day on average, by kind of day, time band, line, or from or to a stop or area | ✅ | test "lists recorded journeys between areas and stops…" |
+| **Group by** and **Join lists**, and dotted field names (`match.riders`) in Sort, Pick, Summarise, Group by, Join and Get field | ✅ | test "groups buses by line…, and joins two lists…" |
+| Six starter workflows: *Extra trip as each busy hour starts*, *Stops busier than a normal day*, *Extra departure when a line is unusually busy*, *Predictive extra departures* (the owner's worked example), *Where passengers travel*, *Where buses are free at midday* | ✅ | every template validates and test-runs (existing test); the predictive one measured: 48.8 boardings per departure forecast for 07:00 on 34-place buses, 144%, so an extra at 07:10 |
+| Screenshots in the real UI (`scripts/capture-programming.mjs`, 6 checks, no page errors) | ✅ | `automation-programming-gallery.png`, `automation-programming-predictive.png` (a test run: forecast, join "3 of 3 matched on id = id", formula, filter), `automation-programming-line-extras.png` (the line panel: "06:45 from Eminönü, planned by …"), `automation-programming-journeys.png` (a test run: "about 327 journeys a day, by area… Busiest: Within Tünel, 123 a day") |
+
+In the demo company the forecast is low (about 41 boardings on the network in the next three hours), so *Predictive extra departures* finds no line over 90% and plans nothing; its screenshot shows that test run as it is. The extra on the line panel was planned by a two-block workflow the capture script makes (Manual trigger → Schedule extra departure in 45 minutes) and runs for real.
+| The rest of the owner's list (nearby stops, route between two points, coverage, transfers, occupancy of one departure, missed connections, wait, queue, optimise allocation, hold, adjust or short-turn a departure, temporary detour, route proposals) | ✅ | built with their own simulation support in section J |
+
+## J. Control room: blocks that act on buses and timetables (requested 2026-10-31) 🟡
+
+The rest of the owner's list from section I. Each action has its own support in the vehicle and timetable simulation, as the owner asked ("I wouldn't fake them by simply changing a UI label"). Each one is also a command, so it goes through the same checks, limits, cooldowns and Observe/Suggest/Automatic modes as every other action. 🟡 until the owner has played it.
+
+| Item | Status | Evidence |
+|---|---|---|
+| **Hold a bus** (at most 10 min) at a stop ahead, after its normal stop; it boards people while it waits, then carries on. The bus panel says how long, where and which workflow asked, with *Call off* | ✅ | `automation-operations.test.ts` "keeps the bus at the stop…", "refuses a hold that is too long…"; screenshot `automation-control-hold.png` |
+| **Turn a bus back early** at a stop ahead: the trip ends there, riders going further get off without paying again, and it runs back from there as a timetabled trip from the middle of the line | ✅ | test "ends the trip at the stop, lets riders going further off…", "refuses a loop line, a stop behind the bus and the last stop" |
+| **Move one departure** (up to 15 min earlier or later, not into the next 5 minutes, not onto another departure); the timetable slot it left is not filled again | ✅ | test "moves a departure later and it runs then…", "will not move a departure into the next five minutes…" |
+| **Temporary detour** round an area (100–800 m across, 15 min to 6 h): other roads, the same stops. A stretch switches only once no bus is on it, and goes back by itself. A stop next to the area may be served from the other side of the road, and the stretch after it then gets a way round too. Refused when a stop is inside the area, when the only way round is more than three times as long plus 5 minutes, or when it would send the line into the area elsewhere. The line panel shows it with *End now*; its long-way-round warnings are not shown while it lasts; a line's route cannot be edited during one | ✅ | test "drives round the area on other roads with the same stops, then goes back…", "refuses an area the line does not pass and one around one of its stops"; screenshot `automation-control-detour.png` (line 2, one stretch, about 1 min a trip) |
+| **Route-change suggestions** (add or drop a stop, or a new line through your stops): automations can only suggest them, even in Automatic mode, and they stay open for 3 game days. The text gives the extra km over both directions, the minutes a trip and the buses needed at the busiest time. A stop is added where it adds the least distance | ✅ | test "an automation can only suggest a route change; approving it changes the line", "adds a stop where it adds the least distance"; screenshot `automation-control-proposal.png` |
+| **Gaps between buses** and a **Buses bunch or a gap opens** trigger: the time to the bus ahead and behind (in timetabled minutes), the hold that evens them out, and a late bus going the other way that could turn back into a gap | ✅ | test "a long hold makes the bus behind catch up…", "the bunching trigger fires and holds the bus that caught up" |
+| Read-only blocks: **Connections at risk** (people on board who would miss the bus they change to), **Occupancy forecast** for the next departures (labelled an estimate), **Nearby stops**, **Road route**, **Coverage** (share of residents and jobs within reach, and the places left out), **Transfers** (where people change lines) | ✅ | tests in "reading the network for control" (4) |
+| **Best pairs** (the cheapest one-to-one assignment, Hungarian method, not greedy), feeding *Move bus to line* | ✅ | test "finds the cheapest one-to-one assignment, not the greedy one", "pairs spare buses with lines short of buses and moves them" |
+| **Wait** (a number of minutes, or until a figure crosses a value, with a time limit) and **One at a time** (passes items on one by one, the next when the last has finished): the workflow carries on later with only the steps after the block, nothing before it runs again. At most 30 waiting per workflow and 200 in all; the node shows how many are waiting and when the next carries on | ✅ | tests "Wait carries on later with only the steps after it…", "Wait until a figure crosses a value, or gives up", "One at a time passes items on one by one…"; screenshot `automation-control-wait.png` |
+| Eleven starter workflows in a new *Control room* gallery group (49 in all): *Even out bunched buses*, *Hold for people changing lines*, *Turn a late bus back into a gap*, *Extra bus before a crowded departure*, *Wait for the crowd after an event*, *Drive round a big event*, *Send spare buses to lines short of buses*, *Check back after an extra bus*, *Service worn buses one at a time*, *Suggest a line for an unserved corridor* (Suggest mode) and *Weekly coverage report* | ✅ | test "every control-room template is valid on a new network" and four end-to-end template tests; screenshot `automation-control-gallery.png` |
+| Screenshots in the real UI (`scripts/capture-operations.mjs`, 7 checks, no page errors) | ✅ | the six `automation-control-*.png` files |
+
+How the screenshots were made: the company from `scripts/capture-network.mjs sim`, on the next weekday morning. For the hold, line 1 was given a bus every 3 minutes from 06:00 to 10:00, with three more buses bought (the company could not afford the four more it needed), and one bus was held for 7 minutes so the next caught up. The lines in that company take about 5 minutes end to end, so the *Even out bunched buses* trigger was set to react after 1 minute of bunching instead of 3; with 3, the bus is at its last stop by then and the hold is refused ("about to finish its trip"). The timetable was set back before the detour. Nothing is drawn or staged.
+
+**Known gaps:**
+- On very short lines the bunching template rarely acts with its default 3 minutes; the trigger's *for* setting is there to lower it.
+- Most stretches on the Golden Horn shore road have no way round within the limit, so a detour is refused there; the refusal says why.
+- A detour is planned on free-flow times; traffic on the way round is what the simulation makes of it.
+
+## K. Why reputation fell (requested 2026-10-31) ✅
+
+The owner's reputation kept dropping, and the daily notice blamed slow journeys when the cause was missed departures (two lines had a timetable and no buses).
+
+| Item | Status | Evidence |
+|---|---|---|
+| The daily notice splits the change into missed departures (up to −4 points a day) and how passengers rated their journeys, largest first. It names the lines with the most missed departures, and says why: no buses at all, or how many the timetable needs at the busiest time against how many it has. A line with a timetable and no buses gets the advice to give it buses or suspend it | ✅ | `reputation.test.ts` "names the lines with a timetable and no buses, not slow journeys", "a line with too few buses is named with what its timetable needs" |
+| The notice opens the line with the most missed departures | ✅ | same tests |
+
+Example from the test: "243 timetabled departures were missed (−4.0 points), most on line 2 (136), line 3 (102) and line 1 (5). Lines 2 and 3 have a timetable but no buses, so every departure is missed: give them buses, or suspend them until you do. Line 1: its timetable needs 4 buses at the busiest time and it has 3."
+
 ## Mandatory scenarios
 
 | # | Scenario | Status | Evidence |
@@ -133,5 +230,5 @@ Tests: the full suite (102 tests in 16 files) takes about 90 s with Vitest cappe
 
 - See the per-area notes in `docs/route-diagnostics.md` (fix search changes one stop at a time; undo lasts while the check is open).
 - Flows are drawn as arcs between stops or the middle of an area's stops, not along roads.
-- Passenger choice is still the original bus-versus-walk-or-car model. A richer model (several modes, population groups, habit) is researched and proposed in `docs/passenger-choice-research.md`, not built.
+- Passenger choice is still the original bus-versus-walk-or-car model. A richer model (several modes, population groups, habit) is researched in `docs/passenger-choice-research.md` and planned in `docs/city-activity-engine-plan.md`, not built.
 - The Stops and per-line hourly charts ignore the time-of-day filter and say so.

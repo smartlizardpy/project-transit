@@ -128,6 +128,8 @@ export interface RunRecord {
   test?: boolean;
   /** lines written by "Add to report" nodes */
   report?: string[];
+  /** a run that carried on after a Wait or One-at-a-time node */
+  resumed?: boolean;
 }
 
 export interface Proposal {
@@ -157,6 +159,33 @@ export interface LedgerEntry {
   cost: number;
 }
 
+/**
+ * A workflow paused at a "Wait" or "One at a time" node. Each game minute the executor checks it
+ * and, when it is due, carries on from that node: only the steps after it run.
+ */
+export interface Pending {
+  id: number;
+  wf: string;
+  node: string;
+  kind: 'wait' | 'queue';
+  /** wait: when it carries on (or gives up, for "until"); queue: the next release */
+  due: number;
+  /** when the workflow started waiting */
+  from: number;
+  /** the run's trigger event, so the steps after it can still read it */
+  event: Record<string, Value>;
+  /** what the Wait node passes on */
+  value?: Value;
+  /** waiting until a figure crosses a value (the item is a line, stop or bus id) */
+  until?: { figure: string; item: string | null; op: 'above' | 'below'; value: number };
+  /** what it is waiting for, in words ("Line 3") */
+  label: string;
+  /** one wait per node and item */
+  key: string;
+  /** set when it carries on */
+  outcome?: 'then' | 'timeout';
+}
+
 export interface AutomationState {
   v: 1;
   workflows: Record<string, Workflow>;
@@ -173,9 +202,11 @@ export interface AutomationState {
   daily: { day: number; byWf: Record<string, { runs: number; actions: number; spend: number }> };
   /** runs started this hour per workflow (rate limit) */
   hourly: { hour: number; byWf: Record<string, number> };
-  counters: { run: number; proposal: number; workflow: number; node: number };
+  counters: { run: number; proposal: number; workflow: number; node: number; pending?: number };
   /** game-wide switch: pause every workflow */
   paused: boolean;
+  /** workflows waiting at a Wait or One-at-a-time node (missing on older saves) */
+  pending?: Pending[];
 }
 
 export const DEFAULT_LIMITS: WfLimits = { runsPerHour: 60, actionsPerDay: 40, spendPerDay: 2000, cooldownMin: 30 };

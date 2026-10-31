@@ -150,8 +150,9 @@ export async function runLab(game: Game, workflowId: string, opts: LabOptions, p
   const runs = test.state.automation.runs.filter((r) => r.wf === workflowId && r.id > runStart);
   const outcomes: Partial<Record<ActionOutcome, number>> = {};
   for (const r of runs) for (const a of r.actions) outcomes[a.outcome] = (outcomes[a.outcome] ?? 0) + 1;
-  const extras = runs.reduce((n, r) => n + r.actions.filter((a) => a.cmd.type === 'dispatch_extra' && a.outcome === 'executed').length, 0)
-    + test.state.automation.proposals.filter((p) => p.wf === workflowId && p.status === 'approved' && p.cmd.type === 'dispatch_extra' && p.t >= from).length;
+  const isExtra = (t: string) => t === 'dispatch_extra' || t === 'schedule_extra';
+  const extras = runs.reduce((n, r) => n + r.actions.filter((a) => isExtra(a.cmd.type) && a.outcome === 'executed').length, 0)
+    + test.state.automation.proposals.filter((p) => p.wf === workflowId && p.status === 'approved' && isExtra(p.cmd.type) && p.t >= from).length;
   const notes: string[] = [
     'Both copies start now with the same random seed. Other workflows run in both.',
     'Figures are measured in the copies over the same game time. Once the workflow changes something the two futures drift apart, so small differences can be chance.',

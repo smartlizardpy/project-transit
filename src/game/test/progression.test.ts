@@ -40,6 +40,7 @@ function openLine(game: Game, pts: LngLat[], depot: string, buses: number) {
 
 describe('progression bot', () => {
   const log: string[] = [];
+  const riders: { day: number; weekend: boolean; n: number }[] = [];
   const blockers = new Set<string>();
   let expandedDay = -1;
   const stuck: string[] = [];
@@ -185,12 +186,17 @@ describe('progression bot', () => {
         .sort((a, b) => b.zone.residents + b.zone.jobs - (a.zone.residents + a.zone.jobs))[0];
       if (expansion && next) note += ` next=${next.zone.name}[cost ${next.cost} rep ${next.repRequired}]`;
       const w = window(s, 24);
+      riders.push({ day, weekend: game.isWeekend(t0 + 3600), n: w.trips });
       log.push(
         `d${String(day).padStart(2)} bal=${Math.round(s.finance.balance)} loan=${s.finance.loan} rep=${rep.toFixed(1)}->${s.company.reputation.toFixed(1)} riders=${w.trips} aband=${w.abandoned} lines=${Object.keys(s.routes).length} buses=${Object.keys(s.vehicles).length} zones=${s.territory.owned.length} sat=${(w.satisfaction ?? 0).toFixed(2)}${note}`,
       );
     }
     expect(stuck, 'buses with no completed trips on a weekday').toEqual([]);
     void lastDoneCheck; void homeBuses;
+    // the calibration figure (docs/economy.md): riders a day over the last two weeks
+    const last = riders.filter((r) => r.day > MAX_DAYS - 15);
+    const mean = (xs: number[]) => Math.round(xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length));
+    log.push(`riders a day, days ${MAX_DAYS - 14}–${MAX_DAYS - 1}: weekdays ${mean(last.filter((r) => !r.weekend).map((r) => r.n))}, weekends ${mean(last.filter((r) => r.weekend).map((r) => r.n))}`);
     console.log('\n' + log.join('\n') + '\nBLOCKERS:\n' + [...blockers].slice(0, 25).join('\n'));
   });
 

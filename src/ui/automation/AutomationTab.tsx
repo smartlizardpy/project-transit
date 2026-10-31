@@ -40,7 +40,7 @@ export function AutomationTab({ game }: { game: Game }) {
                 <div className="st-prop-meta">
                   <span>{wf?.name ?? 'Removed workflow'}</span><span>· {whenLabel(p.t)}</span>
                   {p.impact === 'high' && <span className="pn-tag warn">Big change</span>}
-                  <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}><Hourglass size={11} weight="bold" />expires in {mins} min</span>
+                  <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}><Hourglass size={11} weight="bold" />expires in {mins >= 120 ? `${Math.round(mins / 60)} h` : `${mins} min`}</span>
                 </div>
                 {done[p.id] && !done[p.id].ok && <div className="pn-warn bad">{done[p.id].text}</div>}
                 <div className="pn-actions">
@@ -52,7 +52,7 @@ export function AutomationTab({ game }: { game: Game }) {
           })}
           {resolved.map(([id, r]) => <div key={id} className={r.ok ? 'pn-note' : 'pn-warn bad'} style={{ padding: '2px 4px' }}>{r.ok ? <Check size={12} weight="bold" style={{ verticalAlign: -1, marginRight: 4 }} /> : null}{r.text}</div>)}
         </div>
-        <div className="pn-note" style={{ marginTop: 8 }}>A suggestion stays open for {RUN_LIMITS.proposalMin} game minutes, because conditions change. When you approve it, the game checks it again first.</div>
+        <div className="pn-note" style={{ marginTop: 8 }}>A suggestion stays open for {RUN_LIMITS.proposalMin} game minutes, because conditions change; a route change stays open for 3 game days. When you approve it, the game checks it again first.</div>
       </div>
 
         </>

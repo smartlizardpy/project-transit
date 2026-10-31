@@ -14,11 +14,17 @@ export function FieldControl({ game, field, value, onChange, connected }: {
 }) {
   const v = value === undefined ? field.default : value;
   const any = field.allowAny ? [{ value: '', label: 'Any' }] : [{ value: '', label: 'Choose…' }];
-  const select = (opts: { value: string; label: string }[]) => (
-    <select className="pn-select" value={String(v ?? '')} onChange={(e) => onChange(e.target.value)} aria-label={field.label}>
-      {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-    </select>
-  );
+  const select = (opts: { value: string; label: string; group?: string }[]) => {
+    // options with a group are shown under its heading
+    const groups = [...new Set(opts.map((o) => o.group ?? ''))];
+    return (
+      <select className="pn-select" value={String(v ?? '')} onChange={(e) => onChange(e.target.value)} aria-label={field.label}>
+        {groups.length > 1 || groups[0]
+          ? groups.map((g) => <optgroup key={g} label={g}>{opts.filter((o) => (o.group ?? '') === g).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</optgroup>)
+          : opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    );
+  };
   switch (field.kind) {
     case 'number':
       return (

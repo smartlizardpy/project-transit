@@ -268,6 +268,7 @@ export const FUNCTIONS: Record<string, Fn> = {
   if: { min: 3, max: 3, doc: 'if(condition, then, else).', run: ([c, a, b]) => (truthy(c) ? a : b) },
   text: { min: 1, max: 2, doc: 'A number as text, optionally with decimals: text(x, 1).', run: ([x, d]) => { const n = num(x); if (n === null) return x === null ? '' : String(x).slice(0, LIMITS.string); const k = Math.max(0, Math.min(6, Math.floor(num(d ?? 0) ?? 0))); return n.toFixed(k); } },
   concat: { min: 1, max: 10, doc: 'Join texts together.', run: (a) => a.map((x) => (x === null ? '' : typeof x === 'object' ? '' : String(x))).join('').slice(0, LIMITS.string) },
+  join: { min: 1, max: 2, doc: 'A list as text, separated by a comma or your own separator: join(pluck(lines, "number"), ", ").', run: ([l, sep], c) => { const v = list(l, 'join'); tick(c, v.length); return v.map((x) => (x === null || typeof x === 'object' ? '' : String(x))).join(sep === null || sep === undefined ? ', ' : String(sep)).slice(0, LIMITS.string); } },
   upper: { min: 1, max: 1, doc: 'Upper-case text.', run: ([x]) => String(x ?? '').toUpperCase() },
   lower: { min: 1, max: 1, doc: 'Lower-case text.', run: ([x]) => String(x ?? '').toLowerCase() },
   number: { min: 1, max: 1, doc: 'Text as a number (or null).', run: ([x]) => { const n = typeof x === 'string' ? Number(x) : num(x); return n === null || !Number.isFinite(n) ? null : n; } },

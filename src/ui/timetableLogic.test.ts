@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBandAt, splitBand, setBandTimes, applyPreset } from './timetableLogic.ts';
+import { addBandAt, splitBand, setBandTimes, applyPreset, newPlan } from './timetableLogic.ts';
 
 describe('timetable logic', () => {
   it('adds within a gap', () => {
@@ -15,5 +15,17 @@ describe('timetable logic', () => {
   });
   it('night owl keeps existing', () => {
     expect(applyPreset([{ from: 360, to: 1380, headway: 10 }], 'night')).toHaveLength(2);
+  });
+});
+
+describe('service plan presets', () => {
+  const tt = { weekday: { bands: [{ from: 360, to: 1380, headway: 10 }] }, weekend: { bands: [{ from: 420, to: 1380, headway: 20 }] }, layover: 4 };
+  it('copies the normal timetable and picks a free id', () => {
+    const p = newPlan({ ...tt, plans: [{ ...newPlan(tt, 'manual')! }] }, 'holidays')!;
+    expect(p.id).toBe('plan2');
+    expect(p.when).toEqual({ kind: 'school_holidays' });
+    expect(p.weekday).toEqual(tt.weekday);
+    expect(p.weekday).not.toBe(tt.weekday);
+    expect(newPlan(tt, 'nope')).toBeNull();
   });
 });

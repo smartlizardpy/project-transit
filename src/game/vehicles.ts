@@ -11,7 +11,7 @@ import { accrueCost, post } from './finance.ts';
 import { notify, recordBoardings, recordDeparture, recordLoad, recordMissed } from './progress.ts';
 import { recDepart, recMaintenance, recRun, recVehicleMinute } from './analytics/record.ts';
 import { departWanted, simEvent } from './automation/events.ts';
-import { offloadAll, serveStop, stopNeeded } from './passengers.ts';
+import { occupied, offloadAll, serveStop, stopNeeded } from './passengers.ts';
 import { edgeBetween, routeWithFallback } from './world/graph.ts';
 import { hhmm } from './time.ts';
 
@@ -125,7 +125,7 @@ function leaving(v: Vehicle, route: Id | null) {
 type Candidate = { v: Vehicle; ready: number; kind: 'depot' | 'idle' | 'running' };
 
 function candidate(game: Game, v: Vehicle, startNode: number, now: number): Candidate | null {
-  if (leaving(v, v.route)) return null;
+  if (leaving(v, v.route) || v.handover) return null;
   const st = v.status;
   if (st === 'parked' && v.pos.kind === 'depot') {
     const d = game.state.depots[v.depot];
@@ -162,6 +162,7 @@ export function dispatch(game: Game) {
     const trips = state.trips[r.id];
     if (!trips?.length) continue;
     const fleet = r.vehicles.map((id) => state.vehicles[id]).filter((v): v is Vehicle => !!v && v.route === r.id);
+    let extras: { trip: Trip; startNode: number; tol: number }[] | null = null;
     for (const trip of trips) {
       if (trip.state !== TripState.Planned) continue;
       if (trip.dep > now + LOOKAHEAD) break;
@@ -169,6 +170,11 @@ export function dispatch(game: Game) {
       const startNode = patternStartNode(game, r.id, trip.pat);
       if (r.suspended || startNode < 0) {
         if (now > trip.dep + tol) trip.state = TripState.Missed;
+        continue;
+      }
+      // extra departures come after the timetable: they only use buses it does not need
+      if (trip.extra) {
+        (extras ??= []).push({ trip, startNode, tol });
         continue;
       }
       let onLine: Candidate | null = null, depot: Candidate | null = null;
@@ -187,6 +193,10 @@ export function dispatch(game: Game) {
       if (pick) assign(game, pick, trip, startNode);
       else if (now > trip.dep + tol) missTrip(game, trip, onLine || depot ? 'late' : 'none');
     }
+    for (const x of extras ?? []) {
+      if (runExtra(game, r.id, fleet, x.trip, x.startNode, now, x.tol) === 'none' && now > x.trip.dep + x.tol) missTrip(game, x.trip, 'none');
+    }
+    extras = null;
   }
 }
 
@@ -283,7 +293,49 @@ export function transferDepot(game: Game, v: Vehicle, depotId: Id): 'driving' | 
   return 'later';
 }
 
+/**
+ * A planned extra departure: the bus asked for, or else the line's free bus or a spare that can be
+ * there soonest. A bus is free when it has no trip and none to come, so the timetable (dispatched
+ * first, up to 75 minutes ahead) never loses a bus to an extra. 'wait': not time to set off yet.
+ */
+function runExtra(game: Game, route: Id, fleet: Vehicle[], trip: Trip, startNode: number, now: number, tol: number): 'started' | 'wait' | 'none' {
+  const option = (v: Vehicle) => (v.handover || v.sell ? null : extraOption(game, v, startNode, now));
+  let best: ExtraOption | null = null;
+  if (trip.want) {
+    const w = game.state.vehicles[trip.want];
+    const usable = !!w && (w.route === route || w.route === null) && !w.handover && !w.sell;
+    const o = usable ? option(w) : null;
+    if (o && o.ready <= trip.dep + tol) best = o;
+    // it may still come free: until 20 minutes before, wait for it rather than take another bus
+    else if (usable && now < trip.dep - 20 * 60) return 'wait';
+  }
+  if (!best) {
+    // the line's own buses when they are about as quick as a spare
+    const score = (o: ExtraOption) => o.ready + (o.v.route === null ? 120 : 0);
+    for (const v of fleet) {
+      const o = option(v);
+      if (o && (!best || score(o) < score(best))) best = o;
+    }
+    for (const v of game.vehicleList()) {
+      if (v.route !== null) continue;
+      const o = option(v);
+      if (o && (!best || score(o) < score(best))) best = o;
+    }
+  }
+  if (!best || best.ready > trip.dep + tol) return 'none';
+  if (best.ready + 180 < trip.dep) return 'wait';
+  startExtra(game, best, trip, startNode);
+  return 'started';
+}
+
 function missTrip(game: Game, trip: Trip, why: 'late' | 'none') {
+  if (trip.extra) {
+    // an extra departure is not in the timetable: dropping it is not a missed departure
+    trip.state = TripState.Missed;
+    const r = game.state.routes[trip.route];
+    if (r) notify(game, 'info', `Extra departure at ${hhmm(trip.dep)} on line ${r.number} dropped`, 'No bus was free to run it. It does not count as a missed departure.', { kind: 'route', id: r.id });
+    return;
+  }
   trip.state = TripState.Missed;
   recordMissed(game.state, trip.route);
   const r = game.state.routes[trip.route];
@@ -366,6 +418,8 @@ export function detachFromPattern(game: Game, v: Vehicle, to: 'route' | 'depot' 
 export function sendToDepot(game: Game, v: Vehicle) {
   const d = game.state.depots[v.depot];
   if (!d) return;
+  delete v.hold;
+  delete v.turn;
   release(game, v.next);
   v.next = null;
   if (v.trip !== null) {
@@ -412,7 +466,8 @@ export function startMaintenance(game: Game, v: Vehicle) {
 function speedFor(game: Game, p: Path, v: Vehicle) {
   const traffic = game.traffic;
   const now = game.state.clock.t;
-  return edgeSpeedFn(game.region.graph, p, (de) => traffic.speedFactor(traffic.congestion(de, now)), kinematics(v));
+  const road = traffic.conditions(now);
+  return edgeSpeedFn(game.region.graph, p, (de) => traffic.speedFactor(traffic.congestion(de, now)) * road, kinematics(v));
 }
 
 function move(game: Game, v: Vehicle, p: Path, stopAt: number, dt: number): boolean {
@@ -433,13 +488,13 @@ function move(game: Game, v: Vehicle, p: Path, stopAt: number, dt: number): bool
   return r.arrived;
 }
 
-/** Dwell time for a stop event, seconds. */
-export function dwellTime(v: Vehicle, board: number, alight: number): number {
+/** Dwell time for a stop event, seconds (`extra`: more seconds to board with luggage or bags). */
+export function dwellTime(v: Vehicle, board: number, alight: number, extra = 0): number {
   const m = MODEL[v.model];
   const boardDoors = m.doors >= 3 ? 2 : 1;
   const alightDoors = Math.max(1, m.doors - 1);
-  const crowd = v.load / m.capacity > 0.8 ? 1.3 : 1;
-  return Math.round(10 + Math.max((board * 2.4) / boardDoors, (alight * 1.5) / alightDoors) * crowd);
+  const crowd = occupied(v) / m.capacity > 0.8 ? 1.3 : 1;
+  return Math.round(10 + Math.max((board * 2.4 + extra) / boardDoors, (alight * 1.5) / alightDoors) * crowd);
 }
 
 function decideDistance(v: Vehicle) {
@@ -492,8 +547,8 @@ export function tickVehicle(game: Game, v: Vehicle, dt: number) {
         v.trip = null;
         return;
       }
-      // open the doors shortly before departure
-      if (now >= trip.dep - 45 && now >= v.until) beginTrip(game, v, trip);
+      // open the doors shortly before departure (a trip that starts part-way: at that stop's time)
+      if (now >= startTime(game, trip) - 45 && now >= v.until) beginTrip(game, v, trip);
       return;
     }
     case 'at_stop': {
@@ -512,7 +567,7 @@ export function tickVehicle(game: Game, v: Vehicle, dt: number) {
       if (!p || !trip) return abortService(game, v);
       const last = p.stops.length - 1;
       // skip stops nobody needs once close enough for the driver to see
-      while (v.stopIdx < last && p.stopS[v.stopIdx] - v.pos.s <= decideDistance(v) && !stopNeeded(game, v, p, v.stopIdx)) {
+      while (v.stopIdx < last && p.stopS[v.stopIdx] - v.pos.s <= decideDistance(v) && !stopNeeded(game, v, p, v.stopIdx) && !holdHere(v, p, v.stopIdx, trip) && !turnsHere(v, trip, v.stopIdx)) {
         const sch = tripSchedule(game, trip);
         if (sch) v.delay = now - (trip.dep + sch[v.stopIdx]);
         v.stopIdx++;
@@ -529,9 +584,12 @@ function arriveTerminus(game: Game, v: Vehicle) {
   const target = trip ? { route: trip.route, pat: trip.pat } : v.target;
   v.v = 0;
   game.vpaths.delete(v.id);
-  if (!target || !game.pattern(target.route, target.pat)) return sendToDepot(game, v);
-  v.pos = { kind: 'pattern', route: target.route, pat: target.pat, s: 0 };
-  v.stopIdx = 0;
+  const p = target ? game.pattern(target.route, target.pat) : undefined;
+  if (!target || !p) return sendToDepot(game, v);
+  // a bus that turned back joins the other direction part-way, at the stop it turned at
+  const at = trip && trip.route === target.route && trip.pat === target.pat ? trip.from ?? 0 : target.at ?? 0;
+  v.pos = { kind: 'pattern', route: target.route, pat: target.pat, s: at ? p.stopS[at] ?? 0 : 0 };
+  v.stopIdx = at;
   setStatus(v, 'layover', now);
   v.until = now;
 }
@@ -545,8 +603,9 @@ function beginTrip(game: Game, v: Vehicle, trip: Trip) {
   }
   trip.state = TripState.Running;
   trip.veh = v.id;
-  v.pos = { kind: 'pattern', route: trip.route, pat: trip.pat, s: 0 };
-  v.stopIdx = 0;
+  const from = Math.min(trip.from ?? 0, p.stops.length - 2);
+  v.pos = { kind: 'pattern', route: trip.route, pat: trip.pat, s: from ? p.stopS[from] : 0 };
+  v.stopIdx = from;
   v.delay = 0;
   arriveStop(game, v, p, trip);
 }
@@ -563,16 +622,21 @@ function arriveStop(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
     recRun(game.state, p, seg.i, v.stopIdx, now - seg.t, scheduled);
   }
   delete v.seg;
+  if (turnsHere(v, trip, v.stopIdx)) return turnBack(game, v, p, trip);
   const ev = serveStop(game, v, p, v.stopIdx);
   if (ev.board) recordBoardings(game.state, p.route, ev.board);
-  const dwell = v.stopIdx === p.stops.length - 1 ? 8 + ev.alight * 0.8 : dwellTime(v, ev.board, ev.alight);
+  const dwell = v.stopIdx === p.stops.length - 1 ? 8 + ev.alight * 0.8 : dwellTime(v, ev.board, ev.alight, ev.extra);
   setStatus(v, 'at_stop', now);
   v.until = now + dwell;
-  if (v.stopIdx === 0) v.until = Math.max(v.until, trip.dep);
+  if (v.stopIdx === (trip.from ?? 0)) v.until = Math.max(v.until, startTime(game, trip));
   game.emitStop(p.stops[v.stopIdx], v.id, ev);
+  if (ev.leftBehind && game.autoWants.has('leftBehind')) {
+    const stop = p.stops[v.stopIdx];
+    simEvent(game, 'leftBehind', { vehicle: v.id, fleetNo: v.fleetNo, line: p.route, lineNumber: game.state.routes[p.route]?.number ?? '', stop, stopName: game.state.stops[stop]?.name ?? '', leftBehind: ev.leftBehind, occupancy: Math.round((occupied(v) / MODEL[v.model].capacity) * 100), trip: trip.id });
+  }
   if (game.autoWants.has('arrive')) {
     const stop = p.stops[v.stopIdx];
-    simEvent(game, 'arrive', { vehicle: v.id, fleetNo: v.fleetNo, line: p.route, lineNumber: game.state.routes[p.route]?.number ?? '', stop, stopName: game.state.stops[stop]?.name ?? '', load: v.load, occupancy: Math.round((v.load / MODEL[v.model].capacity) * 100), delay: Math.round(Math.max(0, v.delay) / 6) / 10, boarded: ev.board, alighted: ev.alight, leftBehind: ev.leftBehind, trip: trip.id });
+    simEvent(game, 'arrive', { vehicle: v.id, fleetNo: v.fleetNo, line: p.route, lineNumber: game.state.routes[p.route]?.number ?? '', stop, stopName: game.state.stops[stop]?.name ?? '', load: v.load, occupancy: Math.round((occupied(v) / MODEL[v.model].capacity) * 100), delay: Math.round(Math.max(0, v.delay) / 6) / 10, boarded: ev.board, alighted: ev.alight, leftBehind: ev.leftBehind, trip: trip.id });
   }
 }
 
@@ -581,11 +645,25 @@ function departStop(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
   const last = p.stops.length - 1;
   const sch = tripSchedule(game, trip);
   if (v.stopIdx >= last) return finishTrip(game, v, p, trip);
+  if (turnsHere(v, trip, v.stopIdx)) return turnBack(game, v, p, trip);
+  if (holdHere(v, p, v.stopIdx, trip)) {
+    // held by the control room: wait, keep the doors open for anyone who turns up, then go
+    const h = v.hold!;
+    if (h.until === undefined) h.until = now + h.min * 60;
+    if (now < h.until) {
+      v.until = h.until;
+      const ev = serveStop(game, v, p, v.stopIdx);
+      if (ev.board) recordBoardings(game.state, p.route, ev.board);
+      return;
+    }
+    delete v.hold;
+  }
+  const first = trip.from ?? 0;
   if (sch) {
     // scheduled departure = arrival + average dwell (first stop: the departure time itself)
-    const schedDep = trip.dep + (v.stopIdx === 0 ? 0 : sch[v.stopIdx] + 22);
+    const schedDep = trip.dep + (v.stopIdx === first ? (first ? sch[first] : 0) : sch[v.stopIdx] + 22);
     const early = schedDep - now;
-    if (early > 90 && v.stopIdx > 0) {
+    if (early > 90 && v.stopIdx > first) {
       // running early: wait at the stop to keep to the timetable (and let more people board)
       v.until = now + Math.min(early - 20, 300);
       const ev = serveStop(game, v, p, v.stopIdx);
@@ -593,13 +671,13 @@ function departStop(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
       return;
     }
     v.delay = now - schedDep;
-    if (v.stopIdx === 0) trip.startDelay = v.delay;
+    if (v.stopIdx === first) trip.startDelay = v.delay;
   }
-  recordLoad(game.state, p.route, v.load / MODEL[v.model].capacity);
+  recordLoad(game.state, p.route, occupied(v) / MODEL[v.model].capacity);
   recDepart(game.state, p, v.stopIdx, v, MODEL[v.model].capacity, sch ? v.delay : 0);
   v.seg = { trip: trip.id, i: v.stopIdx, t: now };
   if (game.autoWants.has('depart')) {
-    const occupancy = Math.round((v.load / MODEL[v.model].capacity) * 100);
+    const occupancy = Math.round((occupied(v) / MODEL[v.model].capacity) * 100);
     const delay = sch ? Math.round(Math.max(0, v.delay) / 6) / 10 : 0;
     if (departWanted(game, delay, occupancy)) {
       const stop = p.stops[v.stopIdx];
@@ -617,6 +695,8 @@ function finishTrip(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
   const worst = Math.max(trip.startDelay ?? 0, v.delay);
   recordDeparture(game.state, trip.route, worst);
   v.trip = null;
+  if (v.hold?.trip === trip.id) delete v.hold;
+  if (v.turn?.trip === trip.id) delete v.turn;
   // anyone still on board (should be nobody) gets off here
   if (v.load > 0) offloadAll(game, v, p.stops[p.stops.length - 1]);
   if (leaving(v, trip.route)) {
@@ -642,6 +722,66 @@ function finishTrip(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
   }
 }
 
+/** When a trip leaves its first stop (or the stop a part-way trip starts at), absolute seconds. */
+export function startTime(game: Game, trip: Trip): number {
+  if (!trip.from) return trip.dep;
+  const sch = tripSchedule(game, trip);
+  return trip.dep + (sch ? sch[trip.from] ?? 0 : 0);
+}
+
+/** A control-room hold applies to this bus at stop `idx` of this trip (never at the last stop). */
+function holdHere(v: Vehicle, p: Pattern, idx: number, trip: Trip): boolean {
+  const h = v.hold;
+  if (!h || idx >= p.stops.length - 1) return false;
+  if (h.trip !== null && h.trip !== trip.id) return false;
+  return h.stop === null || h.stop === p.stops[idx];
+}
+
+const turnsHere = (v: Vehicle, trip: Trip, idx: number) => !!v.turn && v.turn.trip === trip.id && v.turn.at === idx;
+
+/**
+ * A short turn: the trip ends at this stop. Everyone gets off; those going further wait here for
+ * the next bus (they have paid already). The bus then runs back in the other direction from
+ * here, as an extra trip that starts part-way, to fill the gap behind it.
+ */
+function turnBack(game: Game, v: Vehicle, p: Pattern, trip: Trip) {
+  const now = game.state.clock.t;
+  const k = v.stopIdx;
+  const stop = p.stops[k];
+  const src = v.turn?.src ?? 'player';
+  delete v.turn;
+  delete v.hold;
+  v.v = 0;
+  const ev = serveStop(game, v, p, k, { end: true });
+  game.emitStop(stop, v.id, ev);
+  trip.state = TripState.Done;
+  trip.short = k;
+  trip.endDelay = v.delay;
+  recordDeparture(game.state, trip.route, Math.max(trip.startDelay ?? 0, v.delay));
+  v.trip = null;
+  // the trip it had after this one starts at the far end: another bus takes it
+  release(game, v.next);
+  v.next = null;
+  if (leaving(v, trip.route)) return sendToDepot(game, v);
+  const opp = game.pattern(trip.route, 1 - trip.pat);
+  const j = opp?.valid ? opp.stops.indexOf(stop) : -1;
+  setStatus(v, 'layover', now);
+  v.until = now + 30;
+  if (!opp || j < 0 || j >= opp.stops.length - 1) return; // idle here: the dispatcher finds it work
+  const here = p.stopNodes[k], there = opp.stopNodes[j];
+  const reposition = here === there ? 0 : game.travelSeconds(here, there);
+  const leave = Math.ceil((now + reposition + 60) / 60) * 60;
+  const sch = game.schedule(trip.route, opp.index, leave);
+  const back: Trip = { id: ++game.state.counters.trip, route: trip.route, pat: opp.index, dep: leave - (sch ? sch[j] ?? 0 : 0), veh: v.id, state: TripState.Assigned, extra: src, from: j };
+  game.addTrip(back);
+  v.trip = back.id;
+  v.target = { route: trip.route, pat: opp.index, at: j };
+  if (here === there) {
+    v.pos = { kind: 'pattern', route: trip.route, pat: opp.index, s: opp.stopS[j] };
+    v.stopIdx = j;
+  } else startDeadhead(game, v, there, 'route');
+}
+
 /** The line changed or vanished under a running bus: drop the trip, keep passengers safe. */
 export function abortService(game: Game, v: Vehicle) {
   const p = v.pos.kind === 'pattern' ? game.pattern(v.pos.route, v.pos.pat) : null;
@@ -652,6 +792,8 @@ export function abortService(game: Game, v: Vehicle) {
     if (t && (t.state === TripState.Running || t.state === TripState.Assigned)) t.state = TripState.Missed;
   }
   v.trip = null;
+  delete v.hold;
+  delete v.turn;
   release(game, v.next);
   v.next = null;
   sendToDepot(game, v);
@@ -671,11 +813,32 @@ export function minuteVehicles(game: Game) {
       if (game.random() < p) breakDown(game, v);
     }
     if (state.settings.autoService && v.condition < state.settings.serviceBelow && !v.wantsService && v.status !== 'maintenance') v.wantsService = true;
-    if (v.status === 'layover' && v.trip === null) {
+      if (v.handover && v.trip === null && v.next === null && v.status !== 'maintenance' && v.status !== 'broken') handOver(game, v);
+    else if (v.status === 'layover' && v.trip === null) {
       if (leaving(v, v.pos.kind === 'pattern' ? v.pos.route : null) || now - v.since > IDLE_TIMEOUT) sendToDepot(game, v);
     }
     if (v.status === 'parked' && v.wantsService) startMaintenance(game, v);
   }
+}
+
+/** A bus that has run the trips it was given moves on: to its new line, or parked as a spare. */
+function handOver(game: Game, v: Vehicle) {
+  const h = v.handover!;
+  delete v.handover;
+  const route = h.route && game.state.routes[h.route] ? h.route : null;
+  if (v.route === route) return;
+  game.assignVehicle(v.id, route, h.src);
+}
+
+/** When a bus will have finished the trips it already has (absolute seconds), or null if it has none. */
+export function workEnds(game: Game, v: Vehicle): number | null {
+  const id = v.next ?? v.trip;
+  if (id === null) return null;
+  const trip = game.trip(id);
+  if (!trip) return null;
+  const sch = tripSchedule(game, trip);
+  if (!sch) return null;
+  return trip.dep + sch[sch.length - 1] + Math.max(0, v.delay);
 }
 
 function breakDown(game: Game, v: Vehicle) {

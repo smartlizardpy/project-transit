@@ -1,4 +1,4 @@
-import type { Band } from '../game/types.ts';
+import type { Band, PlanCondition, ServicePlan, Timetable } from '../game/types.ts';
 
 export const MIN = 180;
 export const MAX = 1620;
@@ -65,3 +65,40 @@ export function applyPreset(current: Band[], id: string): Band[] {
   if (last && last.to > p.bands[0].from) last.to = p.bands[0].from;
   return [...kept, ...p.bands.map((b) => ({ ...b }))];
 }
+
+// ── service plans
+
+export const MAX_PLANS = 8;
+
+export const PLAN_PRESETS: { id: string; label: string; hint: string; name: string; when: PlanCondition }[] = [
+  { id: 'holidays', label: 'School holidays', hint: 'Runs while schools are closed', name: 'School holidays', when: { kind: 'school_holidays' } },
+  { id: 'summer', label: 'Summer', hint: 'Runs all summer', name: 'Summer', when: { kind: 'season', season: 'summer' } },
+  { id: 'match', label: 'Match day', hint: 'Runs on event days near the line', name: 'Match day', when: { kind: 'event_day' } },
+  { id: 'manual', label: 'Manual', hint: 'You switch it on and off', name: 'Manual plan', when: { kind: 'manual', on: false } },
+];
+
+/** A new plan that starts as a copy of the normal timetable. */
+export function newPlan(tt: Timetable, presetId: string): ServicePlan | null {
+  const p = PLAN_PRESETS.find((x) => x.id === presetId);
+  if (!p) return null;
+  const used = new Set((tt.plans ?? []).map((x) => x.id));
+  let n = 1;
+  while (used.has(`plan${n}`)) n++;
+  const copy = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
+  return { id: `plan${n}`, name: p.name, enabled: true, when: copy(p.when), weekday: copy(tt.weekday), weekend: copy(tt.weekend) };
+}
+
+/** The condition choices offered in the editor. */
+export const CONDITIONS: { value: string; label: string; make: () => PlanCondition }[] = [
+  { value: 'school_holidays', label: 'School holidays', make: () => ({ kind: 'school_holidays' }) },
+  { value: 'uni_break', label: 'University breaks', make: () => ({ kind: 'uni_break' }) },
+  { value: 'public_holiday', label: 'Public holidays', make: () => ({ kind: 'public_holiday' }) },
+  { value: 'event_day', label: 'Event days', make: () => ({ kind: 'event_day' }) },
+  { value: 'season:autumn', label: 'Autumn', make: () => ({ kind: 'season', season: 'autumn' }) },
+  { value: 'season:winter', label: 'Winter', make: () => ({ kind: 'season', season: 'winter' }) },
+  { value: 'season:spring', label: 'Spring', make: () => ({ kind: 'season', season: 'spring' }) },
+  { value: 'season:summer', label: 'Summer', make: () => ({ kind: 'season', season: 'summer' }) },
+  { value: 'manual', label: 'Switched by me', make: () => ({ kind: 'manual', on: false }) },
+];
+
+export const conditionValue = (c: PlanCondition) => (c.kind === 'season' ? `season:${c.season}` : c.kind);

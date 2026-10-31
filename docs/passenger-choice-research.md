@@ -2,6 +2,8 @@
 
 Status: **research and proposal only. Nothing here is implemented yet.** Written 2026-10-30 in answer to "we cannot assume everybody just wants to go on the bus".
 
+The implementation plan that builds on this research is [`city-activity-engine-plan.md`](city-activity-engine-plan.md).
+
 ## What the game does today
 
 `src/game/passengers.ts`, `DemandModel.refresh`:

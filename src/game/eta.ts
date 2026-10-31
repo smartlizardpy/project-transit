@@ -42,13 +42,14 @@ export function driveSeconds(game: Game, p: Pattern, v: Vehicle | null, s0: numb
   if (s1 <= s0) return 0;
   const speedK = v ? MODEL[v.model].speed : 1;
   const now = game.t;
+  const road = game.traffic.conditions(now);
   let t = 0;
   let i = segmentAt(path, s0);
   let s = s0;
   while (s < s1 && i < path.dedges.length) {
     const end = Math.min(s1, path.cum[i + 1]);
     const de = path.dedges[i];
-    const sf = game.traffic.speedFactor(game.traffic.congestion(de, now));
+    const sf = game.traffic.speedFactor(game.traffic.congestion(de, now)) * road;
     const vmax = Math.max(2, Math.min(freeSpeed(g, de >> 1) * speedK * sf, path.vmax[i + 1] < 99 ? path.vmax[i + 1] * 1.6 : 99));
     t += (end - s) / vmax;
     s = end;
@@ -117,6 +118,8 @@ export function arrivalsAt(game: Game, stop: Id, limit = 8, horizon = 3 * 3600):
         for (const j of idxs) {
           // at a loop terminus show departures, not the arrival that ends the previous lap
           if (isLoop && j === p.stops.length - 1) continue;
+          // a trip that starts part-way (a bus that turned back) does not call before its first stop
+          if (j < (trip.from ?? 0)) continue;
           const sched = trip.dep + (j === 0 ? 0 : sch[j]);
           let eta = sched;
           // future trips get a bus from the dispatcher shortly before departure
@@ -180,7 +183,7 @@ export function vehicleStops(game: Game, v: Vehicle): StopEta[] {
   const now = game.t;
   const out: StopEta[] = [];
   const dwell = v.status === 'at_stop' ? Math.max(0, v.until - now) : 0;
-  const start = trip.state === TripState.Running ? v.stopIdx : 0;
+  const start = trip.state === TripState.Running ? v.stopIdx : trip.from ?? 0;
   for (let j = start; j < p.stops.length; j++) {
     const sched = trip.dep + (j === 0 ? 0 : sch ? sch[j] : 0);
     let eta: number;

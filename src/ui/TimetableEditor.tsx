@@ -8,12 +8,19 @@ import { departures, normaliseBands, requirement, sustainableHeadway } from '../
 import { ECON } from '../game/content.ts';
 import type { Band, Timetable } from '../game/types.ts';
 import { MAX, MIN, STEP, PRESETS, addBandAt, applyPreset, raiseHeadways, setBandTimes, splitBand } from './timetableLogic.ts';
+import { ServicePlans } from './ServicePlans.tsx';
 import '../styles/timetable.css';
 
 const SPAN = MAX - MIN;
 const pct = (m: number) => ((m - MIN) / SPAN) * 100;
 const CHIPS = [5, 7, 10, 12, 15, 20, 30];
 const clone = (t: Timetable): Timetable => JSON.parse(JSON.stringify(t));
+const cleaned = (t: Timetable) => ({
+  ...t,
+  weekday: { bands: normaliseBands(t.weekday.bands) },
+  weekend: { bands: normaliseBands(t.weekend.bands) },
+  plans: t.plans?.map((p) => ({ ...p, weekday: { bands: normaliseBands(p.weekday.bands) }, weekend: { bands: normaliseBands(p.weekend.bands) } })),
+});
 
 function Stepper({ label, value, text, onDec, onInc, decDisabled, incDisabled }: { label: string; value?: number; text: string; onDec: () => void; onInc: () => void; decDisabled?: boolean; incDisabled?: boolean }) {
   void value;
@@ -33,6 +40,7 @@ export function TimetableEditor({ routeId, onClose }: { routeId: string; onClose
   const [draft, setDraft] = useState<Timetable | null>(() => (route ? clone(route.timetable) : null));
   if (route && !initial.current) initial.current = clone(route.timetable);
   const [day, setDay] = useState<'weekday' | 'weekend'>('weekday');
+  const [editing, setEditing] = useState<string>('normal');
   const [sel, setSel] = useState<number>(-1);
   const [error, setError] = useState('');
   const trackRef = useRef<HTMLDivElement>(null);
@@ -44,20 +52,25 @@ export function TimetableEditor({ routeId, onClose }: { routeId: string; onClose
   }, [onClose]);
 
   const weekend = day === 'weekend';
-  const bands = draft?.[day].bands ?? [];
+  const editPlan = draft?.plans?.find((p) => p.id === editing) ?? null;
+  const bands = (editPlan ?? draft)?.[day].bands ?? [];
+  // write bands to the plan being edited (or to the normal timetable)
+  const withBands = (d: Timetable, b: Band[], which = day): Timetable =>
+    editPlan ? { ...d, plans: d.plans?.map((p) => (p.id === editPlan.id ? { ...p, [which]: { bands: b } } : p)) } : { ...d, [which]: { bands: b } };
   const profiles = game && route ? game.profiles.get(routeId) ?? [] : [];
   const assigned = route?.vehicles.length ?? 0;
   const req = useMemo(
-    () => (route && draft && profiles.length ? requirement({ ...route, timetable: draft }, profiles, weekend) : null),
+    () => (route && draft && profiles.length ? requirement({ ...route, timetable: draft }, profiles, weekend, { bands }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [draft, profiles.length, weekend, route?.id],
+    [draft, profiles.length, weekend, route?.id, editing],
   );
 
   if (!route || !draft || !game) return null;
 
-  const setBands = (b: Band[]) => setDraft({ ...draft, [day]: { bands: b } });
+  const setBands = (b: Band[]) => setDraft(withBands(draft, b));
+  const other = day === 'weekday' ? 'weekend' : 'weekday';
   const selected = bands[sel];
-  const dirty = JSON.stringify({ ...draft, weekday: { bands: normaliseBands(draft.weekday.bands) }, weekend: { bands: normaliseBands(draft.weekend.bands) } }) !== JSON.stringify(initial.current);
+  const dirty = JSON.stringify(cleaned(draft)) !== JSON.stringify(cleaned(initial.current!));
   const patch = (p: Partial<Band>) => setBands(bands.map((b, i) => (i === sel ? { ...b, ...p } : b)));
 
   const onTrackClick = (e: React.MouseEvent) => {
@@ -80,7 +93,7 @@ export function TimetableEditor({ routeId, onClose }: { routeId: string; onClose
       const raw = MIN + ((ev.clientX - w.left) / w.width) * SPAN;
       const m = Math.round(raw / STEP) * STEP;
       const b = start[i];
-      setDraft((d) => (d ? { ...d, [day]: { bands: edge === 'from' ? setBandTimes(start, i, m, b.to) : setBandTimes(start, i, b.from, m) } } : d));
+      setDraft((d) => (d ? withBands(d, edge === 'from' ? setBandTimes(start, i, m, b.to) : setBandTimes(start, i, b.from, m)) : d));
     };
     const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
     window.addEventListener('pointermove', move);
@@ -93,8 +106,12 @@ export function TimetableEditor({ routeId, onClose }: { routeId: string; onClose
   };
 
   const save = () => {
-    const res = game.setTimetable(routeId, draft);
+    const res = game.setTimetable(routeId, { ...draft, plans: undefined });
     if (!res.ok) { setError(res.error); return; }
+    if (JSON.stringify(draft.plans ?? []) !== JSON.stringify(initial.current?.plans ?? [])) {
+      const pr = game.setServicePlans(routeId, draft.plans ?? []);
+      if (!pr.ok) { setError(pr.error); return; }
+    }
     useUI.getState().notify(`Timetable for line ${route.number} updated`, 'good');
     onClose();
   };
@@ -120,10 +137,12 @@ export function TimetableEditor({ routeId, onClose }: { routeId: string; onClose
         </div>
 
         <div className="p-body tt-body">
+          <ServicePlans game={game} routeId={routeId} draft={draft} setDraft={setDraft} editing={editPlan ? editing : 'normal'} setEditing={(v) => { setEditing(v); setSel(-1); }} />
+
           <div className="tt-toolbar">
             <Segmented options={[{ value: 'weekday', label: 'Weekday' }, { value: 'weekend', label: 'Weekend' }]} value={day} onChange={(v) => { setDay(v); setSel(-1); }} />
-            <button className="btn sm" onClick={() => setDraft({ ...draft, weekend: clone({ ...draft, weekend: draft.weekday }).weekend })} title="Replace the weekend plan with the weekday plan">
-              <Copy size={14} /> Copy weekday to weekend
+            <button className="btn sm" onClick={() => setDraft(withBands(draft, JSON.parse(JSON.stringify(bands)) as Band[], other))} title={`Replace the ${other} plan with the ${day} plan`}>
+              <Copy size={14} /> Copy {day} to {other}
             </button>
           </div>
 

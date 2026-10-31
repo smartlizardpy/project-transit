@@ -12,10 +12,25 @@ import type { Id } from '../types.ts';
 import { DAY, ECON, MODEL } from '../content.ts';
 import { weekdayOf } from '../time.ts';
 import { compile, type EValue } from '../expr.ts';
-import { computeItineraries } from '../passengers.ts';
-import { BANDS, type DayRecord, type DaySummary } from './types.ts';
+import type { DayEstimate } from '../activity/model.ts';
+import type { LngLat } from '../world/graph.ts';
+import type { TransitMode } from '../world/places.ts';
+import { KINDS, KIND_COUNT } from '../activity/params.ts';
+import { MIN_FERRY_M, TRANSIT_SERVICE } from '../activity/transit.ts';
+import { BANDS, TYPE_COUNT, type DayLabel, type DayRecord, type DaySummary } from './types.ts';
+import { DAY_KINDS, EVENT_DAYS, WEATHER_GROUPS, dayKind, eventDay, makeDayLabel, weatherGroup, type DayKind, type EventDay, type WeatherGroup } from './labels.ts';
+import { TRAVELLERS } from '../activity/params.ts';
 
-export type GroupBy = 'network' | 'line' | 'stop' | 'vehicle' | 'zone' | 'day' | 'hour' | 'weekday';
+export type GroupBy = 'network' | 'line' | 'stop' | 'vehicle' | 'zone' | 'day' | 'hour' | 'weekday' | 'weather' | 'daykind' | 'eventday' | 'type';
+/** Groupings with one row per kind of day: they mean what a weekday grouping means. */
+export const DAY_LEVEL = new Set<GroupBy>(['day', 'weekday', 'weather', 'daykind', 'eventday']);
+
+/** Filters on the recorded days' labels (days recorded before labels were kept never match one). */
+export interface LabelFilter {
+  weather?: 'all' | WeatherGroup;
+  dayKind?: 'all' | DayKind;
+  eventDay?: 'all' | EventDay;
+}
 export type DaySel = { last: number } | { from: number; to: number };
 
 export interface AnalyticsQuery {
@@ -33,6 +48,9 @@ export interface AnalyticsQuery {
   stops?: Id[];
   zones?: string[];
   vehicles?: Id[];
+  weather?: 'all' | WeatherGroup;
+  dayKind?: 'all' | DayKind;
+  eventDay?: 'all' | EventDay;
 }
 
 export type Unit = 'count' | 'money' | 'percent' | 'minutes' | 'hours' | 'km' | 'score' | 'ratio';
@@ -89,11 +107,11 @@ const STOPS: GroupBy[] = ['network', 'stop', 'zone', 'day', 'hour', 'weekday'];
 const VEH: GroupBy[] = ['network', 'vehicle', 'day', 'weekday'];
 
 export const MEASURES: MeasureDef[] = [
-  { id: 'boardings', label: 'Boardings', unit: 'count', source: 'measured', hourly: true, groups: ALL, better: 'higher', describe: 'Passengers who got on a bus (a transfer counts again).', calc: (a) => a.boardings },
+  { id: 'boardings', label: 'Boardings', unit: 'count', source: 'measured', hourly: true, groups: [...ALL, 'type'], better: 'higher', describe: 'Passengers who got on a bus (a transfer counts again).', calc: (a) => a.boardings },
   { id: 'alightings', label: 'Alightings', unit: 'count', source: 'measured', hourly: true, groups: STOPS, better: 'none', describe: 'Passengers who got off at the stop.', calc: (a) => a.alightings },
-  { id: 'journeys', label: 'Journeys', unit: 'count', source: 'measured', hourly: true, groups: ['network', 'line', 'stop', 'zone', 'day', 'hour', 'weekday'], better: 'higher', describe: 'Completed journeys (for a line: journeys that started on it; for a stop: journeys that started there).', calc: (a) => a.journeys },
+  { id: 'journeys', label: 'Journeys', unit: 'count', source: 'measured', hourly: true, groups: ['network', 'line', 'stop', 'zone', 'day', 'hour', 'weekday', 'type'], better: 'higher', describe: 'Completed journeys (for a line: journeys that started on it; for a stop: journeys that started there).', calc: (a) => a.journeys },
   { id: 'abandoned', label: 'Gave up', unit: 'count', source: 'measured', hourly: true, groups: ['network', 'line', 'stop', 'zone', 'day', 'hour', 'weekday'], better: 'lower', describe: 'Passengers who gave up their journey (waited too long or no way to continue).', calc: (a) => a.abandoned },
-  { id: 'leftBehind', label: 'Left behind', unit: 'count', source: 'measured', hourly: false, groups: ['network', 'line', 'stop', 'zone', 'day', 'weekday'], better: 'lower', describe: 'Passengers who could not board because the bus was full.', calc: (a) => a.leftBehind },
+  { id: 'leftBehind', label: 'Left behind', unit: 'count', source: 'measured', hourly: false, groups: ['network', 'line', 'stop', 'zone', 'day', 'weekday', 'type'], better: 'lower', describe: 'Passengers who could not board because the bus was full.', calc: (a) => a.leftBehind },
   { id: 'avgWait', label: 'Average wait', unit: 'minutes', source: 'measured', hourly: false, groups: ['network', 'line', 'stop', 'zone', 'day', 'weekday'], better: 'lower', describe: 'Average minutes waited at the stop before boarding.', calc: (a) => ratio(a.waitSum, a.waitN) },
   { id: 'maxWait', label: 'Longest wait', unit: 'minutes', source: 'measured', hourly: false, groups: ['network', 'stop', 'zone', 'day', 'weekday'], better: 'lower', describe: 'Longest wait before boarding.', calc: (a) => (a.waitN > 0 ? a.waitMax : null) },
   { id: 'transfers', label: 'Transfers', unit: 'count', source: 'measured', hourly: false, groups: ['network', 'line', 'stop', 'zone', 'day', 'weekday'], better: 'none', describe: 'Boardings that were a change from another bus.', calc: (a) => a.transfers },
@@ -124,7 +142,18 @@ export const MEASURES: MeasureDef[] = [
 export const MEASURE: Record<string, MeasureDef> = Object.fromEntries(MEASURES.map((m) => [m.id, m]));
 
 export function measuresFor(g: GroupBy): MeasureDef[] {
-  return MEASURES.filter((m) => m.groups.includes(g));
+  return MEASURES.filter((m) => m.groups.includes(g) || (DAY_LEVEL.has(g) && m.groups.includes('weekday')));
+}
+
+/** Whether a recorded day's label passes the filters; null when a filter is set and the day has no label. */
+export function labelMatches(l: DayLabel | undefined, f: LabelFilter): boolean | null {
+  const any = (f.weather && f.weather !== 'all') || (f.dayKind && f.dayKind !== 'all') || (f.eventDay && f.eventDay !== 'all');
+  if (!any) return true;
+  if (!l) return null;
+  if (f.weather && f.weather !== 'all' && weatherGroup(l) !== f.weather) return false;
+  if (f.dayKind && f.dayKind !== 'all' && dayKind(l) !== f.dayKind) return false;
+  if (f.eventDay && f.eventDay !== 'all' && eventDay(l) !== f.eventDay) return false;
+  return true;
 }
 
 // ───────────────────────────────────────────── day selection and coverage
@@ -142,6 +171,10 @@ export interface Coverage {
   today: boolean;
   /** first day recorded in full */
   since: number;
+  /** selected days left out because they were recorded before day labels were kept (weather, kind of day, events) */
+  unlabelled?: number[];
+  /** recorded days left out because their weather, kind of day or events do not match the filter */
+  other?: number[];
 }
 
 function selectDays(game: Game, q: { days?: DaySel; dayType?: string; weekday?: number | null }): number[] {
@@ -167,7 +200,7 @@ function selectDays(game: Game, q: { days?: DaySel; dayType?: string; weekday?: 
   return out;
 }
 
-function gather(game: Game, q: { days?: DaySel; dayType?: string; weekday?: number | null; includeToday?: boolean }) {
+function gather(game: Game, q: { days?: DaySel; dayType?: string; weekday?: number | null; includeToday?: boolean } & LabelFilter) {
   const a = game.state.analytics;
   const days = selectDays(game, q);
   const byDay = new Map<number, DayRecord>();
@@ -176,15 +209,23 @@ function gather(game: Game, q: { days?: DaySel; dayType?: string; weekday?: numb
   for (const s of a.summary) sumByDay.set(s.day, s);
   const detail: DayRecord[] = [], summary: DaySummary[] = [];
   const cov: Coverage = { requested: days, detailed: [], summary: [], missing: [], today: false, since: a.since };
+  const keep = (d: number, l: DayLabel | undefined) => {
+    const m = labelMatches(l, q);
+    if (m === null) (cov.unlabelled ??= []).push(d);
+    else if (!m) (cov.other ??= []).push(d);
+    return m === true;
+  };
   for (const d of days) {
     const r = byDay.get(d);
     if (r) {
+      if (!keep(d, r.lbl)) continue;
       detail.push(r);
       cov.detailed.push(d);
       continue;
     }
     const s = sumByDay.get(d);
     if (s) {
+      if (!keep(d, s.l)) continue;
       summary.push(s);
       cov.summary.push(d);
     } else cov.missing.push(d);
@@ -193,7 +234,7 @@ function gather(game: Game, q: { days?: DaySel; dayType?: string; weekday?: numb
   if (q.includeToday && a.today.day === today) {
     const wd = weekdayOf(game.state.clock.startWeekday, today * DAY);
     const okDay = (q.weekday === undefined || q.weekday === null || wd === q.weekday) && !(q.dayType === 'weekday' && wd >= 5) && !(q.dayType === 'weekend' && wd < 5);
-    if (okDay) {
+    if (okDay && labelMatches(makeDayLabel(game, today), q) === true) {
       detail.push(a.today);
       cov.today = true;
     }
@@ -256,6 +297,22 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
   const lineOk = (r: Id) => !lineSet || lineSet.has(r);
   const sw = st.clock.startWeekday;
   const g = q.groupBy;
+  const dayLevel = DAY_LEVEL.has(g);
+  const todayNo = Math.floor(game.t / DAY);
+  const labels = new Map<number, DayLabel | undefined>();
+  for (const r of detail) labels.set(r.day, r.day === todayNo && r === st.analytics.today ? makeDayLabel(game, todayNo) : r.lbl);
+  for (const s of summary) labels.set(s.day, s.l);
+  const dayKeyOf = (day: number): string => {
+    const l = labels.get(day);
+    switch (g) {
+      case 'day': return String(day);
+      case 'weekday': return String(weekdayOf(sw, day * DAY));
+      case 'weather': return weatherGroup(l) ?? 'unknown';
+      case 'daykind': return dayKind(l) ?? 'unknown';
+      case 'eventday': return eventDay(l) ?? 'unknown';
+      default: return 'all';
+    }
+  };
   const groups = new Map<string, Acc>();
   const acc = (key: string) => {
     let a = groups.get(key);
@@ -264,12 +321,43 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
   };
   const hourAccs = g === 'hour' ? Array.from({ length: 24 }, (_, h) => (hs[h] ? acc(String(h)) : emptyAcc())) : null;
   const notes: string[] = [];
-  const useStops = g === 'stop' || g === 'zone' || ((g === 'network' || g === 'day' || g === 'weekday' || g === 'hour') && (!!stopSet || !!zoneSet));
-  const useLines = !useStops || g === 'network' || g === 'day' || g === 'weekday' || g === 'hour';
+  const useStops = g === 'stop' || g === 'zone' || ((g === 'network' || dayLevel || g === 'hour') && (!!stopSet || !!zoneSet));
+  const useLines = !useStops || g === 'network' || dayLevel || g === 'hour';
   const finance = st.finance;
+  // by traveller type: boardings (by time band), journeys and people left behind (whole days)
+  let typeNoData = 0;
+  const typeRows = (rec: DayRecord) => {
+    let seen = false;
+    const byBand = (k: number[] | undefined, mul = 1) => {
+      if (!k) return;
+      seen = true;
+      for (let i = 0; i < k.length; i++) if (!hourly || bandInHours(i % BANDS.length, hs)) acc(String(Math.floor(i / BANDS.length))).boardings += k[i] * mul;
+    };
+    if (stopSet || zoneSet) for (const [sid, sd] of Object.entries(rec.stops)) {
+      if (!stopOk(sid) || !sd.k) continue;
+      seen = true;
+      for (let t = 0; t < sd.k.length; t++) acc(String(t)).boardings += sd.k[t];
+    }
+    else for (const [rid, r] of Object.entries(rec.routes)) if (lineOk(rid)) byBand(r.k);
+    if (!hourly) {
+      if (!lineSet && !stopSet && !zoneSet) {
+        rec.net.jk?.forEach((n, t) => (acc(String(t)).journeys += n));
+        rec.net.lk?.forEach((n, t) => (acc(String(t)).leftBehind += n));
+      } else if (rec.odk) {
+        for (const [k, arr] of Object.entries(rec.odk)) {
+          const [o, , sig] = k.split('>');
+          if (!lineOk(firstLine(sig)) || !stopOk(o)) continue;
+          for (let i = 0; i < arr.length; i += 2) acc(String(arr[i])).journeys += arr[i + 1];
+        }
+      }
+    }
+    if (seen) for (let t = 0; t < TYPE_COUNT; t++) acc(String(t)).seen++;
+    else typeNoData++;
+  };
 
   for (const rec of detail) {
-    const dayKey = g === 'day' ? String(rec.day) : g === 'weekday' ? String(weekdayOf(sw, rec.day * DAY)) : 'all';
+    const dayKey = dayKeyOf(rec.day);
+    if (g === 'type') { typeRows(rec); continue; }
     // lines
     if (useLines && !useStops) {
       for (const [rid, r] of Object.entries(rec.routes)) {
@@ -285,7 +373,7 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
           continue;
         }
         const key = g === 'line' ? rid : dayKey;
-        if (g !== 'line' && g !== 'network' && g !== 'day' && g !== 'weekday') continue;
+        if (g !== 'line' && g !== 'network' && !dayLevel) continue;
         const a = acc(key);
         a.boardings += hsum(r.b, hs); a.trips += hsum(r.d, hs); a.onTime += hsum(r.o, hs); a.missed += hsum(r.m, hs);
         a.deps += hsum(r.dp, hs); a.loadSum += hsum(r.lf, hs); a.delaySum += hsum(r.dl, hs);
@@ -318,7 +406,7 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
       }
     }
     // vehicles
-    if (g === 'vehicle' || ((g === 'network' || g === 'day' || g === 'weekday') && !useStops && !lineSet)) {
+    if (g === 'vehicle' || ((g === 'network' || dayLevel) && !useStops && !lineSet)) {
       for (const [vid, v] of Object.entries(rec.veh)) {
         if (vehSet && !vehSet.has(vid)) continue;
         if (g !== 'vehicle' && vehSet) continue;
@@ -336,7 +424,7 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
       }
     }
     // journeys and satisfaction
-    if (g === 'network' || g === 'day' || g === 'weekday' || g === 'hour') {
+    if (g === 'network' || dayLevel || g === 'hour') {
       if (!lineSet && !stopSet && !zoneSet) {
         if (g === 'hour') {
           for (let h = 0; h < 24; h++) if (hs[h]) { hourAccs![h].journeys += rec.net.j[h]; if (!useStops) hourAccs![h].abandoned += rec.net.ab[h]; }
@@ -368,9 +456,9 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
   }
 
   // older days: compact totals (counts only)
-  if (summary.length && !hourly && (g === 'network' || g === 'line' || g === 'stop' || g === 'zone' || g === 'day' || g === 'weekday')) {
+  if (summary.length && !hourly && (g === 'network' || g === 'line' || g === 'stop' || g === 'zone' || dayLevel)) {
     for (const s of summary) {
-      const dayKey = g === 'day' ? String(s.day) : g === 'weekday' ? String(weekdayOf(sw, s.day * DAY)) : 'all';
+      const dayKey = dayKeyOf(s.day);
       if (!useStops) {
         for (const [rid, r] of Object.entries(s.r)) {
           if (!lineOk(rid)) continue;
@@ -393,10 +481,10 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
   }
 
   // money from the ledger (whole days only)
-  if (!hourly && (g === 'line' || g === 'network' || g === 'day' || g === 'weekday') && !useStops) {
+  if (!hourly && (g === 'line' || g === 'network' || dayLevel) && !useStops) {
     const ledgerDays = [...cov.detailed, ...cov.summary, ...(cov.today ? [Math.floor(game.t / DAY)] : [])];
     for (const d of ledgerDays) {
-      const dayKey = g === 'day' ? String(d) : g === 'weekday' ? String(weekdayOf(sw, d * DAY)) : 'all';
+      const dayKey = dayKeyOf(d);
       if (g === 'line' || lineSet) {
         const rd = finance.routeDaily[d];
         if (!rd) continue;
@@ -416,13 +504,20 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
     }
     // fares on summary days come from the ledger too
     for (const d of cov.summary) {
-      const dayKey = g === 'day' ? String(d) : g === 'weekday' ? String(weekdayOf(sw, d * DAY)) : 'all';
+      const dayKey = dayKeyOf(d);
       if (g === 'line' || lineSet) {
         for (const [rid, x] of Object.entries(finance.routeDaily[d] ?? {})) if (lineOk(rid)) acc(g === 'line' ? rid : dayKey).fares += x.rev;
       } else acc(dayKey).fares += finance.daily[d]?.fares ?? 0;
     }
   }
-  if (hourly) notes.push('Costs, waits, satisfaction, crowding and bus activity are recorded per day, so they are left out when you pick hours.');
+  if (hourly && g !== 'type') notes.push('Costs, waits, satisfaction, crowding and bus activity are recorded per day, so they are left out when you pick hours.');
+  if (g === 'type') {
+    if (hourly) notes.push('By traveller type, boardings are recorded by time band (the bands that overlap the hours you picked count in full); journeys and people left behind are whole-day figures and are left out.');
+    if (summary.length) notes.push(`${summary.length} older day${summary.length > 1 ? 's have' : ' has'} no traveller types (only the last ${cov.detailed.length} days keep them).`);
+    if (typeNoData) notes.push(`${typeNoData} day${typeNoData > 1 ? 's were' : ' was'} recorded before traveller types were kept.`);
+    if (stopSet || zoneSet) notes.push('At stops, boardings by type are whole-day figures.');
+  }
+  if (cov.unlabelled?.length) notes.push(`${cov.unlabelled.length} selected day${cov.unlabelled.length > 1 ? 's were' : ' was'} recorded before the weather, kind of day and events were kept with each day, so ${cov.unlabelled.length > 1 ? 'they are' : 'it is'} left out.`);
   if (lineSet && (g === 'stop' || g === 'zone')) notes.push('With a line selected, stop boardings count that line only; alightings and waits include every line.');
 
   // rows
@@ -456,10 +551,18 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
       case 'hour': label = `${String(key).padStart(2, '0')}:00`; break;
       case 'weekday': label = weekdayName(+key); break;
       case 'network': label = 'Network'; id = null; break;
+      case 'weather': label = WEATHER_GROUPS.find((x) => x.id === key)?.label ?? 'Weather not recorded'; break;
+      case 'daykind': label = DAY_KINDS.find((x) => x.id === key)?.label ?? 'Not recorded'; break;
+      case 'eventday': label = EVENT_DAYS.find((x) => x.id === key)?.label ?? 'Not recorded'; break;
+      case 'type': label = TRAVELLERS[+key]?.label ?? key; break;
     }
     rows.push({ key, id, label, colour, values: values(a) });
   }
+  const ORDER: Partial<Record<GroupBy, string[]>> = { weather: WEATHER_GROUPS.map((x) => x.id), daykind: DAY_KINDS.map((x) => x.id), eventday: EVENT_DAYS.map((x) => x.id) };
+  const order = ORDER[g];
   if (g === 'day' || g === 'hour' || g === 'weekday') rows.sort((a, b) => +a.key - +b.key);
+  else if (order) rows.sort((a, b) => (order.indexOf(a.key) + 1 || 99) - (order.indexOf(b.key) + 1 || 99));
+  else if (g === 'type') rows.sort((a, b) => (b.values.boardings ?? 0) - (a.values.boardings ?? 0) || +a.key - +b.key);
   else rows.sort((a, b) => (b.values.boardings ?? 0) - (a.values.boardings ?? 0) || a.label.localeCompare(b.label));
   const tot = emptyAcc();
   for (const a of groups.values()) merge(tot, a);
@@ -517,11 +620,13 @@ export const METRIC_VARIABLES = MEASURES.map((m) => m.id);
 
 // ───────────────────────────────────────────── origin–destination
 
-export interface OdQuery {
+export interface OdQuery extends LabelFilter {
   days?: DaySel;
   includeToday?: boolean;
   dayType?: 'all' | 'weekday' | 'weekend';
   weekday?: number | null;
+  /** only journeys of one traveller type (index into TRAVELLERS); counts completed journeys only */
+  type?: number | null;
   /** time bands (see BANDS) of the journey start; empty = all */
   bands?: number[];
   /** stop-to-stop, or area-to-area */
@@ -582,6 +687,7 @@ export function odMatrix(game: Game, q: OdQuery): OdResult {
   const bands = q.bands?.length ? new Set(q.bands) : null;
   const lineSet = q.lines?.length ? new Set(q.lines) : null;
   const stopSet = q.stops?.length ? new Set(q.stops) : null;
+  const typeOn = q.type !== undefined && q.type !== null;
   const zoneOf = (s: Id) => st.stops[s]?.zone ?? 'unknown';
   const keyOf = (s: Id) => (q.level === 'zone' ? zoneOf(s) : s);
   const flows = new Map<string, OdFlow & { jt: number; wt: number; its: Map<string, number> }>();
@@ -602,6 +708,14 @@ export function odMatrix(game: Game, q: OdQuery): OdResult {
       for (let i = 0; i < arr.length; i += 5) {
         if (bands && !bands.has(arr[i])) continue;
         jn += arr[i + 1]; ab += arr[i + 2]; jt += arr[i + 3]; wt += arr[i + 4];
+      }
+      if (typeOn) {
+        // the type's share of the pair's completed journeys (types are kept per pair, not per band)
+        const tk = rec.odk?.[k];
+        let all = 0, mine = 0;
+        if (tk) for (let i = 0; i < tk.length; i += 2) { all += tk[i + 1]; if (tk[i] === q.type) mine += tk[i + 1]; }
+        const share = all > 0 ? mine / all : 0;
+        jn *= share; jt *= share; wt *= share; ab = 0;
       }
       if (!jn && !ab) continue;
       const fk = `${ko}>${kd}`;
@@ -629,6 +743,8 @@ export function odMatrix(game: Game, q: OdQuery): OdResult {
   const notes: string[] = [];
   if (summary.length) notes.push(`Journey detail is kept for ${cov.detailed.length} days; ${summary.length} older selected day${summary.length > 1 ? 's are' : ' is'} not included.`);
   if (!detail.length) notes.push('No recorded journeys match this selection yet.');
+  if (typeOn) notes.push(`Only ${TRAVELLERS[q.type!]?.label.toLowerCase() ?? 'that type'}: completed journeys, rounded; who gave up is not kept by type.`);
+  if (cov.unlabelled?.length) notes.push(`${cov.unlabelled.length} selected day${cov.unlabelled.length > 1 ? 's were' : ' was'} recorded before the weather, kind of day and events were kept with each day, so ${cov.unlabelled.length > 1 ? 'they are' : 'it is'} left out.`);
   const top = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1]).map(([id, journeys]) => ({ id, label: label(id), journeys }));
   return {
     flows: q.limit ? out.slice(0, q.limit) : out,
@@ -642,62 +758,228 @@ export function odMatrix(game: Game, q: OdQuery): OdResult {
 
 // ───────────────────────────────────────────── estimated demand (the model, not observations)
 
+/** Areas (operating areas), or places with their own zone (stations, hospitals, campuses…) and the areas they link to. */
+export type DemandLevel = 'zone' | 'place';
+
 export interface DemandFlow {
   o: string;
   d: string;
   oLabel: string;
   dLabel: string;
-  /** estimated trips per day by all modes between the two (both directions summed per direction) */
+  /** where the map arc starts and ends: a place's entrance, or the middle of your stops in an area */
+  oAt: LngLat | null;
+  dAt: LngLat | null;
+  /** modelled trips per day by all modes, in this direction */
   trips: number;
-  /** a bus itinerary exists between them this hour */
+  /** the same by mode, in MODES order: walk, bike, car, taxi, your network, existing transit */
+  modes: number[];
+  /** your network links at least part of it at some hour today */
+  served: boolean;
+  /** trips with no link on your network: no stop within a walk of one end, or no line between the stops */
+  noStop: number;
+  noLink: number;
+}
+
+export interface DemandEstimate {
+  flows: DemandFlow[];
+  total: { trips: number; network: number; unserved: number };
+}
+
+const estimates = new WeakMap<Game, { key: string; est: DayEstimate | null }>();
+
+/** The model's day estimate, kept until the network, day, fare or reputation changes. */
+function dayEstimate(game: Game): DayEstimate | null {
+  const st = game.state;
+  const key = `${game.rev}|${Math.floor(game.t / DAY)}|${st.company.fare}|${Math.round(st.company.reputation)}|${st.territory.owned.length}`;
+  const hit = estimates.get(game);
+  if (hit && hit.key === key) return hit.est;
+  const owned = new Set(st.territory.owned);
+  const dm = game.demand;
+  const zs = dm.activity.ensureZones(game);
+  const est = dm.estimateDay(game, (z) => owned.has(zs.list[z].area));
+  estimates.set(game, { key, est });
+  return est;
+}
+
+/**
+ * Estimated daily travel demand by mode (walk, bike, car, taxi, your network) from the City
+ * Activity Engine, for trips that start or end in your territory. It is an estimate, not an
+ * observation. `view: 'unserved'` keeps only the trips your network cannot carry at any hour
+ * today: potential, with no passengers and no fares.
+ */
+export function estimatedDemand(game: Game, opts: { level: DemandLevel; view?: 'all' | 'unserved'; origin?: string | null; destination?: string | null; limit?: number }): DemandEstimate {
+  const empty: DemandEstimate = { flows: [], total: { trips: 0, network: 0, unserved: 0 } };
+  const est = dayEstimate(game);
+  if (!est) return empty;
+  const am = game.demand.activity;
+  const zs = am.zones!;
+  const st = game.state;
+  const isPlace = (z: number) => zs.list[z].kind === 'place' || zs.list[z].kind === 'beyond';
+  const keyOf = (z: number) => (opts.level === 'place' && isPlace(z)) || !zs.list[z].area ? zs.list[z].id : zs.list[z].area;
+  const areaAt = new Map<string, LngLat | null>();
+  const where = (z: number): LngLat | null => {
+    const zone = zs.list[z];
+    if (isPlace(z) && keyOf(z) === zone.id) return zone.lngLat;
+    let at = areaAt.get(zone.area);
+    if (at === undefined) {
+      let x = 0, y = 0, n = 0;
+      for (const s of Object.values(st.stops)) {
+        if (s.zone !== zone.area) continue;
+        x += s.lngLat[0];
+        y += s.lngLat[1];
+        n++;
+      }
+      at = n ? [x / n, y / n] : game.geo.zone(zone.area)?.centroid ?? null;
+      areaAt.set(zone.area, at);
+    }
+    return at;
+  };
+  const label = (z: number) => (keyOf(z) === zs.list[z].id ? zs.list[z].name : game.geo.zone(zs.list[z].area)?.name ?? zs.list[z].area);
+  const out = new Map<string, DemandFlow>();
+  const total = { trips: 0, network: 0, unserved: 0 };
+  for (const [pk, m] of est.trips) {
+    const i = Math.floor(pk / est.Z), j = pk % est.Z;
+    if (opts.level === 'place' && !isPlace(i) && !isPlace(j)) continue;
+    const ko = keyOf(i), kd = keyOf(j);
+    if (opts.origin && ko !== opts.origin) continue;
+    if (opts.destination && kd !== opts.destination) continue;
+    const served = est.served.has(pk);
+    if (opts.view === 'unserved' && served) continue;
+    let sum = 0;
+    for (let x = 0; x < m.length; x++) sum += Math.max(0, m[x]);
+    if (!(sum > 0)) continue;
+    total.trips += sum;
+    total.network += Math.max(0, m[4]);
+    if (!served) total.unserved += sum;
+    const fk = `${ko}>${kd}`;
+    let f = out.get(fk);
+    if (!f) out.set(fk, (f = { o: ko, d: kd, oLabel: label(i), dLabel: label(j), oAt: where(i), dAt: where(j), trips: 0, modes: [0, 0, 0, 0, 0, 0], served: false, noStop: 0, noLink: 0 }));
+    f.trips += sum;
+    for (let x = 0; x < m.length; x++) f.modes[x] += Math.max(0, m[x]);
+    if (served) f.served = true;
+    else if (am.access[i]?.length && am.access[j]?.length) f.noLink += sum;
+    else f.noStop += sum;
+  }
+  const flows = [...out.values()].sort((a, b) => b.trips - a.trips || (a.o + a.d).localeCompare(b.o + b.d));
+  return { flows: opts.limit ? flows.slice(0, opts.limit) : flows, total };
+}
+
+export interface PlaceTravel {
+  /** modelled trips a day to and from the place, from and to your areas */
+  trips: number;
+  /** by mode, in MODES order: walk, bike, car, taxi, your network, existing transit */
+  modes: number[];
+  /** your network links it at some hour today */
   served: boolean;
 }
 
-/**
- * Estimated daily travel demand (all modes) between served stops, from the land-use gravity
- * model the passenger simulation uses. It is an estimate, not an observation.
- */
-const linked = new WeakMap<Game, { rev: number; itin: Map<number, unknown> }>();
+const placeSums = new WeakMap<DayEstimate, Map<number, PlaceTravel>>();
 
 /**
- * Stop pairs the network connects (directly or with one change) at any time of day. The live
- * demand model only knows the lines running this hour, which is none at night.
+ * How people travel to and from a place, from the model's day estimate (the place card). Null when
+ * the place has no zone of its own: its trips are counted with the area around it.
  */
-function connectedPairs(game: Game): Map<number, unknown> {
-  const hit = linked.get(game);
-  if (hit && hit.rev === game.rev) return hit.itin;
-  const dm = game.demand;
-  const services = game.patternServices(game.t, dm.index).map((s) => ({ ...s, available: true }));
-  const itin = computeItineraries(dm.stops.length, services);
-  linked.set(game, { rev: game.rev, itin });
-  return itin;
+export function placeTravel(game: Game, placeId: string): PlaceTravel | null {
+  const est = dayEstimate(game);
+  const zs = game.demand.activity.zones;
+  if (!est || !zs) return null;
+  let sums = placeSums.get(est);
+  if (!sums) {
+    sums = new Map();
+    for (const [pk, m] of est.trips) {
+      const i = Math.floor(pk / est.Z), j = pk % est.Z;
+      for (const z of i === j ? [i] : [i, j]) {
+        if (zs.list[z].kind !== 'place' && zs.list[z].kind !== 'beyond') continue;
+        let t = sums.get(z);
+        if (!t) sums.set(z, (t = { trips: 0, modes: [0, 0, 0, 0, 0, 0], served: false }));
+        for (let x = 0; x < m.length; x++) {
+          const v = Math.max(0, m[x]);
+          t.modes[x] += v;
+          t.trips += v;
+        }
+        if (est.served.has(pk)) t.served = true;
+      }
+    }
+    placeSums.set(est, sums);
+  }
+  const z = zs.list.findIndex((x) => x.id === `p:${placeId}`);
+  return z >= 0 ? sums.get(z) ?? { trips: 0, modes: [0, 0, 0, 0, 0, 0], served: false } : null;
 }
 
-export function estimatedDemand(game: Game, opts: { level: 'stop' | 'zone'; origin?: string | null; limit?: number }): DemandFlow[] {
-  const dm = game.demand;
-  // build the gravity model now if the game has not run since loading (the simulation would
-  // build the same model from the same state at its next minute)
-  if (dm.dirty) dm.rebuild(game);
-  const served = connectedPairs(game);
-  const S = dm.stops.length;
-  const st = game.state;
-  const keyOf = (s: Id) => (opts.level === 'zone' ? st.stops[s]?.zone ?? 'unknown' : s);
-  const label = (id: string) => (opts.level === 'zone' ? game.geo.zone(id)?.name ?? id : st.stops[id]?.name ?? id);
-  const out = new Map<string, DemandFlow>();
-  for (const k of dm.pairs) {
-    const o = Math.floor(k / S), d = k % S;
-    let v = 0;
-    for (let p = 0; p < 5; p++) v += dm.base[k * 5 + p];
-    if (v <= 0) continue;
-    const ko = keyOf(dm.stops[o]), kd = keyOf(dm.stops[d]);
-    if (opts.origin && ko !== opts.origin) continue;
-    if (ko === kd) continue;
-    const fk = `${ko}>${kd}`;
-    let f = out.get(fk);
-    if (!f) out.set(fk, (f = { o: ko, d: kd, oLabel: label(ko), dLabel: label(kd), trips: 0, served: false }));
-    f.trips += v;
-    if (served.has(k)) f.served = true;
+// ───────────────────────────────────────────── place timing (plan 13: "When it's busy")
+
+export interface PlaceDay {
+  /** modelled trips to and from the place by the hour they set off, today, all modes */
+  hours: number[];
+  total: number;
+}
+
+const placeDays = new WeakMap<Game, { key: string; out: Map<string, PlaceDay | null> }>();
+
+/** When a place with a zone of its own is busy today (the model's tours, its profile and the calendar). */
+export function placeDay(game: Game, placeId: string): PlaceDay | null {
+  const am = game.demand.activity;
+  const zs = am.ensureZones(game);
+  const m = am.tours;
+  if (!m) return null;
+  const d = Math.floor(game.t / DAY);
+  const key = `${zs.key}|${d}`;
+  let c = placeDays.get(game);
+  if (!c || c.key !== key) placeDays.set(game, (c = { key, out: new Map() }));
+  if (c.out.has(placeId)) return c.out.get(placeId)!;
+  const z = zs.list.findIndex((x) => x.place === placeId);
+  let res: PlaceDay | null = null;
+  if (z >= 0) {
+    const timing = am.timing(game, d * DAY + 12 * 3600);
+    const K = KIND_COUNT;
+    const hours = new Array<number>(24).fill(0);
+    for (let e = 0; e < m.tours.length; e++) {
+      if (m.o[e] !== z && m.d[e] !== z) continue;
+      const k = m.k[e];
+      const pk = zs.profile[KINDS[k].toHome ? m.o[e] : m.d[e]] * K + k;
+      const daily = m.tours[e] * timing.factor[pk];
+      for (let h = 0; h < 24; h++) hours[h] += daily * timing.share[pk * 24 + h];
+    }
+    const total = hours.reduce((a, b) => a + b, 0);
+    res = total > 0 ? { hours, total } : null;
   }
-  const list = [...out.values()].sort((a, b) => b.trips - a.trips);
-  return opts.limit ? list.slice(0, opts.limit) : list;
+  c.out.set(placeId, res);
+  return res;
+}
+
+export interface StationLink {
+  name: string;
+  place: string;
+  mode: TransitMode;
+  /** metres along the track, and assumed minutes on board */
+  m: number;
+  min: number;
+}
+
+/** A station's links on the city's existing transit network, and the modes switched off there (with why). */
+export function stationLinks(game: Game, placeId: string): { links: StationLink[]; off: { mode: TransitMode; reason: string }[] } | null {
+  const net = game.region.transit;
+  const p = game.geo.places.byId.get(placeId);
+  if (!net || !p?.modes) return null;
+  const s = net.stations.findIndex((x) => x.place === placeId);
+  const links: StationLink[] = [];
+  if (s >= 0)
+    for (const l of net.links) {
+      if (l.a !== s && l.b !== s) continue;
+      if (!net.modes[l.mode]?.ok) continue;
+      if (l.mode === 'ferry' && l.m < MIN_FERRY_M) continue; // piers side by side
+      const o = net.stations[l.a === s ? l.b : l.a];
+      const kmh = TRANSIT_SERVICE[l.mode]?.kmh ?? 20;
+      links.push({ name: o.name, place: o.place, mode: l.mode, m: l.m, min: (l.m / 1000 / kmh) * 60 });
+    }
+  links.sort((a, b) => a.mode.localeCompare(b.mode) || a.m - b.m || a.name.localeCompare(b.name));
+  // two stations with the same name (a pier mapped twice): keep the nearer
+  const seen = new Set<string>();
+  for (let i = 0; i < links.length; i++) {
+    const k = `${links[i].mode}|${links[i].name}`;
+    if (seen.has(k)) links.splice(i--, 1);
+    else seen.add(k);
+  }
+  const off = p.modes.filter((m) => m !== 'bus' && net.modes[m] && !net.modes[m]!.ok).map((m) => ({ mode: m, reason: net.modes[m]!.reason ?? 'Its tracks are not complete on the map.' }));
+  return { links, off };
 }

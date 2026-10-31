@@ -49,3 +49,15 @@ export function tilesNeeded(spec: RegionSpec, owned: readonly string[]): [number
     }
   return missing ? out : null;
 }
+
+/** z14 tiles covering a box of `size` tiles around a point. */
+export function tilesAround(centre: LngLat, cols: number, rows: number): [number, number][] {
+  const n = 2 ** ZONE_Z;
+  const fx = ((centre[0] + 180) / 360) * n;
+  const s = Math.sin((centre[1] * Math.PI) / 180);
+  const fy = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n;
+  const x0 = Math.round(fx - cols / 2), y0 = Math.round(fy - rows / 2);
+  const out: [number, number][] = [];
+  for (let y = y0; y < y0 + rows; y++) for (let x = x0; x < x0 + cols; x++) out.push([x, y]);
+  return out;
+}

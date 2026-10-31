@@ -5,7 +5,7 @@ import { useUI } from '../../state/store.ts';
 import { focusLine, focusStop } from '../camera.ts';
 import { MEASURE } from '../../game/analytics/query.ts';
 import {
-  FilterBar, LineChart, SectionHead, Notes, change, fmt, lineLabel, periodLabel, previousQuery, stopName, toQuery, todayNo, useAgg, useNC, SOURCE_TEXT, SrcMark, type Pt,
+  FilterBar, LineChart, SectionHead, dayMarks, Notes, change, fmt, lineLabel, periodLabel, previousQuery, stopName, toQuery, todayNo, useAgg, useNC, SOURCE_TEXT, SrcMark, type Pt,
 } from './common.tsx';
 
 const KPIS = ['boardings', 'journeys', 'abandoned', 'avgWait', 'onTime', 'occupancy', 'revenue', 'cost', 'profit', 'satisfaction'];
@@ -23,6 +23,7 @@ export function Overview({ game }: { game: Game }) {
   const stops = useAgg(game, toQuery(f, game, 'stop'));
   const today = todayNo(game);
 
+  const marks = useMemo(() => dayMarks(game), [game, game.state.analytics.days.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const points: Pt[] = useMemo(() => (days?.rows ?? []).map((r) => ({ x: Number(r.id), label: `Day ${Number(r.id) + 1}`, v: r.values[trend] ?? null })).sort((a, b) => a.x - b.x), [days, trend]);
 
   // top problems, from the same period
@@ -80,8 +81,11 @@ export function Overview({ game }: { game: Game }) {
             {TREND.map((id) => <option key={id} value={id}>{MEASURE[id].label}</option>)}
           </select>
         } />
-        <LineChart points={points} unit={m.unit} game={game} today={today + 1000} labelEvery={Math.max(1, Math.ceil(points.length / 9))} />
-        <div className="nc-hint" style={{ marginTop: 6 }}>Last 35 days{f.line ? `, ${lineLabel(game, f.line)}` : ''}. Days before recording began are missing.</div>
+        <LineChart points={points} unit={m.unit} game={game} today={today + 1000} labelEvery={Math.max(1, Math.ceil(points.length / 9))} marks={marks} />
+        <div className="nc-hint" style={{ marginTop: 6 }}>
+          Last 35 days{f.line ? `, ${lineLabel(game, f.line)}` : ''}. Days before recording began are missing.
+          {Object.keys(marks).length > 0 && <> <span style={{ color: 'var(--accent)' }}>○</span> showers or rain · <span style={{ color: 'var(--accent)' }}>●</span> heavy rain or snow · <span style={{ color: 'var(--amber)' }}>▲</span> an event your buses carried a crowd to. Point at a mark for details.</>}
+        </div>
       </div>
 
       <div className="section">

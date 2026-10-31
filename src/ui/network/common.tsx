@@ -4,6 +4,9 @@ import { create } from 'zustand';
 import type { Game } from '../../game/engine.ts';
 import { DAY } from '../../game/content.ts';
 import { BANDS } from '../../game/analytics/types.ts';
+import { DAY_KINDS, EVENT_DAYS, WEATHER_GROUPS, weatherGroup, type DayKind, type EventDay, type WeatherGroup } from '../../game/analytics/labels.ts';
+import { WEATHER_LABEL, type WeatherKind } from '../../game/weather.ts';
+import { EVENT_TEMPLATES, type EventKind } from '../../game/events.ts';
 import {
   aggregate, MEASURE, MEASURES, metricValue, weekdayName,
   type AnalyticsQuery, type Coverage, type CustomMetric, type DaySel, type GroupBy, type MeasureDef, type QueryResult, type Row, type Unit,
@@ -71,10 +74,33 @@ export const hoursOf = (f: Filters): [number, number] | null => {
   const b = BANDS.find((x) => x.id === f.time);
   return b ? [b.from, b.to] : null;
 };
-const dayTypeOf = (f: Filters): Pick<AnalyticsQuery, 'dayType' | 'weekday'> => {
-  if (f.dayType.startsWith('wd')) return { dayType: 'all', weekday: Number(f.dayType.slice(2)) };
-  return { dayType: f.dayType as 'all' | 'weekday' | 'weekend', weekday: null };
-};
+/** The "Days" choice: all, weekdays, weekend, one weekday (`wd0`…), a kind of day (`k:`), weather (`w:`) or events (`e:`). */
+export function dayFilterOf(v: string): Pick<AnalyticsQuery, 'dayType' | 'weekday' | 'weather' | 'dayKind' | 'eventDay'> {
+  if (v.startsWith('wd')) return { dayType: 'all', weekday: Number(v.slice(2)) };
+  if (v.startsWith('k:')) return { dayType: 'all', weekday: null, dayKind: v.slice(2) as DayKind };
+  if (v.startsWith('w:')) return { dayType: 'all', weekday: null, weather: v.slice(2) as WeatherGroup };
+  if (v.startsWith('e:')) return { dayType: 'all', weekday: null, eventDay: v.slice(2) as EventDay };
+  return { dayType: v as 'all' | 'weekday' | 'weekend', weekday: null };
+}
+const dayTypeOf = (f: Filters) => dayFilterOf(f.dayType);
+
+const DAY_GROUPS: { label: string; options: [string, string][] }[] = [
+  { label: 'Days of the week', options: [['all', 'All days'], ['weekday', 'Weekdays'], ['weekend', 'Weekend'], ...Array.from({ length: 7 }, (_, i): [string, string] => [`wd${i}`, `${weekdayName(i)}s`])] },
+  { label: 'Kind of day', options: DAY_KINDS.filter((k) => k.id !== 'weekend').map((k): [string, string] => [`k:${k.id}`, k.label]) },
+  { label: 'Weather', options: WEATHER_GROUPS.map((w): [string, string] => [`w:${w.id}`, w.label]) },
+  { label: 'Events', options: EVENT_DAYS.map((e): [string, string] => [`e:${e.id}`, e.id === 'event' ? 'Event days (your buses carried a crowd)' : e.label]) },
+];
+
+/** A plain label for a "Days" choice. */
+export function dayFilterLabel(v: string): string {
+  for (const g of DAY_GROUPS) for (const [k, l] of g.options) if (k === v) return l;
+  return 'All days';
+}
+
+/** The "Days" options, grouped. */
+export function DayOptions() {
+  return <>{DAY_GROUPS.map((g) => <optgroup key={g.label} label={g.label}>{g.options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</optgroup>)}</>;
+}
 
 /** Days and "include today" for a period. Day numbers are 0-based here. */
 export function periodDays(f: Filters, today: number): { days: DaySel; includeToday: boolean } {
@@ -113,6 +139,9 @@ export function filtersFromQuery(q: AnalyticsQuery | undefined, game: Game): Fil
     else { f.period = 'custom'; f.from = q.days.from + 1; f.to = q.days.to + 1; }
   }
   if (q.weekday !== undefined && q.weekday !== null) f.dayType = `wd${q.weekday}`;
+  else if (q.dayKind && q.dayKind !== 'all') f.dayType = `k:${q.dayKind}`;
+  else if (q.weather && q.weather !== 'all') f.dayType = `w:${q.weather}`;
+  else if (q.eventDay && q.eventDay !== 'all') f.dayType = `e:${q.eventDay}`;
   else if (q.dayType) f.dayType = q.dayType;
   if (q.hours) {
     const b = BANDS.find((x) => x.from === q.hours![0] && x.to === q.hours![1]);
@@ -158,6 +187,11 @@ export function fmt(game: Game, unit: Unit, v: number | null | undefined, decima
     default: return decimals !== undefined ? v.toFixed(decimals) : Math.abs(v) >= 100 ? Math.round(v).toLocaleString('en-GB') : v % 1 === 0 ? String(v) : v.toFixed(1);
   }
 }
+/** An estimate's precision: two or three significant figures. */
+export const approx = (v: number) => (v >= 10_000 ? Math.round(v / 1000) * 1000 : v >= 1000 ? Math.round(v / 100) * 100 : v >= 100 ? Math.round(v / 10) * 10 : Math.round(v));
+/** A share in whole percent, with "<1%" for a sliver rather than rounding it up or away. */
+export const share = (v: number, of: number) => (!(of > 0) || !(v > 0) ? '—' : (v / of) * 100 < 0.5 ? '<1%' : `${Math.round((v / of) * 100)}%`);
+
 export const fmtM = (game: Game, id: string, v: number | null | undefined) => fmt(game, MEASURE[id]?.unit ?? 'count', v);
 
 export const SOURCE_TEXT: Record<string, string> = {
@@ -222,19 +256,20 @@ export function change(cur: number | null, prev: number | null, unit: Unit, bett
 
 export function coverageText(cov: Coverage | undefined): ReactNode {
   if (!cov) return null;
-  const req = cov.requested.length;
+  const other = cov.other?.length ?? 0, unl = cov.unlabelled?.length ?? 0;
+  const req = cov.requested.length - other - unl;
   const rec = cov.detailed.length + cov.summary.length;
   const parts: string[] = [];
-  if (req) parts.push(`${rec} of ${req} day${req === 1 ? '' : 's'} recorded`);
+  if (other || unl) parts.push(`${rec} matching day${rec === 1 ? '' : 's'} of ${cov.requested.length}`);
+  else if (req) parts.push(`${rec} of ${req} day${req === 1 ? '' : 's'} recorded`);
   if (cov.today) parts.push('today so far');
+  if (cov.unlabelled?.length) parts.push(`${cov.unlabelled.length} older day${cov.unlabelled.length === 1 ? '' : 's'} without weather or event labels left out`);
   if (cov.missing.length) parts.push(`not recorded before day ${cov.since + 1}`);
   else parts.push(`recording began day ${cov.since + 1}`);
   return parts.join(' · ');
 }
 
 // ───────────────────────────────────────────── filter bar
-
-const DAYTYPES = [['all', 'All days'], ['weekday', 'Weekdays'], ['weekend', 'Weekend'], ...Array.from({ length: 7 }, (_, i) => [`wd${i}`, `${weekdayName(i)}s`])];
 
 export function FilterBar({ game, time = true, line = false, res }: { game: Game; time?: boolean; line?: boolean; res?: { coverage: Coverage } | null }) {
   const f = useNC((s) => s.f);
@@ -263,7 +298,7 @@ export function FilterBar({ game, time = true, line = false, res }: { game: Game
         )}
         <label>Days
           <select className="pn-select" value={f.dayType} onChange={(e) => setF({ dayType: e.target.value })}>
-            {DAYTYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            <DayOptions />
           </select>
         </label>
         {time && (
@@ -344,10 +379,29 @@ export const sortRows = <T,>(rows: T[], get: (r: T) => number | null, dir: numbe
 // ───────────────────────────────────────────── charts
 
 export interface Pt { x: number; label: string; v: number | null }
+/** A day's marks above a daily chart: rain (wet), heavy rain or snow (storm), and an event your buses served. */
+export interface DayMark { wx?: 'wet' | 'storm'; wxText?: string; ev?: string }
+
+/** Marks for recorded days, from their labels (weather, and events your buses carried a crowd to). */
+export function dayMarks(game: Game): Record<number, DayMark> {
+  const out: Record<number, DayMark> = {};
+  for (const rec of game.state.analytics.days) {
+    const l = rec.lbl;
+    if (!l) continue;
+    const m: DayMark = {};
+    const g = weatherGroup(l);
+    if (g === 'wet' || g === 'storm') { m.wx = g; m.wxText = `${WEATHER_LABEL[l.wx!.k as WeatherKind]}, ${l.wx!.mm} mm`; }
+    const ev = (l.ev ?? []).filter((e) => e.carried > 0 && e.kind !== 'rail' && e.kind !== 'flight');
+    if (ev.length) m.ev = ev.map((e) => `${EVENT_TEMPLATES[e.kind as EventKind]?.label ?? e.kind} at ${e.venue}: ${e.carried} journeys on your buses`).join('; ');
+    if (m.wx || m.ev) out[rec.day] = m;
+  }
+  return out;
+}
 
 /** A thin line chart (days or hours). Gaps where the value is missing. */
-export function LineChart({ points, unit, game, height = 132, labelEvery = 5, today }: { points: Pt[]; unit: Unit; game: Game; height?: number; labelEvery?: number; today?: number }) {
-  const W = 572, H = height, L = 44, T = 8, B = 20, R = 6;
+export function LineChart({ points, unit, game, height = 132, labelEvery = 5, today, marks }: { points: Pt[]; unit: Unit; game: Game; height?: number; labelEvery?: number; today?: number; marks?: Record<number, DayMark> }) {
+  const hasMarks = !!marks && points.some((p) => marks[p.x]);
+  const W = 572, H = height + (hasMarks ? 12 : 0), L = 44, T = hasMarks ? 20 : 8, B = 20, R = 6;
   const vals = points.map((p) => p.v).filter((v): v is number => v !== null);
   if (vals.length < 2) return <div className="pn-note">Not enough history yet. A trend appears after two recorded days.</div>;
   const max = Math.max(...vals, 0), min = Math.min(...vals, 0);
@@ -376,6 +430,17 @@ export function LineChart({ points, unit, game, height = 132, labelEvery = 5, to
         </g>
       ))}
       {points.map((p, i) => (i % labelEvery === 0 || i === points.length - 1) && <text key={`l${i}`} x={x(i)} y={H - 6} textAnchor="middle">{p.label.replace(/^Day /, '')}</text>)}
+      {hasMarks && points.map((p, i) => {
+        const m = marks![p.x];
+        if (!m) return null;
+        const cx = x(i);
+        return (
+          <g key={`m${i}`}>
+            {m.wx && <circle cx={m.ev ? cx - 4 : cx} cy={8} r={m.wx === 'storm' ? 3.4 : 2.6} fill={m.wx === 'storm' ? 'var(--accent)' : 'none'} stroke="var(--accent)" strokeWidth={1.4}><title>{`${p.label}: ${m.wxText}`}</title></circle>}
+            {m.ev && <path d={`M${m.wx ? cx + 4 : cx} 4 l3.4 6.8 h-6.8 z`} fill="var(--amber)"><title>{`${p.label}: ${m.ev}`}</title></path>}
+          </g>
+        );
+      })}
     </svg>
   );
 }

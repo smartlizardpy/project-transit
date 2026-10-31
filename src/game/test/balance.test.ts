@@ -1,25 +1,12 @@
 // Balance guard rails: a sensible first line on busy real streets should cover its running costs,
 // and an oversized fleet on a thin line should not. Numbers are in the base currency.
 import { describe, expect, it } from 'vitest';
-import { newGame, stopsAlong } from './helpers.ts';
+import { referenceLine } from './calibration.ts';
 import { dayTotals } from '../finance.ts';
-import { flatTimetable, sustainableHeadway } from '../timetable.ts';
 import { window } from '../progress.ts';
 import { reconcile } from '../finance.ts';
 
-function setup(stopCount: number, buses: number) {
-  const game = newGame({ allZones: true });
-  const d = game.buildDepot([28.9805, 41.0335]);
-  if (!d.ok) throw new Error(d.error);
-  const pts = stopsAlong(game, [28.9858, 41.0369], [28.9707, 41.0172]).slice(0, stopCount);
-  const stops = pts.map((p) => game.placeStop(p)).filter((r) => r.ok).map((r) => (r as { value: string }).value);
-  const r = game.createRoute({ stops, timetable: flatTimetable(12) });
-  if (!r.ok) throw new Error(r.error);
-  const ids = Array.from({ length: buses }, () => game.buyVehicle('city12', d.value)).filter((b) => b.ok).map((b) => (b as { value: string }).value);
-  ids.forEach((b) => game.assignVehicle(b, r.value));
-  game.setTimetable(r.value, flatTimetable(sustainableHeadway(game.profiles.get(r.value)!, 4, ids.length)));
-  return { game, route: r.value, buses: ids };
-}
+const setup = referenceLine;
 
 describe('economy balance', () => {
   it('a good first line covers its operating costs and the start-up money lasts', () => {

@@ -1,7 +1,7 @@
 {
   "name": "project-transit",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +13,7 @@
     "shots": "node scripts/capture.mjs",
     "check:webkit": "node scripts/check-webkit.mjs",
     "test": "vitest run",
+    "calibrate": "vitest run src/game/test/calibration.test.ts",
     "play": "node scripts/play.mjs",
     "mcp": "node mcp/main.ts",
     "build:mcp": "vite build --config vite.mcp.config.ts"

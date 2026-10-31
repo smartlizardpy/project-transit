@@ -144,6 +144,24 @@ button:disabled { cursor: default; }
 .daybar-now { position: absolute; top: -2px; bottom: -2px; width: 2px; border-radius: 1px; background: var(--text); box-shadow: 0 0 0 2px var(--card); }
 .daybar-legend { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-3); font-weight: 700; letter-spacing: 0.04em; }
 
+/* weather chip (in the time card) and its popover */
+.wx { position: relative; display: flex; align-self: stretch; margin: -8px -12px -8px 0; padding-left: 4px; border-left: 1px solid var(--hairline); }
+.wx-chip { margin: 4px 0; }
+.wx-pop { position: absolute; top: calc(100% + 16px); right: -4px; width: 320px; padding: 14px; z-index: 30; transform-origin: top right; animation: pop-in 180ms var(--ease-out); cursor: default; }
+.wx-hours { display: flex; align-items: flex-end; gap: 2px; height: 34px; }
+.wx-hours i { flex: 1; height: 2px; border-radius: 2px 2px 0 0; background: var(--track); }
+.wx-hours i[style] { background: color-mix(in srgb, var(--accent) 60%, transparent); }
+.wx-hours i.snow[style] { background: color-mix(in srgb, #dfe9f1 70%, transparent); }
+.wx-hours i.now { box-shadow: 0 0 0 1.5px var(--text); }
+.wx-effect { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin-top: 10px; line-height: 1.4; }
+.wx-tomorrow { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 6px; }
+.wx-fc { display: flex; align-items: center; gap: 10px; }
+.wx-fc b { display: block; font-size: 14px; font-weight: 800; }
+.wx-fc span { display: block; font-size: 12px; font-weight: 600; margin-top: 1px; }
+.wx-note { font-size: 11.5px; line-height: 1.4; }
+.wx-credit { font-size: 11px; margin-top: 10px; line-height: 1.4; }
+@media (max-width: 1280px) { .wx-chip span { display: none; } }
+
 /* ───────────────────────────── top-right stats */
 .stats { position: absolute; top: var(--edge); right: var(--edge); display: flex; gap: 8px; align-items: stretch; }
 .stats-card { display: flex; align-items: stretch; height: 60px; padding: 0 4px; }
@@ -386,6 +404,23 @@ button.lrow:hover { background: var(--card-hover); }
 .dest-mk .dname { position: absolute; left: 50%; bottom: 36px; transform: translate(-50%, 3px); white-space: nowrap; font-size: 13px; font-weight: 800; color: #4b5560; background: rgba(255,255,255,0.86); padding: 3px 9px; border-radius: 8px; opacity: 0; transition: opacity 160ms, transform 160ms; pointer-events: none; }
 .zoom-near .dest-mk .dname, .dest-mk:hover .dname { opacity: 1; transform: translate(-50%, 0); }
 .zoom-far .dest-mk .badge { transform: scale(0.8); }
+/* an announced event at the place: a small label above the marker */
+.dest-mk .ev-flag { position: absolute; left: 50%; bottom: 31px; transform: translateX(-50%); white-space: nowrap; font-size: 11px; font-weight: 800; color: #fff; background: #2a332e; padding: 2px 7px; border-radius: 7px; box-shadow: 0 0 0 1.5px #fff; pointer-events: none; }
+.dest-mk.has-event .dname { bottom: 54px; }
+.zoom-hidden .dest-mk.has-event { opacity: 1; pointer-events: auto; }
+/* places open their card with the select tool; with other tools a click places a stop as usual */
+.map-root:not(.tool-route):not(.tool-stop):not(.tool-depot) .dest-mk .badge { cursor: pointer; }
+.dest-mk.sel .badge { box-shadow: 0 0 0 2.5px #fff, 0 3px 10px rgba(30,40,35,0.32); }
+.dest-mk.sel .dname { opacity: 1; transform: translate(-50%, 0); }
+/* airports beyond the map: a chip on the screen edge, in their direction */
+.edge-chip {
+  position: absolute; left: 0; top: 0; z-index: 2; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px;
+  border-radius: 13px; background: var(--card); color: var(--text); font-size: 12px; font-weight: 800; white-space: nowrap; cursor: pointer;
+  box-shadow: 0 3px 10px rgba(20,28,24,0.28); user-select: none;
+}
+.edge-chip svg { flex: none; }
+.edge-chip .km { color: var(--text-3); font-weight: 700; font-variant-numeric: tabular-nums; }
+.edge-chip:hover, .edge-chip.sel { background: var(--card-hover); }
 
 /* cursors per tool */
 .map-root.tool-route .maplibregl-canvas-container { cursor: crosshair; }
@@ -427,3 +462,31 @@ button.lrow:hover { background: var(--card-hover); }
 @media (max-width: 1280px) {
   .stat.hide-sm { display: none; }
 }
+
+/* line inspector: how the line is used (collapsible sections) */
+.lc-fold { padding: 8px 12px; }
+.lc-head { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 24px; color: var(--text-2); text-align: left; }
+.lc-head .label { color: var(--text); }
+.lc-hint { margin-left: auto; font-size: 11.5px; font-weight: 600; }
+.lc-body { padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.lc-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 1px; background: var(--track); }
+.lc-bar i { display: block; min-width: 2px; }
+.lc-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.lc-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.lc-legend i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.lc-legend b { color: var(--text); font-weight: 700; margin-left: 2px; }
+.lc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; font-weight: 600; }
+.lc-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 20px; }
+.lc-list li > span:first-child { color: var(--text-2); min-width: 0; }
+.lc-list b { font-weight: 700; text-align: right; flex: none; }
+.lc-sub { font-size: 11.5px; font-weight: 700; color: var(--text-3); margin-top: 2px; }
+.lc-foot { font-size: 11.5px; }
+.lc-curve text { fill: var(--text-3); font-size: 9.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lc-rev { flex: 1; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.lc-rev i { display: block; height: 100%; background: var(--mint); border-radius: 3px; }
+
+/* place card: when it's busy (modelled trips by hour today) */
+.pc-busy { display: flex; align-items: flex-end; gap: 2px; height: 38px; }
+.pc-busy i { flex: 1; min-height: 2px; border-radius: 2px 2px 0 0; background: color-mix(in srgb, var(--mint) 55%, transparent); }
+.pc-busy i.now { background: var(--mint); }
+.pc-busy-axis { display: flex; justify-content: space-between; font-size: 10px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }

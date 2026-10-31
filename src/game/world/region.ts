@@ -2,6 +2,7 @@
 // Built at runtime from OpenMapTiles vector tiles (see regionBuilder.ts).
 
 import type { LngLat, RoadGraph, SpatialIndex } from './graph.ts';
+import type { CityPlace, TransitMode } from './places.ts';
 
 export interface RegionSpec {
   /** stable id, e.g. "istanbul-galata" */
@@ -57,6 +58,17 @@ export interface DemandGrid {
   other: Float32Array;
   /** road length per cell, metres (used for traffic density and land detection) */
   roads: Float32Array;
+  // The activity engine's budget (docs/city-activity-engine-plan.md, section 6.4). Optional so
+  // that hand-made grids still work; the engine falls back to the arrays above.
+  /** jobs from building floor area only (a POI adds its own jobs only where no building was mapped) */
+  work?: Float32Array;
+  /** non-residential building floor area, m² */
+  floor?: Float32Array;
+  /** health visits (hospitals, clinics, doctors, pharmacies) and civic or religious services */
+  health?: Float32Array;
+  services?: Float32Array;
+  /** hotels and other lodging (count) */
+  lodging?: Float32Array;
 }
 
 export interface Zone {
@@ -101,10 +113,22 @@ export interface RegionCoverage {
   pois: number;
   osmStops: number;
   places: number;
+  /** entries in the Place Registry (missing in older data) */
+  cityPlaces?: number;
   /** traffic data source; we only have a simulated model */
   traffic: 'simulated';
   /** tiles that failed to load */
   missingTiles: number;
+}
+
+/** The city's existing rail, metro, tram, funicular and ferry network, as links between stations (transitBuilder.ts). */
+export interface TransitNet {
+  /** stations: Place Registry places with a rail, metro, tram, funicular, cable or ferry mode (not bus stations), local metres */
+  stations: { place: string; name: string; x: number; y: number; modes: TransitMode[] }[];
+  /** direct links between consecutive stations on one mode's track or ferry route, each listed once (a < b); metres along the track */
+  links: { a: number; b: number; m: number; mode: TransitMode }[];
+  /** per mode: whether its graph is usable, with counts and, when switched off, a plain-English reason (shown on the place card) */
+  modes: Partial<Record<TransitMode, { ok: boolean; stations: number; links: number; reason?: string }>>;
 }
 
 export interface RegionData {
@@ -112,7 +136,12 @@ export interface RegionData {
   graph: RoadGraph;
   bounds: { w: number; s: number; e: number; n: number };
   pois: Poi[];
+  /** OSM place labels (neighbourhoods, suburbs) */
   places: Place[];
+  /** the Place Registry: airports, stations and destinations (placeBuilder.ts) */
+  cityPlaces: CityPlace[];
+  /** the existing transit network between stations (missing in older data: treat as no background network) */
+  transit?: TransitNet;
   demand: DemandGrid;
   zones: Zone[];
   osmStops: OsmStop[];

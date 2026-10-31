@@ -1,6 +1,8 @@
 // Statistics, passenger satisfaction, reputation, territory licensing and objectives.
 
 import type { Game } from './engine.ts';
+import { KIND, TYPE } from './activity/params.ts';
+import { actualEnd } from './events.ts';
 import type { DayStats, GameState, HourStats, Id, Notification, PaxGroup, RouteHour } from './types.ts';
 import { DAY, ECON, HOUR, MODELS } from './content.ts';
 import { dayTotals, post } from './finance.ts';
@@ -43,7 +45,8 @@ export function routeHour(state: GameState, route: Id): RouteHour {
 }
 
 /** Score a finished (or abandoned) journey and add it to the statistics. */
-export function recordTrip(game: Game, g: PaxGroup, completed: boolean) {
+/** `stranded`: no bus home at their return time (scored like giving up, counted separately). */
+export function recordTrip(game: Game, g: PaxGroup, completed: boolean, stranded = false) {
   const state = game.state;
   const t = state.clock.t;
   const sc = scoreJourney(state, g, completed, t);
@@ -61,7 +64,9 @@ export function recordTrip(game: Game, g: PaxGroup, completed: boolean) {
   hs.satN += g.n;
   for (let i = 0; i < 5; i++) hs.comp[i] += sc.comp[i] * g.n;
   hs.waitSum += (g.w / 60) * g.n;
-  recJourney(state, g, completed, sc);
+  recJourney(state, g, completed, sc, stranded);
+  // event attendees count towards their event (the stop near the venue: where they got off, or set off home)
+  if (g.pu === KIND.event) game.noteEventTrip(g.ret ? g.o : g.d, g.n, completed);
   const route = g.fr ?? g.legs[0]?.r;
   if (route && state.routes[route]) {
     const rh = routeHour(state, route);
@@ -241,17 +246,22 @@ export function closeDay(game: Game, day: number) {
   // reputation drifts towards what passengers experienced; more riders = faster
   const c = state.company;
   const before = c.reputation;
+  // two parts: a drift towards how passengers rated their journeys, and a penalty for every
+  // timetabled departure that did not run
+  let drift = 0;
   if (w.trips + w.abandoned >= 30 && w.satisfaction !== null) {
     const target = w.satisfaction * 100;
     const k = Math.min(0.12, 0.03 + (w.trips + w.abandoned) / 40000);
-    c.reputation += (target - c.reputation) * k;
+    drift = (target - c.reputation) * k;
+    c.reputation += drift;
   }
-  c.reputation -= Math.min(4, w.missed * 0.04);
+  const penalty = Math.min(4, w.missed * 0.04);
+  c.reputation -= penalty;
   c.reputation = Math.max(0, Math.min(100, c.reputation));
   row.reputation = c.reputation;
   const delta = c.reputation - before;
   if (Math.abs(delta) >= 1) {
-    notify(game, delta > 0 ? 'good' : 'warn', `Reputation ${delta > 0 ? 'up' : 'down'} ${Math.abs(delta).toFixed(1)} points`, delta > 0 ? 'Passengers are happy with your service.' : explainSatisfaction(w));
+    notify(game, delta > 0 ? 'good' : 'warn', `Reputation ${delta > 0 ? 'up' : 'down'} ${Math.abs(delta).toFixed(1)} points`, delta > 0 ? 'Passengers are happy with your service.' : explainDrop(game, day, w, drift, penalty), delta > 0 ? undefined : dropTarget(game, day, penalty));
   }
 
   // solvency
@@ -272,6 +282,63 @@ export function closeDay(game: Game, day: number) {
     c.redDays = 0;
     c.status = 'ok';
   }
+}
+
+/** The ended day's missed departures per line, most first. */
+function missedByLine(game: Game, day: number): { id: Id; n: number }[] {
+  const a = game.state.analytics;
+  const rec = a.today.day === day ? a.today : a.days.find((d) => d.day === day);
+  if (!rec) return [];
+  return Object.entries(rec.routes)
+    .map(([id, rd]) => ({ id, n: rd.m.reduce((x, y) => x + y, 0) }))
+    .filter((x) => x.n > 0 && game.state.routes[x.id])
+    .sort((p, q) => q.n - p.n || p.id.localeCompare(q.id));
+}
+
+/** Why a line misses departures, when it is plain: no buses at all, or fewer than its timetable needs. */
+function missedWhy(game: Game, id: Id): string | null {
+  const r = game.state.routes[id];
+  if (!r.vehicles.length) return 'it has a timetable but no buses';
+  const need = game.requirement(id)?.peak ?? 0;
+  if (need > r.vehicles.length) return `its timetable needs ${need} buses at the busiest time and it has ${r.vehicles.length}`;
+  return null;
+}
+
+const listWords = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+/**
+ * Why reputation fell, in the order it cost points: missed departures (naming the lines, and
+ * whether they have no buses or too few), then how passengers rated their journeys.
+ */
+export function explainDrop(game: Game, day: number, w: Window, drift: number, penalty: number): string {
+  const s = game.state;
+  const parts: { pts: number; text: string }[] = [];
+  if (penalty >= 0.1) {
+    const lines = missedByLine(game, day);
+    const top = lines.slice(0, 3);
+    const named = top.map((x) => `line ${s.routes[x.id].number} (${x.n})`);
+    const noBus = top.filter((x) => !s.routes[x.id].vehicles.length).map((x) => s.routes[x.id].number);
+    // lines with some buses but too few (lines with none are named together above)
+    const reasons = top.filter((x) => s.routes[x.id].vehicles.length).map((x) => ({ n: s.routes[x.id].number, why: missedWhy(game, x.id) })).filter((x) => x.why);
+    let text = `${w.missed} timetabled departure${w.missed === 1 ? ' was' : 's were'} missed (−${penalty.toFixed(1)} points)${named.length ? `, most on ${listWords(named)}` : ''}.`;
+    if (noBus.length) text += ` Line${noBus.length === 1 ? '' : 's'} ${listWords(noBus.map(String))} ${noBus.length === 1 ? 'has' : 'have'} a timetable but no buses, so every departure is missed: give ${noBus.length === 1 ? 'it' : 'them'} buses, or suspend ${noBus.length === 1 ? 'it' : 'them'} until you do.`;
+    for (const r of reasons) text += ` Line ${r.n}: ${r.why}.`;
+    if (!noBus.length && !reasons.length) text += ' Buses that are late back, broken down or in the workshop miss their next departures: look at the line’s buses and its layover time.';
+    parts.push({ pts: penalty, text });
+  }
+  if (drift <= -0.1 || !parts.length) {
+    const hint = explainSatisfaction(w);
+    parts.push({ pts: -drift, text: parts.length ? `Passengers also rated their journeys below your reputation (−${(-drift).toFixed(1)}): ${hint.charAt(0).toLowerCase()}${hint.slice(1)}` : hint });
+  }
+  parts.sort((a, b) => b.pts - a.pts);
+  return parts.map((p) => p.text).join(' ');
+}
+
+/** What the notification opens: the line that missed the most departures, when that cost the most. */
+function dropTarget(game: Game, day: number, penalty: number) {
+  if (penalty < 0.5) return undefined;
+  const top = missedByLine(game, day)[0];
+  return top ? { kind: 'route' as const, id: top.id } : undefined;
 }
 
 function explainSatisfaction(w: Window): string {
@@ -370,6 +437,8 @@ export interface ObjectiveDef {
   reward: { cash?: number; rep?: number; label?: string };
   /** progress 0..1 */
   check: (game: Game) => number;
+  /** whether it can be done on this map (for example, an airport within reach); always when absent */
+  available?: (game: Game) => boolean;
 }
 
 const hasRouteWith = (game: Game) => Object.values(game.state.routes).filter((r) => !r.suspended && r.vehicles.length > 0);
@@ -473,7 +542,53 @@ export const OBJECTIVES: ObjectiveDef[] = [
     reward: { cash: 80_000, rep: 4, label: 'Transport authority award' },
     check: (g) => Math.max(window(g.state, 24).trips, ...g.state.stats.days.map((d) => d.trips)) / 5000,
   },
+  {
+    id: 'match-day',
+    title: 'Match day',
+    description: 'Carry 1,000 journeys to and from one event (a match, concert, festival or gathering), with no more than 1 in 10 of its travellers on your network giving up or stranded.',
+    reward: { cash: 30_000, rep: 3, label: 'Events partnership' },
+    check: (g) => {
+      let best = 0;
+      for (const ev of g.eventList()) {
+        if (ev.people <= 0 || ev.cancelled) continue;
+        const carried = ev.carried ?? 0, lost = ev.lost ?? 0;
+        let p = Math.min(1, carried / 1000) * (lost <= 0.1 * (carried + lost) ? 1 : 0.9);
+        // counted once the crowd has gone home
+        if (g.t < actualEnd(ev) + 2 * HOUR) p = Math.min(p, 0.99);
+        best = Math.max(best, p);
+      }
+      return best;
+    },
+  },
+  {
+    id: 'night-network',
+    title: 'Night network',
+    description: 'Carry 250 passengers between midnight and 05:00 in one night, when the metro and trams have stopped.',
+    reward: { cash: 20_000, rep: 2, label: 'Night-time economy grant' },
+    check: (g) => {
+      const nights = new Map<number, number>();
+      for (const h of g.state.stats.hours) if (h.h % 24 < 5) nights.set(Math.floor(h.h / 24), (nights.get(Math.floor(h.h / 24)) ?? 0) + h.trips);
+      return Math.max(0, ...nights.values()) / 250;
+    },
+  },
+  {
+    id: 'airport-link',
+    title: 'Airport link',
+    description: 'Carry 300 air travellers to or from the airport in one day.',
+    reward: { cash: 40_000, rep: 3, label: 'Airport access contract' },
+    available: (g) => (g.region.cityPlaces ?? []).some((p) => p.category === 'airport' && p.reachable),
+    check: (g) => {
+      const air = TYPE.air;
+      const days = [...g.state.analytics.days, g.state.analytics.today];
+      return Math.max(0, ...days.map((d) => d.net.jk?.[air] ?? 0)) / 300;
+    },
+  },
 ];
+
+/** Objectives that can be done on this map. */
+export function objectivesFor(game: Game): ObjectiveDef[] {
+  return OBJECTIVES.filter((o) => !o.available || o.available(game));
+}
 
 /** Progress towards serving a kind of destination on a line with real ridership (0..1). */
 function servesKind(game: Game, kinds: string[], within: number, riders: number): number {
@@ -492,7 +607,7 @@ function servesKind(game: Game, kinds: string[], within: number, riders: number)
 /** Re-evaluate objectives; grant rewards exactly once. */
 export function checkObjectives(game: Game) {
   const state = game.state;
-  for (const def of OBJECTIVES) {
+  for (const def of objectivesFor(game)) {
     const st = (state.objectives[def.id] ??= { done: false, progress: 0 });
     if (st.done) continue;
     const p = Math.max(0, Math.min(1, def.check(game)));

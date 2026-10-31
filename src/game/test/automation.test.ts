@@ -2,7 +2,7 @@
 // modes, safety rules and save/load. Workflows act only through the shared command layer.
 import { describe, expect, it } from 'vitest';
 import { Game } from '../engine.ts';
-import { buildLine, newGame, region } from './helpers.ts';
+import { buildLine, crowdedLine, newGame, region } from './helpers.ts';
 import { DAY, ECON, HOUR } from '../content.ts';
 import { TripState } from '../types.ts';
 import { evaluate, checkExpr, compile, ExprError } from '../expr.ts';
@@ -95,12 +95,12 @@ describe('workflow validation', () => {
 });
 
 describe('scenario 3: every 15 min → line occupancy → threshold → free bus → extra departure', () => {
-  // An established company (reputation 85, lowest fare) with one line of small buses, so the
-  // morning peak genuinely fills them: measured 60–97% between 06:15 and 08:00 with this seed.
+  // An established company (reputation 85, lowest fare) with small buses on a busy corridor, so
+  // the morning peak genuinely fills them (see crowdedLine).
   const game = newGame({ seed: 21, extraFunds: 1_000_000, allZones: true });
   game.state.company.reputation = 85;
   game.setFare(ECON.fareMin);
-  const line = buildLine(game, { buses: 2, stops: 14, headway: 20, model: 'mini8' });
+  const line = crowdedLine(game);
   const spare = game.buyVehicle('mini8', line.depot);
   if (!spare.ok) throw new Error(spare.error);
   const created = fromTemplate(game, 'crowding');
@@ -309,7 +309,7 @@ describe('scenario 4 through a workflow: moving a bus with passengers on board',
   game.run(3 * HOUR);
   it('defers until the trip ends, keeps the passengers and records it', () => {
     let busy = Object.values(game.state.vehicles).find((v) => v.route === a.route && v.load > 0);
-    for (let i = 0; i < 40 && !busy; i++) {
+    for (let i = 0; i < 360 && !busy; i++) {
       game.run(30);
       busy = Object.values(game.state.vehicles).find((v) => v.route === a.route && v.load > 0);
     }
@@ -441,7 +441,7 @@ describe('Simulation Lab', () => {
     const game = newGame({ seed: 21, extraFunds: 1_000_000, allZones: true });
     game.state.company.reputation = 85;
     game.setFare(ECON.fareMin);
-    const line = buildLine(game, { buses: 2, stops: 14, headway: 20, model: 'mini8' });
+    const line = crowdedLine(game);
     game.buyVehicle('mini8', line.depot);
     game.buyVehicle('mini8', line.depot);
     game.run(HOUR);

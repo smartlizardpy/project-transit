@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Crosshair, Warehouse, MapPin, Users, Wrench, Path, Plus, Warning, CalendarBlank, PencilSimple, Trash, Pause, Play, CurrencyCircleDollar, ArrowsOutSimple, Lock, LockOpen, Check, Minus } from '@phosphor-icons/react';
+import { X, Crosshair, Warehouse, MapPin, Users, Wrench, Path, Plus, Warning, CalendarBlank, PencilSimple, Trash, Pause, Play, CurrencyCircleDollar, ArrowsOutSimple, Lock, LockOpen, Check, Minus, ArrowUUpLeft, Hourglass } from '@phosphor-icons/react';
 import { useUI } from '../state/store.ts';
 import { useGameUpdates } from './hooks.ts';
 import { LineBadge, LoadBar, Tip, Kpi } from './primitives.tsx';
@@ -13,11 +13,14 @@ import { MODEL, ECON, STOP_RULES } from '../game/content.ts';
 import { STATUS_LABEL } from '../game/vehicles.ts';
 import { routeWindow, routeMoney, licenceInfo } from '../game/progress.ts';
 import { describeTimetable } from '../game/timetable.ts';
-import { waitingAt } from '../game/passengers.ts';
-import { distanceM, type LngLat } from '../game/world/graph.ts';
-import { POI_LABEL } from '../game/world/region.ts';
+import { hhmm, serviceDayOf } from '../game/time.ts';
+import { occupied, waitingAt } from '../game/passengers.ts';
+import type { LngLat } from '../game/world/graph.ts';
+import { PLACE_LABEL, placeSignificance, walkDistanceM } from '../game/world/places.ts';
+import { PlaceInspector } from './PlaceInspector.tsx';
 import { RouteCheck, DiagnosticButton } from './RouteCheck.tsx';
 import { lineDiagnostics } from '../game/diagnostics.ts';
+import { LineCharacter } from './LineCharacter.tsx';
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const km = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
@@ -58,6 +61,7 @@ export function Inspector() {
       {shown.kind === 'stop' && <StopInspector id={shown.id} />}
       {shown.kind === 'depot' && <DepotInspector id={shown.id} />}
       {shown.kind === 'zone' && <ZoneInspector id={shown.id} />}
+      {shown.kind === 'place' && <PlaceInspector id={shown.id} close={<Close />} />}
     </aside>
   );
 }
@@ -104,6 +108,45 @@ export function statusPill(v: Vehicle): { text: string; pill: string; cls: strin
 }
 
 // ───────────────────────────────────────────── vehicle
+
+/** Who asked for a control action: you, or an automation by name. */
+function askedBy(game: Game, src: string) {
+  if (src === 'player') return '';
+  const wf = game.state.automation.workflows[src];
+  return wf ? ` Asked by “${wf.name}”.` : '';
+}
+
+/** A hold at a stop or an early turn back planned for this bus, with a way to call it off. */
+function ControlNotes({ game, v }: { game: Game; v: Vehicle }) {
+  const s = game.state;
+  const hold = v.hold && v.hold.trip === v.trip ? v.hold : null;
+  const turn = v.turn && v.turn.trip === v.trip ? v.turn : null;
+  const pat = v.pos.kind === 'pattern' ? game.pattern(v.pos.route, v.pos.pat) : null;
+  return (
+    <>
+      {hold && (
+        <div className="issue info">
+          <Hourglass size={16} weight="fill" />
+          <span className="grow">
+            {hold.until ? `Held at ${s.stops[hold.stop ?? '']?.name ?? 'the stop'} until ${hhmm(hold.until)}, doors open.` : `Will wait ${hold.min} min at ${s.stops[hold.stop ?? '']?.name ?? 'its next stop'} after its normal stop.`}
+            {askedBy(game, hold.src)}
+          </span>
+          <button className="link" onClick={() => run(game.cancelControl(v.id, 'hold'), 'Hold called off')}>Call off</button>
+        </div>
+      )}
+      {turn && pat && (
+        <div className="issue info">
+          <ArrowUUpLeft size={16} weight="bold" />
+          <span className="grow">
+            Turns back at {s.stops[pat.stops[turn.at]]?.name ?? 'a stop'} instead of {s.stops[pat.stops[pat.stops.length - 1]]?.name ?? 'the end of the line'}; people going further change to the next bus.
+            {askedBy(game, turn.src)}
+          </span>
+          <button className="link" onClick={() => run(game.cancelControl(v.id, 'turn'), 'Turn back called off')}>Call off</button>
+        </div>
+      )}
+    </>
+  );
+}
 
 /** Home depot, with a move to another depot (asks first, saying what will happen). */
 function DepotMove({ game, v }: { game: Game; v: Vehicle }) {
@@ -178,7 +221,7 @@ function VehicleInspector({ id }: { id: string }) {
   const line = v.route ? game.state.routes[v.route] : null;
   const st = statusPill(v);
   if (v.status === 'to_depot' && game.state.depots[v.depot]) st.text = `Driving to ${game.state.depots[v.depot].name}`;
-  const load = v.load / m.capacity;
+  const load = occupied(v) / m.capacity;
   const isFollowing = following === v.id;
   const depot = game.state.depots[v.depot];
   const ageDays = Math.floor((game.t - v.bought) / 86400);
@@ -208,6 +251,16 @@ function VehicleInspector({ id }: { id: string }) {
         {v.status === 'maintenance' && <div className="issue info"><Wrench size={16} weight="fill" />Back in service around {new Date((v.until % 86400) * 1000).toISOString().slice(11, 16)}.</div>}
         {v.sell && <div className="issue"><CurrencyCircleDollar size={16} weight="fill" />Will be sold when it reaches {depot?.name ?? 'the depot'}.</div>}
         {v.withdraw && <div className="issue info"><Warehouse size={16} weight="fill" />Leaving service after this trip.</div>}
+        <ControlNotes game={game} v={v} />
+        {v.handover && (
+          <div className="issue info">
+            <Warehouse size={16} weight="fill" />
+            {v.handover.route && game.state.routes[v.handover.route]
+              ? `Moves to line ${game.state.routes[v.handover.route].number} after the trips it already has.`
+              : 'Parks at its depot after the trips it already has.'}
+            {v.handover.src !== 'player' && game.state.automation.workflows[v.handover.src] ? ` Asked by “${game.state.automation.workflows[v.handover.src].name}”.` : ''}
+          </div>
+        )}
         <div className="section">
           <div className="row" style={{ minHeight: 0, marginBottom: 8 }}>
             <span className="k" style={{ display: 'flex', gap: 6, alignItems: 'center' }}><Users size={15} weight="bold" /> Passengers</span>
@@ -215,7 +268,7 @@ function VehicleInspector({ id }: { id: string }) {
           </div>
           <LoadBar value={load} />
           <div className="row faint" style={{ fontSize: 12, marginTop: 6, minHeight: 0 }}>
-            <span>{m.seats} seats · {m.capacity - m.seats} standing</span>
+            <span>{occupied(v) > v.load + 0.5 ? 'Luggage and bags take extra space' : `${m.seats} seats · ${m.capacity - m.seats} standing`}</span>
             <span>{pct(load)} full</span>
           </div>
         </div>
@@ -296,6 +349,7 @@ function LineInspector({ id }: { id: string }) {
   const w = routeWindow(game.state, id, 24);
   const money = routeMoney(game.state, id, 1);
   const weekend = game.isWeekend(game.t);
+  const todayPlan = game.dayPlan(id, serviceDayOf(game.t));
   const req = game.requirement(id);
   const assigned = r.vehicles.length;
   const short = req && req.peak > assigned;
@@ -308,6 +362,8 @@ function LineInspector({ id }: { id: string }) {
   const legDiags = diags.filter((d) => d.kind === 'detour' || d.kind === 'contraflow');
   const busDiag = diags.find((d) => d.kind === 'insufficient-buses');
   const headway = game.headwayAt(id, 0, game.t);
+  const extras = game.scheduledExtras(id).slice(0, 8);
+  const detours = (game.state.detours ?? []).filter((d) => d.route === id);
   return (
     <>
       <div className="p-head">
@@ -332,6 +388,16 @@ function LineInspector({ id }: { id: string }) {
           <span className="v num muted">{headway ? `every ${headway} min now` : 'no service now'}</span>
         </div>
         {problems.map((p) => <div key={p} className="issue bad"><Warning size={16} weight="fill" />{p}</div>)}
+        {detours.length > 0 && (
+          <div className="issue info">
+            <Path size={16} weight="bold" />
+            <span className="grow">
+              {detours.every((d) => d.state === 'end') ? 'Going back to its usual route: each stretch switches once no bus is on it.' : `On a temporary detour until ${hhmm(detours[0].until)}${detours[0].why ? ` (${detours[0].why})` : ''}: ${detours.length} stretch${detours.length === 1 ? '' : 'es'} on other roads, same stops.`}
+              {askedBy(game, detours[0].src)}
+            </span>
+            {!detours.every((d) => d.state === 'end') && <button className="link" onClick={() => run(game.endDetour(id), `Line ${r.number} goes back to its usual route`)}>End now</button>}
+          </div>
+        )}
         {short && !r.suspended && busDiag && <DiagnosticButton d={busDiag} onOpen={() => useUI.getState().openModal({ kind: 'timetable', route: id })} />}
         {legDiags.slice(0, 2).map((d) => <DiagnosticButton key={d.id} d={d} onOpen={() => useUI.getState().openRouteCheck({ route: id, pat: d.pat ?? 0, leg: d.leg ?? 0 })} />)}
         {legDiags.length > 2 && (
@@ -351,13 +417,46 @@ function LineInspector({ id }: { id: string }) {
           <div className="row"><span className="k">Result</span><span className={`v num ${money.profit >= 0 ? 'mint' : 'coral'}`}>{game.money(money.profit, { sign: true })}</span></div>
           <div className="faint" style={{ fontSize: 11.5, marginTop: 2 }}>Includes yesterday. Drivers, energy, maintenance and insurance of this line's buses; depots and stops are in Finances.</div>
         </div>
+        <LineCharacter game={game} id={id} />
         <div className="section">
           <div className="row" style={{ minHeight: 0, marginBottom: 6 }}>
             <span className="label">Timetable · {weekend ? 'weekend' : 'weekday'}</span>
             <button className="link" onClick={() => useUI.getState().openModal({ kind: 'timetable', route: id })}>Edit</button>
           </div>
-          <div className="t" style={{ fontWeight: 700 }}>{describeTimetable(r.timetable, weekend)}</div>
+          <div className="t" style={{ fontWeight: 700 }}>{describeTimetable({ ...r.timetable, [weekend ? 'weekend' : 'weekday']: todayPlan.plan }, weekend)}</div>
+          {todayPlan.planId && <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>Today this is the "{todayPlan.name}" plan, not the normal timetable.</div>}
           {req && <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>Needs {req.peak} bus{req.peak === 1 ? '' : 'es'} at peak · round trip ≈ {Math.round(Math.max(0, ...req.bands.map((b) => b.cycle)))} min incl. layover</div>}
+          {extras.length > 0 && (
+            <>
+              <div className="label" style={{ marginTop: 10, marginBottom: 4 }}>Extra departures planned</div>
+              <div className="mini-list">
+                {extras.map((x) => {
+                  const pat = pats.find((p) => p.index === x.pat);
+                  const from = pat ? game.state.stops[pat.stops[0]]?.name : null;
+                  const by = x.extra && x.extra !== 'player' ? game.state.automation.workflows[x.extra]?.name : null;
+                  const bus = x.veh ? game.state.vehicles[x.veh] : null;
+                  return (
+                    <div className="mini-row" key={x.id}>
+                      <div className="grow" style={{ minWidth: 0, padding: '3px 0' }}>
+                        <div className="t"><span className="num">{hhmm(x.dep)}</span>{from ? `from ${from}` : ''}</div>
+                        {(bus || by) && (
+                          <div className="faint" style={{ fontSize: 11.5 }}>
+                            {[bus ? `#${bus.fleetNo} on its way` : '', by ? `Planned by “${by}”` : ''].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
+                      </div>
+                      {!bus && (
+                        <button className="icon-btn sm has-tip" onClick={() => run(game.cancelExtra(id, x.id), `Extra departure at ${hhmm(x.dep)} cancelled`)} aria-label="Cancel extra departure">
+                          <X size={13} weight="bold" />
+                          <Tip label="Cancel" hint="Automations do not plan it again for 24 hours" side="left" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
         <div className="section">
           <div className="row" style={{ minHeight: 0, marginBottom: 6 }}>
@@ -451,8 +550,14 @@ export function catchment(game: Game, at: LngLat) {
       residents += d.residents[j * d.w + i];
       jobs += d.jobs[j * d.w + i];
     }
-  const pois = game.region.pois.filter((p) => distanceM(p.lngLat, at) <= R && p.name).sort((a, b) => b.weight - a.weight).slice(0, 3);
-  return { residents: Math.round(residents / 50) * 50, jobs: Math.round(jobs / 50) * 50, pois };
+  // the most significant places within the walk (Place Registry), measured to their nearest way in
+  const places = game.geo.places
+    .near(at, R + 250)
+    .filter((q) => walkDistanceM(q.place, at) <= R)
+    .sort((a, b) => placeSignificance(b.place) - placeSignificance(a.place) || a.d - b.d)
+    .slice(0, 4)
+    .map((q) => q.place);
+  return { residents: Math.round(residents / 50) * 50, jobs: Math.round(jobs / 50) * 50, places };
 }
 
 function StopInspector({ id }: { id: string }) {
@@ -501,7 +606,17 @@ function StopInspector({ id }: { id: string }) {
             <Kpi value={c.jobs.toLocaleString()} label="Jobs" />
             <Kpi value={String(waitingAt(game.state, id))} label="Waiting now" />
           </div>
-          {c.pois.length > 0 && <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>Nearby: {c.pois.map((p) => `${p.name} (${POI_LABEL[p.kind].toLowerCase()})`).join(', ')}</div>}
+          {c.places.length > 0 && (
+            <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
+              Nearby:{' '}
+              {c.places.map((p, i) => (
+                <span key={p.id}>
+                  {i > 0 && ', '}
+                  <button className="link" onClick={() => useUI.getState().select({ kind: 'place', id: p.id })}>{p.name}</button> ({PLACE_LABEL[p.category].toLowerCase()})
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       <div className="p-foot">

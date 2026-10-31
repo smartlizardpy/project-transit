@@ -313,8 +313,11 @@ export function buildPatterns(state: GameState, region: Region, geo: Geo, r: Rou
     const contraflowText = 'Part of this line runs against a one-way street (probably a gap in the map data).';
     if (contraflowLegs.length) warnings.push(contraflowText);
     const detours: { leg: number; text: string }[] = [];
+    // a stretch on a temporary detour (road works, an event) is meant to go the long way round
+    const temporary = new Set((state.detours ?? []).filter((d) => d.route === r.id && JSON.stringify(r.via[d.key]) === JSON.stringify(d.via)).map((d) => d.key));
     if (valid) {
       for (let i = 0; i + 1 < stops.length; i++) {
+        if (temporary.has(`${pi === 0 ? 'o' : 'r'}:${i}`)) continue;
         const a = state.stops[stops[i]], b = state.stops[stops[i + 1]];
         const road = stopS[i + 1] - stopS[i];
         const straight = distanceM(a.lngLat, b.lngLat);

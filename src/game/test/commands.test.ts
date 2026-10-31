@@ -51,7 +51,7 @@ describe('extra departures', () => {
 
   it('never takes a bus off a trip with passengers on board', () => {
     let busy = Object.values(game.state.vehicles).find((x) => x.route === line.route && x.load > 0);
-    for (let i = 0; i < 30 && !busy; i++) {
+    for (let i = 0; i < 360 && !busy; i++) {
       game.run(30);
       busy = Object.values(game.state.vehicles).find((x) => x.route === line.route && x.load > 0);
     }

@@ -18,6 +18,16 @@ export const BARCELONA_BORN_SPEC: RegionSpec = {
   tiles: [8290, 8291, 8292].flatMap((x) => [6118, 6119, 6120].map((y) => [x, y] as [number, number])),
 };
 
+/** Barcelona–El Prat airport and its terminals: `node scripts/dev/fetch-test-tiles.mjs 2.075 41.295 3 3` */
+export const BARCELONA_AIRPORT_SPEC: RegionSpec = {
+  id: 'test-barcelona-airport',
+  city: 'Barcelona',
+  area: 'El Prat airport',
+  country: 'ES',
+  centre: [2.075, 41.295],
+  tiles: [8285, 8286, 8287].flatMap((x) => [6123, 6124, 6125].map((y) => [x, y] as [number, number])),
+};
+
 export function hasTiles(spec: RegionSpec): boolean {
   return existsSync(ROOT) && spec.tiles.every(([x, y]) => existsSync(join(ROOT, String(x), `${y}.pbf`)));
 }

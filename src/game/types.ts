@@ -3,14 +3,18 @@
 
 import type { LngLat } from './world/graph.ts';
 import type { RegionSpec } from './world/region.ts';
+import type { PlaceSnapshotState } from './world/places.ts';
+import type { WeatherKind, WeatherState } from './weather.ts';
+import type { EventsState } from './events.ts';
 
 import type { AnalyticsState } from './analytics/types.ts';
 import type { ControlState } from './control.ts';
 import type { AutomationState } from './automation/types.ts';
+import type { CalendarState, Season } from './calendar.ts';
 
 export type Id = string;
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 
 // ─────────────────────────────────────────── company
 
@@ -59,6 +63,28 @@ export interface Timetable {
   weekend: DayPlan;
   /** minimum recovery time at termini, minutes */
   layover: number;
+  /** saved variants of the weekday and weekend plans; the first enabled one that holds replaces the normal plan */
+  plans?: ServicePlan[];
+}
+
+/** When a service plan runs. */
+export type PlanCondition =
+  | { kind: 'season'; season: Season }
+  | { kind: 'school_holidays' }
+  | { kind: 'uni_break' }
+  | { kind: 'public_holiday' }
+  /** an event at a venue near the line that day */
+  | { kind: 'event_day' }
+  /** switched by the player (and by automation) */
+  | { kind: 'manual'; on: boolean };
+
+export interface ServicePlan {
+  id: string;
+  name: string;
+  enabled: boolean;
+  when: PlanCondition;
+  weekday: DayPlan;
+  weekend: DayPlan;
 }
 
 export type RouteKind = 'loop' | 'linear';
@@ -132,6 +158,8 @@ export interface Vehicle {
   until: number;
   /** passengers on board (mirrors the passenger groups) */
   load: number;
+  /** space taken on board, in commuter places: luggage and bags take more (missing: equal to load) */
+  sp?: number;
   /** seconds behind schedule at the last stop (negative = early) */
   delay: number;
   /** player asked for this bus to leave service */
@@ -139,9 +167,22 @@ export interface Vehicle {
   /** heading for maintenance after the current work */
   wantsService: boolean;
   /** pattern this vehicle will start when its deadhead arrives */
-  target?: { route: Id; pat: number };
+  target?: { route: Id; pat: number; at?: number };
+  /**
+   * Hold at a stop (control-room holding, e.g. to even out bunched buses or wait for a
+   * connection): `min` minutes after its normal stop time at `stop` (null: the next stop it
+   * serves) on trip `trip`. `until` is set when the hold starts.
+   */
+  hold?: { stop: Id | null; min: number; trip: number | null; until?: number; src: string; set: number };
+  /** Turn back early (a short turn): end trip `trip` at stop index `at` and run back from there. */
+  turn?: { trip: number; at: number; src: string };
   /** sell the bus once it is back at its depot */
   sell?: boolean;
+  /**
+   * After the trips it already has, move to this line (null: park as a spare). Until then it
+   * takes no new trips, so no departure it was given is missed.
+   */
+  handover?: { route: Id | null; src: string };
 }
 
 // ─────────────────────────────────────────── timetable trips
@@ -169,6 +210,38 @@ export interface Trip {
   endDelay?: number;
   /** an extra departure outside the timetable, and who asked for it ('player' or a workflow id) */
   extra?: string;
+  /** a scheduled extra departure: the bus asked for (it may also be a spare bus) */
+  want?: Id;
+  /** a scheduled extra departure moved off a timetable departure: the time asked for */
+  ask?: number;
+  /** first stop index served (a bus that turned back joins the other direction part-way) */
+  from?: number;
+  /** a timetable departure moved earlier or later: its timetable time and who moved it */
+  adj?: { from: number; src: string };
+  /** the trip was ended early at this stop index (a short turn) */
+  short?: number;
+}
+
+/** A temporary detour: one leg of a line drives another way until `until`, then goes back. */
+export interface Detour {
+  id: number;
+  route: Id;
+  /** pattern and leg (from stop `leg` to stop `leg + 1`), and its key in Route.via */
+  pat: number;
+  leg: number;
+  key: string;
+  /** waypoints for the detour, and the leg's own waypoints to put back */
+  via: LngLat[];
+  prev: LngLat[] | null;
+  from: number;
+  until: number;
+  /** 'player' or the workflow that asked */
+  src: string;
+  /** waiting for the leg to be clear of buses before switching ('start' or 'end'), or running */
+  state: 'start' | 'on' | 'end';
+  why: string;
+  /** extra driving on the leg, seconds (free-flow) */
+  extra: number;
 }
 
 // ─────────────────────────────────────────── passengers
@@ -178,6 +251,8 @@ export interface Leg {
   r: Id;
   p: number;
   a: Id;
+  /** where this leg is boarded, when it is not where the last leg got off: a walk between nearby stops */
+  b?: Id;
 }
 
 export interface PaxGroup {
@@ -204,6 +279,13 @@ export interface PaxGroup {
   fr: Id | null;
   /** load factor when the group boarded (for crowding exposure) */
   lb?: number;
+  /**
+   * City Activity Engine: traveller type (index into TRAVELLERS), tour kind (index into KINDS),
+   * and set on the way home of a round trip. Missing on groups from older saves (a mixed type).
+   */
+  k?: number;
+  pu?: number;
+  ret?: 1;
 }
 
 export interface PassengerState {
@@ -211,6 +293,11 @@ export interface PassengerState {
   onboard: Record<Id, PaxGroup[]>;
   /** fractional generation accumulators per OD pair */
   acc: Record<string, number>;
+  /**
+   * The away pool: people who travelled out on your network and will travel home later.
+   * Key `${from stop}>${to stop}>${tour kind}`; value [minute, people, minute, people, …], sorted.
+   */
+  away: Record<string, number[]>;
 }
 
 // ─────────────────────────────────────────── finance
@@ -293,6 +380,8 @@ export interface DayStats {
   costs: number;
   reputation: number;
   balance: number;
+  /** the day's weather: kind, high and low (°C) and rain (mm); absent before weather existed */
+  wx?: { k: WeatherKind; hi: number; lo: number; mm: number };
 }
 
 export interface StatsState {
@@ -316,7 +405,7 @@ export interface Notification {
   tone: 'info' | 'good' | 'warn' | 'bad';
   title: string;
   body?: string;
-  ref?: { kind: 'vehicle' | 'route' | 'stop' | 'depot' | 'zone'; id: Id };
+  ref?: { kind: 'vehicle' | 'route' | 'stop' | 'depot' | 'zone' | 'place'; id: Id };
   read?: boolean;
 }
 
@@ -335,6 +424,8 @@ export interface GameState {
   trips: Record<Id, Trip[]>;
   /** service day the trips were generated for, per route */
   tripDay: Record<Id, number>;
+  /** temporary detours (absent in older saves) */
+  detours?: Detour[];
   pax: PassengerState;
   finance: FinanceState;
   stats: StatsState;
@@ -342,7 +433,7 @@ export interface GameState {
   territory: { owned: string[]; home: string; start?: string[] };
   objectives: Record<string, ObjectiveState>;
   notifications: Notification[];
-  counters: { stop: number; route: number; vehicle: number; depot: number; ledger: number; trip: number; notification: number };
+  counters: { stop: number; route: number; vehicle: number; depot: number; ledger: number; trip: number; notification: number; detour?: number };
   settings: { autoService: boolean; serviceBelow: number };
   onboarding: { active: boolean; step: number; flags: Record<string, boolean> };
   /** operational history, recorded from day one (save version 2) */
@@ -351,4 +442,25 @@ export interface GameState {
   control: ControlState;
   /** Automation Studio workflows, memory and history (save version 2) */
   automation: AutomationState;
+  /** the city around the company: calendar, and later weather, events and places (save version 3) */
+  world: WorldState;
+}
+
+/**
+ * City Activity Engine state (save version 3). `seed` never changes after creation: weather,
+ * events and other city randomness hash it with the day, so they never draw from `rng` (which
+ * breakdowns advance) and a reloaded game sees the same city.
+ */
+export interface WorldState {
+  seed: number;
+  calendar: CalendarState;
+  /**
+   * The most significant places of the Place Registry (at most ~300), refreshed when the map
+   * data changes. Lets tools list places without the map tiles, and later anchors saved events.
+   */
+  places: PlaceSnapshotState;
+  /** today's weather and the next two days', with tomorrow's forecast once issued (filled on load when missing) */
+  weather?: WeatherState;
+  /** the event schedule, generated ten days ahead, and recent events with their results (filled on load when missing) */
+  events?: EventsState;
 }

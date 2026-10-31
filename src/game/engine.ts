@@ -4,29 +4,39 @@
 
 import type { Region } from './world/region.ts';
 import { Geo } from './world/geo.ts';
+import { placeSnapshot, placesDigest } from './world/places.ts';
 import { SimulatedTraffic } from './world/traffic.ts';
 import { route as routeLeg, type LngLat } from './world/graph.ts';
 import { buildPatterns, checkDepot, checkStop, type Pattern } from './network.ts';
 import type { Path } from './paths.ts';
-import { DemandModel, abandonAndReplan, generatePassengers, offloadAll, paxTotals, type PatternService, type StopEvent } from './passengers.ts';
-import { bandAt, buildRunProfile, defaultTimetable, generateTrips, normaliseBands, requirement, scheduleAt, type Requirement, type RunProfile } from './timetable.ts';
+import { DemandModel, abandonAndReplan, awayTotal, generatePassengers, offloadAll, paxTotals, type PatternService, type StopEvent } from './passengers.ts';
+import { bandAt, buildRunProfile, pickPlan, defaultTimetable, generateTrips, normaliseBands, requirement, scheduleAt, type Requirement, type RunProfile } from './timetable.ts';
 import { abortService, detachFromPattern, dispatch, extraOption, minuteVehicles, PREP, sendToDepot, startDeadhead, startExtra, tickVehicle, transferDepot, vehicleNode, vehicleXY, type ExtraOption } from './vehicles.ts';
 import { waitingAt } from './passengers.ts';
 import { compactLedger, emptyFinance, flushHour, post, reconcile } from './finance.ts';
 import { checkObjectives, closeDay, licenceInfo, notify, startingZones, routeWindow, unlockedModels } from './progress.ts';
 import { currencyFor, formatMoney, type Currency } from './currency.ts';
 import { DAY, DT, ECON, HOUR, LINE_COLOURS, MODEL, SERVICE, SPEEDS, STARTING_REPUTATION } from './content.ts';
-import { SAVE_VERSION, TripState, type GameState, type Id, type Route, type RouteKind, type Stop, type Timetable, type Trip, type Vehicle } from './types.ts';
+import { calendarDay, calendarPattern, dayType, newCalendar, type CalendarDay, type DayType } from './calendar.ts';
+import { mix } from './hash.ts';
+import { climateFor } from './climate.ts';
+import { advanceWeather, climateAt, forecastFor, weatherSeed, CONDITION_LABEL, hourCondition, hourTemp, WEATHER_LABEL, type Climate, type WeatherDay } from './weather.ts';
+import { weatherEffect, type WeatherEffect } from './activity/conditions.ts';
+import { CROWD_KINDS, EVENT_HORIZON, EVENT_TEMPLATES, EVENTS_VERSION, actualEnd, announcement, eventSeed, eventsForDay, whenLabel, type GameEvent } from './events.ts';
+import { SAVE_VERSION, TripState, type GameState, type DayPlan, type Id, type Route, type RouteKind, type Stop, type ServicePlan, type Timetable, type Trip, type Vehicle } from './types.ts';
 import { hhmm, serviceDayOf, serviceDayWeekend, weekdayOf } from './time.ts';
 import { emptyAnalytics } from './analytics/types.ts';
 import { closeAnalyticsDay, recAssignment, sampleWaiting } from './analytics/record.ts';
+import { labelClosingDay } from './analytics/labels.ts';
 import { checkUnlock, closeControlDay, emptyControl } from './control.ts';
 import { emptyAutomation } from './automation/types.ts';
 import { upgradeState } from './upgrade.ts';
 import { METRIC_VARIABLES, type CustomMetric, type SavedReport } from './analytics/query.ts';
 import { checkExpr } from './expr.ts';
-import { approveProposal, daySummary, declineProposal, processAutomation, refreshWants, runNow, validation } from './automation/executor.ts';
+import { approveProposal, daySummary, declineProposal, processAutomation, refreshWants, runNow, validation, weekSummary } from './automation/executor.ts';
+import { clearPending } from './automation/watch.ts';
 import { simEvent } from './automation/events.ts';
+import { detourClock, endDetours } from './operations.ts';
 import * as auto from './automation/manage.ts';
 import type { RunRecord, Workflow } from './automation/types.ts';
 import type { Validation } from './automation/validate.ts';
@@ -63,6 +73,7 @@ function busyReason(v: Vehicle): string {
   }
 }
 
+const MAX_PLANS = 8;
 export type Result<T = undefined> = { ok: true; value: T } | { ok: false; error: string };
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const fail = (error: string): Result<never> => ({ ok: false, error });
@@ -83,20 +94,22 @@ export interface NewGameOptions {
 }
 
 export function newGameState(o: NewGameOptions): GameState {
+  const seed = (o.seed ?? Math.floor(Math.random() * 2 ** 31)) >>> 0;
+  const startWeekday = o.startWeekday ?? 0;
   const state: GameState = {
     version: SAVE_VERSION,
     meta: { id: `g${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`, created: Date.now(), saved: 0, playSeconds: 0 },
     region: { ...o.region.spec, fingerprint: o.region.fingerprint },
     company: { name: o.company.name.trim() || 'City Transit', colour: o.company.colour, logo: o.company.logo, founded: 0, reputation: STARTING_REPUTATION, fare: ECON.referenceFare, status: 'ok', redDays: 0 },
-    clock: { t: (o.startHour ?? 5) * HOUR, startWeekday: o.startWeekday ?? 0 },
-    rng: (o.seed ?? Math.floor(Math.random() * 2 ** 31)) >>> 0,
+    clock: { t: (o.startHour ?? 5) * HOUR, startWeekday },
+    rng: seed,
     stops: {},
     routes: {},
     depots: {},
     vehicles: {},
     trips: {},
     tripDay: {},
-    pax: { waiting: {}, onboard: {}, acc: {} },
+    pax: { waiting: {}, onboard: {}, acc: {}, away: {} },
     finance: emptyFinance(ECON.startingFunds),
     stats: { hours: [], routeHours: {}, days: [], total: { trips: 0, boardings: 0, abandoned: 0 } },
     territory: { owned: startingZones(o.region.zones, o.homeZone), home: o.homeZone, start: startingZones(o.region.zones, o.homeZone) },
@@ -108,6 +121,7 @@ export function newGameState(o: NewGameOptions): GameState {
     analytics: emptyAnalytics(Math.floor(((o.startHour ?? 5) * HOUR) / DAY)),
     control: emptyControl(),
     automation: emptyAutomation(),
+    world: { seed: mix(seed, 0x57041d), calendar: newCalendar(startWeekday), places: placeSnapshot(o.region.cityPlaces ?? []) },
   };
   post(state, { amt: ECON.startingFunds, cat: 'equity', memo: `Founding capital, ${state.company.name}` });
   return state;
@@ -119,6 +133,8 @@ export class Game {
   readonly geo: Geo;
   readonly traffic: SimulatedTraffic;
   readonly trafficIntensity: number;
+  /** the climate the weather is generated from (station statistics) */
+  readonly climate: Climate;
   readonly demand = new DemandModel();
   readonly currency: Currency;
   /** derived per-route data */
@@ -139,7 +155,8 @@ export class Game {
   private prevPose = new Map<Id, Pose & { key: string }>();
   private listeners = new Map<string, Set<Listener>>();
   /** passenger accounting since this session started */
-  readonly counters = { generated: 0, boardings: 0, completed: 0, lost: 0 };
+  /** passenger accounting since this session started (the audit checks it); away/returned: people sent away on a round trip and released to come home */
+  readonly counters = { generated: 0, boardings: 0, completed: 0, lost: 0, away: 0, returned: 0 };
   /** recent stop events for subtle UI feedback */
   readonly recentStops: { t: number; stop: Id; veh: Id; board: number; alight: number }[] = [];
   /** index into SPEEDS */
@@ -158,8 +175,15 @@ export class Game {
     this.geo = new Geo(region);
     this.traffic = new SimulatedTraffic(region.graph, region.demand, state.clock.startWeekday);
     this.trafficIntensity = this.traffic.intensity;
+    this.climate = climateFor(region.spec, this.state.world.weather?.station);
+    this.ensureWeather();
+    this.ensureEvents();
+    this.traffic.conditions = (t) => this.weatherEffectAt(t).road;
+    this.traffic.local = (t) => this.eventTraffic(t);
     this.currency = currencyFor(state.region.country);
     if (state.region.fingerprint !== region.fingerprint) this.resnap();
+    // the save keeps a snapshot of the significant places; refresh it when the map data changed
+    if (this.state.world.places.digest !== placesDigest(region.cityPlaces ?? [])) this.state.world.places = placeSnapshot(region.cityPlaces ?? []);
     this.reconcileTerritory();
     for (const r of Object.values(state.routes)) this.rebuildDerived(r.id);
     this.reindexTrips();
@@ -167,6 +191,7 @@ export class Game {
     for (const n of state.notifications) if (n.ref?.kind === 'route' && n.title.includes(' missed the ')) this.missNotice.set(n.ref.id, n.t);
     const pax = paxTotals(state);
     this.counters.generated = pax.waiting + pax.onboard;
+    this.counters.away = awayTotal(state);
     refreshWants(this);
     this.refreshQuality();
   }
@@ -255,6 +280,8 @@ export class Game {
 
   private minute() {
     const t = this.t;
+    if (t >= this.eventNext) this.eventClock();
+    detourClock(this);
     for (const r of Object.values(this.state.routes)) this.ensureTrips(r.id);
     dispatch(this);
     // demand inputs depend only on saved state and the hour slot, so a loaded game rebuilds the same rates
@@ -277,6 +304,8 @@ export class Game {
 
   private hour() {
     const t = this.t;
+    if (Math.floor((t % DAY) / HOUR) === 18) this.issueForecast(true);
+    this.weatherChange(t);
     flushHour(this.state, t - 1, `${hhmm(t - HOUR)}–${hhmm(t)}`);
     sampleWaiting(this.state);
     if (Math.floor((t % DAY) / HOUR) === 4) compactLedger(this.state);
@@ -287,6 +316,12 @@ export class Game {
     const t = this.t;
     const ended = t / DAY - 1;
     closeDay(this, ended);
+    const wx = this.weatherDay(ended)?.actual;
+    const row = this.state.stats.days.at(-1);
+    if (wx && row?.day === ended) row.wx = { k: wx.kind, hi: wx.hi, lo: wx.lo, mm: Math.round(wx.mm.reduce((a, b) => a + b, 0) * 10) / 10 };
+    labelClosingDay(this, ended); // before the weather moves on to the next day
+    this.ensureWeather();
+    this.ensureEvents();
     this.demand.slot = -1; // reputation moved: re-rate demand
     closeAnalyticsDay(this.state, ended);
     closeControlDay(this, ended);
@@ -294,6 +329,8 @@ export class Game {
     if (c.status === 'insolvent' && c.redDays > ECON.graceDays + 7) this.bankrupt('The company stayed insolvent for too long and has been wound up.');
     this.dailyCosts();
     simEvent(this, 'day', daySummary(this, ended) as Record<string, number>);
+    // a game week ends when tomorrow starts a new one (weekly figures were just rolled up)
+    if (this.autoWants.has('week') && this.calendarAt((ended + 1) * DAY + DAY / 2).week !== this.calendarAt(ended * DAY + DAY / 2).week) simEvent(this, 'week', weekSummary(this) as Record<string, number>);
     this.emit('day', ended);
   }
 
@@ -337,6 +374,290 @@ export class Game {
     return weekdayOf(this.state.clock.startWeekday, t) >= 5;
   }
 
+  /** Where time `t` falls in the game year (season and week; never a real date). */
+  calendarAt(t = this.state.clock.t): CalendarDay {
+    return calendarDay(this.state.world.calendar, this.state.clock.startWeekday, Math.floor(t / DAY));
+  }
+
+  /** The kind of day at time `t`: weekend, public holiday, school day, teaching or exam week (typical pattern for the country). */
+  dayTypeAt(t = this.state.clock.t): DayType {
+    return dayType(this.calendarAt(t), calendarPattern(this.region.spec.country));
+  }
+
+  // ───────────────────────────────────────── weather
+
+  private get weatherSeed(): number {
+    return weatherSeed(this.state.world.seed, this.climate.station);
+  }
+
+  /** Saved weather for today and the next two days (generated from the climate when missing). */
+  private ensureWeather() {
+    const w = (this.state.world.weather ??= { station: this.climate.station, days: [] });
+    w.station = this.climate.station;
+    const today = Math.floor(this.state.clock.t / DAY);
+    advanceWeather(w, this.weatherSeed, today, (d) => climateAt(this.climate, this.calendarAt(d * DAY + DAY / 2).phase));
+    // a game loaded or started after 18:00 gets tomorrow's forecast straight away
+    if ((this.state.clock.t % DAY) / HOUR >= 18) this.issueForecast(false);
+  }
+
+  /** The saved weather of a game day (today and the next two days; null otherwise). */
+  weatherDay(day: number): WeatherDay | null {
+    return this.state.world.weather?.days.find((d) => d.day === day) ?? null;
+  }
+
+  /** How the weather changes travel in the hour containing t. */
+  weatherEffectAt(t = this.state.clock.t): WeatherEffect {
+    const day = Math.floor(t / DAY);
+    return weatherEffect(this.weatherDay(day)?.actual, Math.floor((t - day * DAY) / HOUR));
+  }
+
+  /** On the hour: when the weather changes from the hour before, automation hears of it. */
+  private weatherChange(t: number) {
+    if (!this.autoWants.has('weather')) return;
+    const day = Math.floor(t / DAY), h = Math.floor((t - day * DAY) / HOUR);
+    const now = this.weatherDay(day)?.actual;
+    const before = h > 0 ? now : this.weatherDay(day - 1)?.actual ?? now;
+    if (!now || !before) return;
+    const to = hourCondition(now, h), from = hourCondition(before, (h + 23) % 24);
+    if (to === from) return;
+    simEvent(this, 'weather', { from, to, label: CONDITION_LABEL[to], wasLabel: CONDITION_LABEL[from], hour: h, time: hhmm(day * DAY + h * HOUR), temp: Math.round(hourTemp(now, h)) });
+  }
+
+  /** Issues tomorrow's forecast (at 18:00), with a warning for heavy rain, snow or heat. */
+  private issueForecast(announce: boolean) {
+    const tomorrow = this.weatherDay(Math.floor(this.state.clock.t / DAY) + 1);
+    if (!tomorrow || tomorrow.forecast) return;
+    const f = (tomorrow.forecast = forecastFor(this.weatherSeed, tomorrow.day, tomorrow.actual, this.state.clock.t));
+    // organisers call off outdoor events when storms are forecast
+    if (f.kind === 'heavy' || f.kind === 'snow') this.cancelOutdoor(tomorrow.day, `${WEATHER_LABEL[f.kind].toLowerCase()} is forecast`, announce);
+    if (!announce) return;
+    simEvent(this, 'forecast', { day: tomorrow.day, type: f.kind, label: WEATHER_LABEL[f.kind], high: f.hi, low: f.lo, chanceOfRain: f.pop, wet: f.kind !== 'clear' && f.kind !== 'cloudy', storm: f.kind === 'heavy' || f.kind === 'snow', hot: f.hi >= 32 });
+    if (f.kind === 'heavy' || f.kind === 'snow')
+      notify(this, 'warn', `${WEATHER_LABEL[f.kind]} forecast for tomorrow`, `Roads will be slower, so buses may run late. Fewer people will walk or cycle${f.kind === 'snow' ? ', and some will not travel at all' : ''}.`);
+    else if (f.hi >= 32) notify(this, 'info', `Hot day tomorrow, ${f.hi} °C`, 'More people head for beaches and the waterfront; long walks and waits in the sun put people off.');
+  }
+
+  // ───────────────────────────────────────── events (plan 9.3)
+
+  /** next game time an event is announced, starts or ends (checked each minute) */
+  private eventNext = 0;
+  /** per event: road edges near the venue and how much of the extra congestion each gets */
+  private eventEdges = new Map<string, { e: Int32Array; w: Float32Array }>();
+
+  /** The saved schedule, generated ten days ahead (events of past days are kept for 14 days). */
+  private ensureEvents() {
+    const today = Math.floor(this.state.clock.t / DAY);
+    const e = (this.state.world.events ??= { v: EVENTS_VERSION, nextId: 0, through: today - 1, list: [] });
+    const seed = eventSeed(this.state.world.seed);
+    for (let d = Math.max(e.through + 1, today); d <= today + EVENT_HORIZON; d++) {
+      const mid = d * DAY + DAY / 2;
+      for (const x of eventsForDay({ seed, day: d, cal: this.calendarAt(mid), type: this.dayTypeAt(mid), places: this.region.cityPlaces ?? [], transit: this.region.transit })) e.list.push({ id: `e${++e.nextId}`, ...x });
+      e.through = d;
+    }
+    // a game loaded later than an announcement: announced without a notice
+    const t = this.state.clock.t;
+    for (const ev of e.list) {
+      if (!ev.announced && ev.ann < t - HOUR) ev.announced = 1;
+      if (!ev.started && ev.start < t - HOUR) ev.started = 1;
+      if (!ev.ended && actualEnd(ev) < t - HOUR) ev.ended = 1;
+    }
+    e.list = e.list.filter((ev) => actualEnd(ev) >= (today - 14) * DAY);
+    this.eventNext = 0;
+  }
+
+  /** Every saved event (past 14 days, today and the next ten days). */
+  eventList(): GameEvent[] {
+    return this.state.world.events?.list ?? [];
+  }
+
+  /** Announced events still to come or under way (not called off), soonest first. */
+  upcomingEvents(t = this.state.clock.t): GameEvent[] {
+    return this.eventList().filter((ev) => ev.announced && !ev.cancelled && actualEnd(ev) > t).sort((a, b) => a.start - b.start);
+  }
+
+  /** Announcements, starts and ends that are due: notices and automation events. */
+  private eventClock() {
+    const t = this.state.clock.t;
+    let next = Infinity;
+    for (const ev of this.eventList()) {
+      if (!ev.announced) {
+        if (ev.ann <= t) this.announceEvent(ev);
+        else next = Math.min(next, ev.ann);
+      }
+      if (!ev.started) {
+        if (ev.start <= t) {
+          ev.started = 1;
+          if (ev.kind === 'rail' || ev.kind === 'flight') this.demand.slot = -1;
+        } else next = Math.min(next, ev.start);
+      }
+      if (!ev.ended) {
+        const end = actualEnd(ev);
+        // extra time is revealed at the planned end
+        if (ev.extra && !ev.cancelled && ev.end <= t && t < ev.end + 60) notify(this, 'info', `Extra time at ${ev.venue}`, `The match goes on for another ${ev.extra} minutes: crowds will leave later than planned.`, { kind: 'place', id: ev.place });
+        if (end <= t) {
+          ev.ended = 1;
+          if (!ev.cancelled) {
+            if (ev.kind === 'rail') notify(this, 'good', `${ev.title}: service restored`, 'The line is running again.', { kind: 'place', id: ev.place });
+            if (ev.kind === 'rail' || ev.kind === 'flight') this.demand.slot = -1;
+          }
+        } else next = Math.min(next, ev.extra && ev.end > t ? ev.end : end);
+      }
+    }
+    this.eventNext = next;
+  }
+
+  private announceEvent(ev: GameEvent) {
+    ev.announced = 1;
+    if (ev.cancelled) return;
+    const t = this.state.clock.t;
+    if (ev.kind === 'rail') {
+      notify(this, 'warn', ev.title, `Because of ${ev.reason}, ${ev.mode === 'tram' ? 'trams' : 'trains'} are not running on this stretch until about ${hhmm(ev.end)}. Passengers are looking for other ways to travel, including your buses.`, { kind: 'place', id: ev.place });
+    } else if (ev.kind === 'flight') {
+      notify(this, 'warn', ev.title, `Because of ${ev.reason}, arrivals are held back until about ${hhmm(ev.end)} and will then come in a rush.`, { kind: 'place', id: ev.place });
+    } else {
+      const a = announcement(ev, t, this.state.clock.startWeekday, (n) => n.toLocaleString('en-GB'));
+      notify(this, 'info', a.title, a.body, { kind: 'place', id: ev.place });
+    }
+    simEvent(this, 'eventAnnounced', this.eventData(ev));
+    // a line with a match-day plan picks up the event (trips not yet run are rebuilt)
+    if (CROWD_KINDS.has(ev.kind)) this.refreshEventPlans(Math.floor(ev.start / DAY));
+  }
+
+  /** What automation sees of an event. */
+  eventData(ev: GameEvent): Record<string, string | number | boolean | null> {
+    return {
+      event: ev.id, eventKind: ev.kind, eventTitle: ev.title, place: ev.place, venue: ev.venue, people: ev.people, lng: ev.at?.[0] ?? null, lat: ev.at?.[1] ?? null,
+      start: hhmm(ev.start), end: hhmm(actualEnd(ev)), day: Math.floor(ev.start / DAY), when: whenLabel(ev, this.state.clock.t, this.state.clock.startWeekday), reason: ev.reason ?? null,
+    };
+  }
+
+  /** Outdoor events on a day are called off (storms forecast). */
+  private cancelOutdoor(day: number, why: string, announce: boolean) {
+    for (const ev of this.eventList()) {
+      if (ev.cancelled || Math.floor(ev.start / DAY) !== day || !EVENT_TEMPLATES[ev.kind].outdoor) continue;
+      ev.cancelled = `Called off: ${why}`;
+      if (announce && ev.announced) notify(this, 'warn', `${ev.title} called off`, `The organisers have called it off because ${why}.`, { kind: 'place', id: ev.place });
+    }
+    this.refreshEventPlans(day);
+  }
+
+  /** Lines with a match-day service plan rebuild their trips for `day` when its events change. */
+  private refreshEventPlans(day: number) {
+    const sd = serviceDayOf(this.t);
+    if (day > sd + 1) return;
+    for (const r of Object.values(this.state.routes)) if (r.timetable.plans?.some((p) => p.enabled && p.when.kind === 'event_day')) this.regenerateTrips(r.id);
+  }
+
+  /** Crowd events (not called off) whose attendees may set off between t0 and t1. */
+  crowdEventsSettingOff(t0: number, t1: number): GameEvent[] {
+    return this.eventList().filter((ev) => CROWD_KINDS.has(ev.kind) && !ev.cancelled && ev.start - 4 * HOUR < t1 && (EVENT_TEMPLATES[ev.kind].stay ? ev.end > t0 : ev.start + HOUR > t0));
+  }
+
+  /** The event a traveller at `stop` is going to or coming from at time t: the nearest venue among events under way. */
+  eventFor(stop: Id, t = this.state.clock.t): GameEvent | null {
+    const s = this.state.stops[stop];
+    if (!s) return null;
+    const [x, y] = this.geo.xy(s.lngLat);
+    let best: GameEvent | null = null, bd = 1500;
+    for (const ev of this.eventList()) {
+      if (!CROWD_KINDS.has(ev.kind) || ev.cancelled || t < ev.start - 5 * HOUR || t > actualEnd(ev) + 3 * HOUR) continue;
+      const [vx, vy] = this.geo.xy(ev.at);
+      const d = Math.hypot(vx - x, vy - y);
+      if (d < bd) (bd = d), (best = ev);
+    }
+    return best;
+  }
+
+  /** An event attendee's journey ended: counted for the event (carried, or lost when given up or stranded). */
+  noteEventTrip(stop: Id, n: number, completed: boolean) {
+    const ev = this.eventFor(stop);
+    if (!ev) return;
+    if (completed) ev.carried = (ev.carried ?? 0) + n;
+    else ev.lost = (ev.lost ?? 0) + n;
+  }
+
+  /** Links of the city's transit closed at time t (rail disruptions in the hour from t). */
+  closedTransitLinks(t: number): number[] {
+    const out = new Set<number>();
+    for (const ev of this.eventList()) if (ev.kind === 'rail' && ev.links && ev.start < t + HOUR && actualEnd(ev) > t) for (const l of ev.links) out.add(l);
+    return [...out].sort((a, b) => a - b);
+  }
+
+  /** Arrivals from each airport in the hour from t relative to normal (flight disruptions: held back, then bunched). */
+  flightFactors(t: number): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const ev of this.eventList()) {
+      if (ev.kind !== 'flight' || !ev.share) continue;
+      const mid = t + HOUR / 2;
+      const hours = (ev.end - ev.start) / HOUR;
+      let f = 1;
+      if (mid >= ev.start && mid < ev.end) f = 1 - ev.share;
+      else if (mid >= ev.end && mid < ev.end + 2 * HOUR) f = 1 + (ev.share * hours) / 2;
+      if (f !== 1) out.set(ev.place, (out.get(ev.place) ?? 1) * f);
+    }
+    return out;
+  }
+
+  /** Places with an announced event on service day `sd` near a line (its stops within 1 km of the venue). */
+  eventPlacesNear(route: Id, sd: number): Id[] {
+    const r = this.state.routes[route];
+    if (!r) return [];
+    // announced by now (never ahead of its notice) and by the start of that day
+    const by = Math.min(this.t, sd * DAY);
+    const evs = this.eventList().filter((ev) => CROWD_KINDS.has(ev.kind) && !ev.cancelled && ev.ann <= by && serviceDayOf(ev.start) === sd);
+    if (!evs.length) return [];
+    const stops = [...new Set([...r.stops, ...(r.returnStops ?? [])])].map((id) => this.state.stops[id]).filter(Boolean).map((s) => this.geo.xy(s.lngLat));
+    const out: Id[] = [];
+    for (const ev of evs) {
+      const [vx, vy] = this.geo.xy(ev.at);
+      if (stops.some(([x, y]) => Math.hypot(x - vx, y - vy) <= 1000) && !out.includes(ev.place)) out.push(ev.place);
+    }
+    return out;
+  }
+
+  /** Extra congestion on roads near venues at time t (arrivals before the start, crowds leaving after the end). */
+  private eventTraffic(t: number): Map<number, number> | null {
+    let out: Map<number, number> | null = null;
+    for (const ev of this.eventList()) {
+      if (!CROWD_KINDS.has(ev.kind) || ev.cancelled) continue;
+      const tpl = EVENT_TEMPLATES[ev.kind];
+      const end = actualEnd(ev);
+      if (t < ev.start - 3 * HOUR || t > end + 1.5 * HOUR) continue;
+      // peaks half an hour before the start and a quarter of an hour after the end
+      const bell = (x: number, mu: number, sd: number) => Math.exp(-0.5 * ((x - mu) / sd) ** 2);
+      const shape = tpl.stay
+        ? 0.6 * Math.min(1, Math.max(0, (t - ev.start + HOUR) / (2 * HOUR))) * (t < end ? 1 : bell(t, end, 0.4 * HOUR))
+        : Math.max(bell(t, ev.start - 0.5 * HOUR, 0.8 * HOUR), bell(t, end + 0.25 * HOUR, 0.45 * HOUR));
+      const level = tpl.traffic * Math.min(1, Math.sqrt(ev.people / 30000)) * shape;
+      if (level < 0.01) continue;
+      const near = this.edgesNear(ev);
+      out ??= new Map();
+      for (let i = 0; i < near.e.length; i++) out.set(near.e[i], (out.get(near.e[i]) ?? 0) + level * near.w[i]);
+    }
+    return out;
+  }
+
+  private edgesNear(ev: GameEvent): { e: Int32Array; w: Float32Array } {
+    let hit = this.eventEdges.get(ev.id);
+    if (hit) return hit;
+    const g = this.region.graph;
+    const [vx, vy] = this.geo.xy(ev.at);
+    const R = EVENT_TEMPLATES[ev.kind].radius;
+    const e: number[] = [], w: number[] = [];
+    for (let i = 0; i < g.m; i++) {
+      const a = g.ea[i], b = g.eb[i];
+      const d = Math.hypot((g.x[a] + g.x[b]) / 2 - vx, (g.y[a] + g.y[b]) / 2 - vy);
+      if (d < R) {
+        e.push(i);
+        w.push(1 - d / R);
+      }
+    }
+    hit = { e: Int32Array.from(e), w: Float32Array.from(w) };
+    if (this.eventEdges.size > 40) this.eventEdges.clear();
+    this.eventEdges.set(ev.id, hit);
+    return hit;
+  }
+
   vehicleList(): Vehicle[] {
     return (this.vlist ??= Object.values(this.state.vehicles));
   }
@@ -375,15 +696,42 @@ export class Game {
     const r = this.state.routes[route];
     if (!r) return null;
     const sd = serviceDayOf(t);
-    const plan = serviceDayWeekend(this.state.clock.startWeekday, sd) ? r.timetable.weekend : r.timetable.weekday;
+    const plan = this.dayPlan(route, sd).plan;
     return bandAt(plan, (t - sd * DAY) / 60)?.headway ?? null;
   }
 
-  requirement(route: Id, weekend = this.isWeekend(this.t)): Requirement | null {
+  /**
+   * The plan a line runs on service day `sd`: the first enabled service plan whose condition
+   * holds replaces the normal weekday or weekend plan. `weekend` is the traffic day type.
+   */
+  dayPlan(route: Id, sd: number): { plan: DayPlan; weekend: boolean; planId: string | null; name: string } {
+    const r = this.state.routes[route];
+    const weekend = serviceDayWeekend(this.state.clock.startWeekday, sd);
+    if (!r) return { plan: { bands: [] }, weekend, planId: null, name: 'Normal timetable' };
+    const tt = r.timetable;
+    let dt: DayType | null = null, season: string | null = null;
+    const picked = tt.plans?.length ? pickPlan(tt, (c) => {
+      if (c.kind === 'manual') return c.on;
+      if (c.kind === 'event_day') return this.eventPlacesNear(route, sd).length > 0;
+      const mid = sd * DAY + DAY / 2;
+      dt ??= this.dayTypeAt(mid);
+      season ??= this.calendarAt(mid).season;
+      if (c.kind === 'season') return season === c.season;
+      if (c.kind === 'school_holidays') return dt.schoolHolidays;
+      if (c.kind === 'uni_break') return dt.uni === 'break' && !dt.weekend;
+      return dt.holiday;
+    }) : null;
+    if (picked) return { plan: weekend ? picked.weekend : picked.weekday, weekend, planId: picked.id, name: picked.name };
+    return { plan: weekend ? tt.weekend : tt.weekday, weekend, planId: null, name: 'Normal timetable' };
+  }
+
+  requirement(route: Id, weekend?: boolean): Requirement | null {
     const r = this.state.routes[route];
     const prof = this.profiles.get(route);
     if (!r || !prof) return null;
-    return requirement(r, prof, weekend);
+    if (weekend !== undefined) return requirement(r, prof, weekend);
+    const d = this.dayPlan(route, serviceDayOf(this.t));
+    return requirement(r, prof, d.weekend, d.plan);
   }
 
   /** Services currently offered to passengers (for itinerary planning). */
@@ -487,10 +835,11 @@ export class Game {
     const have = this.state.tripDay[id] ?? sdNow - 1;
     if (have >= sdNow + 1) return;
     const list = (this.state.trips[id] ??= []);
-    const taken = new Set(list.filter((x) => x.state !== TripState.Planned).map((x) => `${x.pat}@${x.dep}`));
+    const taken = new Set(list.filter((x) => x.state !== TripState.Planned).flatMap((x) => (x.adj ? [`${x.pat}@${x.dep}`, `${x.pat}@${x.adj.from}`] : [`${x.pat}@${x.dep}`])));
     const pats = this.patterns.get(id) ?? [];
     for (let sd = have + 1; sd <= sdNow + 1; sd++) {
-      const gen = generateTrips(r, pats, sd, serviceDayWeekend(this.state.clock.startWeekday, sd), () => ++this.state.counters.trip, t);
+      const d = this.dayPlan(id, sd);
+      const gen = generateTrips(r, pats, sd, d.weekend, () => ++this.state.counters.trip, t, d.plan);
       for (const x of gen) {
         if (taken.has(`${x.pat}@${x.dep}`)) continue;
         list.push(x);
@@ -512,12 +861,27 @@ export class Game {
     }
   }
 
+  /** Add a trip made outside the timetable (a bus turning back runs one part-way). */
+  addTrip(trip: Trip) {
+    const list = (this.state.trips[trip.route] ??= []);
+    list.push(trip);
+    list.sort((a, b) => a.dep - b.dep || a.pat - b.pat);
+    this.tripIndex.set(trip.id, trip);
+  }
+
+  /** Rebuild a line's paths and run times after its waypoints changed (temporary detours). */
+  rebuildLine(id: Id) {
+    this.rebuildDerived(id);
+    this.changed();
+  }
+
   /** Drop future unassigned trips and regenerate them from the current timetable. */
   private regenerateTrips(id: Id) {
     const list = this.state.trips[id] ?? [];
     const t = this.t;
     this.state.trips[id] = list.filter((x) => {
-      const drop = x.state === TripState.Planned && x.dep > t;
+      // scheduled extra departures stay: they are not part of the timetable
+      const drop = x.state === TripState.Planned && x.dep > t && !x.extra;
       if (drop) this.tripIndex.delete(x.id);
       return !drop;
     });
@@ -583,6 +947,7 @@ export class Game {
       v.trip = null;
       v.next = null;
       v.load = 0;
+      v.sp = 0;
     }
     s.pax.onboard = {};
     s.trips = {};
@@ -784,6 +1149,8 @@ export class Game {
     const problems = this.routeProblems(r);
     if (problems.length) return fail(problems[0]);
     const geometry = JSON.stringify([old.kind, old.stops, old.returnStops, old.via]) !== JSON.stringify([r.kind, r.stops, r.returnStops, r.via]);
+    const detour = geometry ? (this.state.detours ?? []).find((d) => d.route === id) : undefined;
+    if (detour) return fail(`Line ${old.number} is on a temporary detour until ${hhmm(detour.until)}. End the detour on the line first, then change its route.`);
     if (geometry) {
       const pats = buildPatterns(this.state, this.region, this.geo, r);
       const bad = pats.find((p) => !p.valid);
@@ -814,17 +1181,56 @@ export class Game {
   }
 
   setTimetable(id: Id, tt: Timetable): Result {
+    const old = this.state.routes[id];
     const clean: Timetable = {
       weekday: { bands: normaliseBands(tt.weekday.bands) },
       weekend: { bands: normaliseBands(tt.weekend.bands) },
       layover: Math.max(1, Math.min(30, Math.round(tt.layover))),
     };
+    // plans are edited with setServicePlans; a plain timetable change keeps them
+    const plans = tt.plans ?? old?.timetable.plans;
+    if (plans) clean.plans = plans;
     return this.updateRoute(id, { timetable: clean });
+  }
+
+  /** Replace a line's service plans. Bands are cleaned up as for a timetable; only future planned trips change. */
+  setServicePlans(id: Id, plans: ServicePlan[]): Result {
+    const r = this.state.routes[id];
+    if (!r) return fail('That line no longer exists.');
+    if (plans.length > MAX_PLANS) return fail(`A line can have at most ${MAX_PLANS} service plans.`);
+    const ids = new Set<string>();
+    const clean: ServicePlan[] = [];
+    for (const p of plans) {
+      if (!p.id || ids.has(p.id)) return fail('Each service plan needs its own name and id.');
+      ids.add(p.id);
+      const name = (p.name ?? '').trim().slice(0, 40);
+      if (!name) return fail('Give each service plan a name.');
+      for (const b of [...p.weekday.bands, ...p.weekend.bands]) {
+        if (![b.from, b.to, b.headway].every(Number.isFinite)) return fail('A band has a time that is not valid.');
+      }
+      clean.push({ id: p.id, name, enabled: !!p.enabled, when: { ...p.when }, weekday: { bands: normaliseBands(p.weekday.bands) }, weekend: { bands: normaliseBands(p.weekend.bands) } });
+    }
+    const timetable: Timetable = { ...r.timetable };
+    if (clean.length) timetable.plans = clean; else delete timetable.plans;
+    return this.updateRoute(id, { timetable });
+  }
+
+  /** Switch a manual service plan on or off (the player, or automation). */
+  switchServicePlan(id: Id, planId: Id, on: boolean): Result {
+    const r = this.state.routes[id];
+    if (!r) return fail('That line no longer exists.');
+    const plan = r.timetable.plans?.find((p) => p.id === planId);
+    if (!plan) return fail('That service plan no longer exists.');
+    if (plan.when.kind !== 'manual') return fail('This plan runs by itself and cannot be switched by hand.');
+    if (plan.when.on === on) return ok(undefined);
+    const plans = r.timetable.plans!.map((p) => (p.id === planId ? { ...p, when: { kind: 'manual' as const, on } } : p));
+    return this.updateRoute(id, { timetable: { ...r.timetable, plans } });
   }
 
   deleteRoute(id: Id): Result {
     const r = this.state.routes[id];
     if (!r) return fail('That line no longer exists.');
+    if (this.state.detours) this.state.detours = this.state.detours.filter((d) => d.route !== id);
     this.reshapeRoute(id, () => {
       for (const v of this.vehicleList()) if (v.route === id) v.route = null;
       delete this.state.routes[id];
@@ -970,6 +1376,106 @@ export class Game {
     });
   }
 
+  /** Extra departures scheduled on a line that have not left yet (a bus may already be on its way). */
+  scheduledExtras(route: Id): Trip[] {
+    return (this.state.trips[route] ?? []).filter((x) => x.extra && (x.state === TripState.Planned || x.state === TripState.Assigned) && x.dep > this.t);
+  }
+
+  /** End a line's temporary detour (each stretch goes back to its usual road once no bus is on it). */
+  endDetour(route: Id): Result {
+    const r = endDetours(this, route);
+    if (!r.ok) return r;
+    this.notePlayerChange(`route:${route}`, 'detour', 'detour:off');
+    this.changed();
+    return ok(undefined);
+  }
+
+  /** Call off a bus's planned hold at a stop, or its early turn back. */
+  cancelControl(vehicle: Id, what: 'hold' | 'turn'): Result {
+    const v = this.state.vehicles[vehicle];
+    if (!v || !v[what]) return fail(what === 'hold' ? 'That bus is not being held.' : 'That bus is not turning back early.');
+    delete v[what];
+    this.notePlayerChange(`vehicle:${vehicle}`, what === 'hold' ? 'hold_vehicle' : 'short_turn', 'cancelled');
+    this.changed();
+    return ok(undefined);
+  }
+
+  /** Cancel a scheduled extra departure that no bus has been given yet. */
+  cancelExtra(route: Id, tripId: number): Result {
+    const list = this.state.trips[route] ?? [];
+    const trip = list.find((x) => x.id === tripId);
+    if (!trip || !trip.extra) return fail('That extra departure no longer exists.');
+    if (trip.state !== TripState.Planned) return fail(`A bus is already on its way to run the ${hhmm(trip.dep)} extra departure.`);
+    this.state.trips[route] = list.filter((x) => x !== trip);
+    this.tripIndex.delete(trip.id);
+    // an automation does not schedule it again for 24 game hours
+    this.notePlayerChange(`extra:${route}:${Math.round((trip.ask ?? trip.dep) / 60)}`, 'schedule_extra', 'cancelled');
+    this.changed();
+    return ok(undefined);
+  }
+
+  /**
+   * Check, and with `commit` create, an extra departure at a set time later today or tomorrow
+   * (up to 24 hours ahead). When it is due, the bus asked for runs it (one on this line or a spare),
+   * or else one of the line's free buses or a spare. If no bus is free it is dropped and the player
+   * is told; it never counts as a missed departure.
+   */
+  scheduleExtra(route: Id, at: number, opts: { pat?: number; vehicle?: Id; src?: string; commit?: boolean } = {}): Result<{ trip: number; dep: number; pat: number; first: string; last: string; minutes: number; cost: number; text: string }> {
+    const err = this.requireActive();
+    if (err) return fail(err);
+    const s = this.state;
+    const r = s.routes[route];
+    if (!r) return fail('That line no longer exists.');
+    if (r.suspended) return fail(`Line ${r.number} is suspended.`);
+    const pats = (this.patterns.get(route) ?? []).filter((p) => p.valid);
+    if (!pats.length) return fail(`Line ${r.number} has no drivable route.`);
+    const now = this.t;
+    const asked = Math.round(at / 60) * 60;
+    let dep = asked;
+    if (dep < now + 10 * 60) return fail(`An extra departure needs at least 10 minutes’ notice (the earliest is ${hhmm(now + 10 * 60)}).`);
+    if (dep > now + DAY) return fail('An extra departure can be scheduled up to 24 hours ahead.');
+    if (this.scheduledExtras(route).length >= 12) return fail(`Line ${r.number} already has 12 extra departures scheduled.`);
+    let pat = pats[0];
+    if (opts.pat !== undefined) {
+      const p = pats.find((x) => x.index === opts.pat);
+      if (!p) return fail('That direction does not exist on this line.');
+      pat = p;
+    } else if (pats.length > 1) {
+      // the direction with the most people waiting along it now
+      const waitingOn = (p: Pattern) => p.stops.slice(0, -1).reduce((n, id) => n + waitingAt(s, id), 0);
+      pat = [...pats].sort((a, b) => waitingOn(b) - waitingOn(a) || a.index - b.index)[0];
+    }
+    let fleetNo = '';
+    if (opts.vehicle) {
+      const v = s.vehicles[opts.vehicle];
+      if (!v) return fail('That bus no longer exists.');
+      if (v.sell) return fail(`${v.fleetNo} is being sold.`);
+      if (v.route && v.route !== route) return fail(`${v.fleetNo} runs on line ${s.routes[v.route]?.number ?? '?'}. Use one of line ${r.number}’s buses or a spare.`);
+      fleetNo = v.fleetNo;
+    }
+    const list = (s.trips[route] ??= []);
+    // not at the same minute as another departure in that direction (it would be taken for it)
+    while (list.some((x) => x.pat === pat.index && x.dep === dep)) dep += 60;
+    const sch = this.schedule(route, pat.index, dep);
+    const minutes = Math.round((sch ? sch[sch.length - 1] : pat.path.length / 6) / 60);
+    const moved = dep !== asked ? ` (${hhmm(asked)} is already a departure)` : '';
+    const first = s.stops[pat.stops[0]]?.name ?? 'the first stop';
+    const last = s.stops[pat.stops[pat.stops.length - 1]]?.name ?? 'the last stop';
+    const day = Math.floor(dep / DAY) === Math.floor(now / DAY) ? '' : ' tomorrow';
+    // estimate: driver time for the trip and getting there, and energy for the distance
+    const m = MODEL[(opts.vehicle && s.vehicles[opts.vehicle]?.model) || r.vehicles.map((id) => s.vehicles[id]?.model).find(Boolean) || 'city12'];
+    const km = pat.path.length / 1000 + 3;
+    const cost = Math.round(((minutes + 20) / 60) * ECON.driverPerHour + km * m.energyPerKm * (m.electric ? ECON.electricPrice : ECON.fuelPrice));
+    const text = `Line ${r.number} runs an extra trip from ${first} at ${hhmm(dep)}${day}${moved} to ${last} (${minutes} min) with ${fleetNo || 'one of its free buses or a spare'}. If no bus is free then, it is dropped and you are told; it never counts as a missed departure.`;
+    if (!opts.commit) return ok({ trip: 0, dep, pat: pat.index, first, last, minutes, cost, text });
+    const trip: Trip = { id: ++s.counters.trip, route, pat: pat.index, dep, veh: null, state: TripState.Planned, extra: opts.src ?? 'player', ...(opts.vehicle ? { want: opts.vehicle } : {}), ...(dep !== asked ? { ask: asked } : {}) };
+    list.push(trip);
+    list.sort((a, b) => a.dep - b.dep || a.pat - b.pat);
+    this.tripIndex.set(trip.id, trip);
+    this.changed();
+    return ok({ trip: trip.id, dep, pat: pat.index, first, last, minutes, cost, text });
+  }
+
   /** Run the extra departure `extraPlan` describes. `src`: 'player' or the workflow that asked. */
   dispatchExtra(route: Id, opts: { pat?: number; vehicle?: Id; src?: string } = {}): Result<ExtraPlan & { trip: number }> {
     const plan = this.extraPlan(route, opts);
@@ -1042,6 +1548,7 @@ export class Game {
     if (!v) return fail('That bus no longer exists.');
     if (route && !this.state.routes[route]) return fail('That line no longer exists.');
     if (v.sell) return fail('This bus is being sold.');
+    delete v.handover;
     if (v.route === route) return ok(undefined);
     recAssignment(this.state, id, v.route, route, src);
     if (src === 'player') this.notePlayerChange(`vehicle:${id}`, 'assign_vehicle', `route:${route ?? 'none'}`);
@@ -1074,6 +1581,23 @@ export class Game {
         v.pos = { kind: 'depot' };
       } else sendToDepot(this, v);
     }
+    this.changed();
+    return ok(undefined);
+  }
+
+  /**
+   * Move a bus to a line (null: park it as a spare) once it has run the trips it already has. It
+   * takes no new trips meanwhile, so none of its line's departures is missed. A bus with no trips
+   * moves straight away.
+   */
+  handoverVehicle(id: Id, route: Id | null, src = 'player'): Result {
+    const v = this.state.vehicles[id];
+    if (!v) return fail('That bus no longer exists.');
+    if (route && !this.state.routes[route]) return fail('That line no longer exists.');
+    if (v.sell) return fail('This bus is being sold.');
+    if (v.route === route) { delete v.handover; return ok(undefined); }
+    if (v.trip === null && v.next === null && v.status !== 'maintenance' && v.status !== 'broken') return this.assignVehicle(id, route, src);
+    v.handover = { route, src };
     this.changed();
     return ok(undefined);
   }
@@ -1251,6 +1775,7 @@ export class Game {
   /** Pause or resume every workflow. */
   setAutomationPaused(paused: boolean) {
     this.state.automation.paused = paused;
+    clearPending(this.state.automation); // nothing builds up while paused
     refreshWants(this);
     this.changed();
   }
@@ -1380,6 +1905,10 @@ export class Game {
     const pax = paxTotals(this.state);
     const balance = this.counters.generated - pax.waiting - pax.onboard - this.counters.completed - this.counters.lost;
     if (balance !== 0) out.push(`Passenger count drift: ${balance}.`);
+    // everyone released to come home was sent away first, and everyone else is still away
+    const away = awayTotal(this.state);
+    if (this.counters.away - this.counters.returned !== away) out.push(`Away pool drift: ${this.counters.away - this.counters.returned - away}.`);
+    if (this.counters.returned > this.counters.away) out.push('More returns than outbound arrivals.');
     return out;
   }
 

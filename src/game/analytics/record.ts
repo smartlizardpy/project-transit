@@ -4,9 +4,10 @@
 // simulation, never reconstructions. All functions are cheap: a few lookups and additions.
 
 import type { GameState, Id, PaxGroup, Vehicle } from '../types.ts';
+import { rollWeek } from './labels.ts';
 import type { Pattern } from '../network.ts';
 import { DAY, HOUR } from '../content.ts';
-import { ASSIGNMENT_LOG, DETAIL_DAYS, SUMMARY_DAYS, bandOf, emptyDay, hours0, type DayRecord, type DaySummary, type PatDay, type RouteDay, type StopDay, type VehicleDay } from './types.ts';
+import { ASSIGNMENT_LOG, BANDS, DETAIL_DAYS, SUMMARY_DAYS, TYPE_COUNT, bandOf, emptyDay, hours0, types0, type DayRecord, type DaySummary, type PatDay, type RouteDay, type StopDay, type VehicleDay } from './types.ts';
 
 /**
  * Hour of the calendar day an event at time t is recorded in. An event at exactly midnight
@@ -46,8 +47,13 @@ function vehDay(state: GameState, v: Vehicle): VehicleDay {
   return d;
 }
 
+/** Key of a line pattern in `RouteDay.p` and `RouteDay.bp`. */
+export function patKey(p: Pattern): string {
+  return `${p.index}|${p.stops.join(',')}`;
+}
+
 function patDay(rd: RouteDay, p: Pattern): PatDay {
-  const key = `${p.index}|${p.stops.join(',')}`;
+  const key = patKey(p);
   let pd = rd.p[key];
   if (!pd) {
     const n = Math.max(0, p.stops.length - 1);
@@ -59,10 +65,14 @@ function patDay(rd: RouteDay, p: Pattern): PatDay {
 
 // ───────────────────────────────────────────── passengers
 
-export function recBoard(state: GameState, stop: Id, route: Id, veh: Vehicle, n: number, waitedSec: number, transfer: boolean) {
+export function recBoard(state: GameState, stop: Id, route: Id, veh: Vehicle, n: number, waitedSec: number, transfer: boolean, type?: number, pat?: Pattern) {
   const h = recHour(state.clock.t);
   const sd = stopDay(state, stop);
   sd.b[h] += n;
+  if (type !== undefined) {
+    (sd.k ??= types0())[type] += n;
+    (routeDay(state, route).k ??= new Array<number>(TYPE_COUNT * BANDS.length).fill(0))[type * BANDS.length + bandOf(h)] += n;
+  }
   const wm = Math.max(0, waitedSec) / 60;
   sd.ws += wm * n;
   sd.wn += n;
@@ -70,6 +80,10 @@ export function recBoard(state: GameState, stop: Id, route: Id, veh: Vehicle, n:
   sd.bl[route] = (sd.bl[route] ?? 0) + n;
   const rd = routeDay(state, route);
   rd.b[h] += n;
+  if (pat) {
+    const bp = (rd.bp ??= {});
+    (bp[patKey(pat)] ??= hours0())[h] += n;
+  }
   rd.ws += wm * n;
   rd.wn += n;
   vehDay(state, veh).b += n;
@@ -90,9 +104,15 @@ export function recAlight(state: GameState, stop: Id, n: number) {
   stopDay(state, stop).a[recHour(state.clock.t)] += n;
 }
 
-export function recLeftBehind(state: GameState, stop: Id, route: Id, n: number) {
+export function recLeftBehind(state: GameState, stop: Id, route: Id, n: number, byType?: number[]) {
   if (n <= 0) return;
   stopDay(state, stop).lb += n;
+  if (byType) {
+    const net = state.analytics.today.net;
+    byType.forEach((v, k) => {
+      if (v) (net.lk ??= types0())[k] += v;
+    });
+  }
   const rd = routeDay(state, route);
   rd.lb += n;
   rd.cr++;
@@ -109,7 +129,7 @@ export function itinerarySig(g: PaxGroup): string {
 }
 
 /** A journey ended: completed at its destination or abandoned. */
-export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sat: { overall: number; comp: number[] }) {
+export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sat: { overall: number; comp: number[] }, stranded = false) {
   const t = state.clock.t;
   const rec = state.analytics.today;
   const h = recHour(t);
@@ -119,7 +139,14 @@ export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sa
     net.jt += ((t - g.t0) / 60) * g.n;
     net.wt += (g.w / 60) * g.n;
     if (g.legs.length > 1) net.xf += g.n;
-  } else net.ab[h] += g.n;
+    if (g.k !== undefined) (net.jk ??= types0())[g.k] += g.n;
+  } else {
+    net.ab[h] += g.n;
+    if (stranded) {
+      (net.sd ??= hours0())[h] += g.n;
+      if (g.k !== undefined) (net.sk ??= types0())[g.k] += g.n;
+    }
+  }
   net.ss += sat.overall * g.n;
   net.sn += g.n;
   for (let i = 0; i < 5; i++) net.comp[i] += (sat.comp[i] ?? 0) * g.n;
@@ -129,7 +156,9 @@ export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sa
     rd.ss += sat.overall * g.n;
     rd.sn += g.n;
   }
-  // origin–destination, by the time band the journey started in
+  // origin–destination, by the time band the journey started in (stranded travellers never had
+  // a line or an itinerary: they are counted in `net` only)
+  if (stranded) return;
   const key = `${g.o}>${g.d}>${itinerarySig(g)}`;
   const band = bandOf(Math.floor((((g.t0 % DAY) + DAY) % DAY) / HOUR));
   const arr = (rec.od[key] ??= []);
@@ -141,6 +170,14 @@ export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sa
     arr[i + 3] += ((t - g.t0) / 60) * g.n;
   } else arr[i + 2] += g.n;
   arr[i + 4] += (g.w / 60) * g.n;
+  // completed journeys by traveller type: [type, people, type, people, …]
+  if (completed && g.k !== undefined) {
+    const tv = ((rec.odk ??= {})[key] ??= []);
+    let j = 0;
+    while (j < tv.length && tv[j] !== g.k) j += 2;
+    if (j >= tv.length) tv.push(g.k, 0);
+    tv[j + 1] += g.n;
+  }
   for (const id of [g.o, g.d]) if (!(id in state.analytics.names.s) && state.stops[id]) state.analytics.names.s[id] = state.stops[id].name;
 }
 
@@ -154,7 +191,7 @@ export function recDepart(state: GameState, p: Pattern, idx: number, v: Vehicle,
   // every stop departure counts, the first one too: a late start is a delay passengers feel
   const late = Math.max(0, delaySec);
   rd.dp[h]++;
-  rd.lf[h] += capacity > 0 ? v.load / capacity : 0;
+  rd.lf[h] += capacity > 0 ? (v.sp ?? v.load) / capacity : 0;
   rd.dl[h] += late;
   vd.dl += late;
   vd.dn++;
@@ -164,7 +201,7 @@ export function recDepart(state: GameState, p: Pattern, idx: number, v: Vehicle,
   rd.ck[h] += capacity * len;
   vd.pkm += v.load * len;
   const pd = patDay(rd, p);
-  pd.ls[idx] += capacity > 0 ? v.load / capacity : 0;
+  pd.ls[idx] += capacity > 0 ? (v.sp ?? v.load) / capacity : 0;
   pd.ln[idx]++;
 }
 
@@ -263,6 +300,7 @@ const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 
 export function summarise(rec: DayRecord): DaySummary {
   const out: DaySummary = { day: rec.day, r: {}, s: {}, n: [sum(rec.net.j), sum(rec.net.ab), r1(rec.net.ss), rec.net.sn] };
+  if (rec.lbl) out.l = rec.lbl;
   for (const [id, r] of Object.entries(rec.routes)) out.r[id] = [sum(r.b), sum(r.d), sum(r.o), sum(r.m), r1(sum(r.pk)), r1(sum(r.ck))];
   for (const [id, s] of Object.entries(rec.stops)) out.s[id] = [sum(s.b), sum(s.a), sum(s.g)];
   return out;
@@ -280,6 +318,7 @@ export function closeAnalyticsDay(state: GameState, day: number): DayRecord {
   for (const r of Object.values(state.routes)) a.names.r[r.id] = { n: r.number, c: r.colour };
   for (const v of Object.values(state.vehicles)) a.names.v[v.id] = v.fleetNo;
   a.days.push(rec);
+  rollWeek(state, rec);
   a.today = emptyDay(day + 1);
   while (a.days.length > DETAIL_DAYS) a.summary.push(summarise(a.days.shift()!));
   while (a.summary.length && a.summary[0].day < day - SUMMARY_DAYS) a.summary.shift();

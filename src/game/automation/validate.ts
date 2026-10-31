@@ -89,6 +89,7 @@ export function validateWorkflow(wf: Workflow, state?: GameState): Validation {
     if (triggers.length) err('A function is started by a “Use a function” node, so it cannot have triggers.');
     if (!live.some((n) => n.type === 'adv.output')) warn('A function gives nothing back without a “Function result” node.');
   }
+  if (wf.kind === 'function' && live.some((n) => n.type === 'logic.wait' || n.type === 'logic.queue')) err('Wait and One at a time cannot be used inside a function: put them in the workflow that calls it.');
   if (wf.kind === 'workflow' && live.some((n) => n.type === 'adv.input' || n.type === 'adv.output')) warn('Function inputs and results only do something inside a function.');
 
   // nodes: required inputs, settings, expressions
@@ -107,7 +108,9 @@ export function validateWorkflow(wf: Workflow, state?: GameState): Validation {
       if ((f.kind === 'line' || f.kind === 'stop' || f.kind === 'vehicle' || f.kind === 'depot' || f.kind === 'workflow') && !f.allowAny) {
         const port = def.inputs.find((p) => p.id === f.id);
         const connected = port ? incoming.has(`${n.id}:${port.id}`) : false;
-        if (!connected && !v) err(`${def.label}: choose a ${f.label.toLowerCase()}${port ? ' or connect one' : ''}.`, n.id);
+        // pairs from "Best pairs" bring their own line to "Move bus to line"
+        const paired = n.type === 'action.assign' && f.id === 'line' && wf.edges.some((e) => e.to === n.id && e.in === 'bus' && wf.nodes.find((x) => x.id === e.from)?.type === 'logic.assign');
+        if (!connected && !v && !paired) err(`${def.label}: choose a ${f.label.toLowerCase()}${port ? ' or connect one' : ''}.`, n.id);
       }
       if (state && typeof v === 'string' && v) {
         if (f.kind === 'line' && !state.routes[v]) err(`${def.label}: the chosen line no longer exists.`, n.id);
