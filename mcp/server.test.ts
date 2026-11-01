@@ -1,7 +1,9 @@
 // The MCP server answers from a real save: a company runs a line for a few hours, saves, and an
 // MCP client (the official SDK, over stdio like Claude Code) reads it back.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createServer as httpServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -9,12 +11,19 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { buildLine, newGame } from '../src/game/test/helpers.ts';
 import { HOUR } from '../src/game/content.ts';
 import { currencyFor } from '../src/game/currency.ts';
-import type { Game } from '../src/game/engine.ts';
+import { Game } from '../src/game/engine.ts';
+import { AgentError, handleAgentRequest } from '../src/game/agents/api.ts';
 
 describe('MCP server', () => {
   const dir = mkdtempSync(join(tmpdir(), 'pt-mcp-'));
   let game: Game;
   let client: Client;
+  // live access: a stand-in for the desktop app's bridge (src-tauri/src/agent.rs), answering with
+  // the game's own rules for agents
+  const agentFile = join(dir, 'agent.json');
+  let bridge: Server;
+  let live: Game; // the running game: a copy of the saved one, so the save tools' numbers stay put
+  const seen: { auth?: string; who?: string }[] = [];
 
   const call = async (name: string, args: Record<string, unknown> = {}) => {
     const r = (await client.callTool({ name, arguments: args })) as { isError?: boolean; content: { text: string }[] };
@@ -28,19 +37,83 @@ describe('MCP server', () => {
     const id = 'mcp-test';
     writeFileSync(join(dir, `${id}.json`), game.serialize());
     writeFileSync(join(dir, `${id}.meta.json`), JSON.stringify({ id, name: 'MCP Test · Day 1', company: game.state.company.name, colour: '#000', city: 'İstanbul', day: 1, balance: 0, savedAt: Date.now(), version: 1, kind: 'manual' }));
-    client = new Client({ name: 'test', version: '1' });
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(import.meta.dirname, process.env.PT_MCP_BUNDLE ? '../dist-mcp/project-transit-mcp.mjs' : 'main.ts')], env: { ...process.env, PT_SAVES_DIR: dir } as Record<string, string> }));
+    bridge = httpServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', async () => {
+        const r = JSON.parse(body);
+        seen.push({ auth: req.headers.authorization, who: r.who });
+        if (req.headers.authorization !== 'Bearer t0ken') return res.writeHead(401).end(JSON.stringify({ ok: false, error: 'Wrong or missing token.' }));
+        try {
+          res.end(JSON.stringify({ ok: true, result: await handleAgentRequest(live, r.method, r.params, r.who) }));
+        } catch (e) {
+          res.end(JSON.stringify({ ok: false, error: e instanceof AgentError ? e.message : String(e) }));
+        }
+      });
+    });
+    live = new Game(JSON.parse(game.serialize()), game.region);
+    await new Promise<void>((ok) => bridge.listen(0, '127.0.0.1', ok));
+    writeFileSync(agentFile, JSON.stringify({ port: (bridge.address() as AddressInfo).port, token: 't0ken' }));
+    client = new Client({ name: 'claude-code', version: '1' });
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(import.meta.dirname, process.env.PT_MCP_BUNDLE ? '../dist-mcp/project-transit-mcp.mjs' : 'main.ts')], env: { ...process.env, PT_SAVES_DIR: dir, PT_AGENT_FILE: agentFile } as Record<string, string> }));
   }, 120_000); // builds a game and runs it for 5 hours first
 
   afterAll(async () => {
     await client?.close();
+    bridge?.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('lists read-only tools', async () => {
+  it('lists tools: saves are read-only; only workflow tools change the live game', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).toContain('company_overview');
-    expect(tools.every((t) => t.annotations?.readOnlyHint)).toBe(true);
+    const writes = tools.filter((t) => !t.annotations?.readOnlyHint).map((t) => t.name).sort();
+    expect(writes).toEqual(['create_workflow', 'delete_workflow', 'update_workflow']);
+    expect(tools.find((t) => t.name === 'delete_workflow')!.annotations?.destructiveHint).toBe(true);
+  });
+
+  it('live tools ask the running game, and build workflows only within the rules', async () => {
+    const st = (await call('live_status')).data;
+    expect(st).toMatchObject({ companyOpen: true, company: live.state.company.name, networkControl: false });
+    expect(seen.at(-1)).toEqual({ auth: 'Bearer t0ken', who: 'Claude Code' });
+    expect((await call('live_view', { what: 'lines' })).data).toHaveLength(1);
+    // live means now: the save stays at 10:00 while the game runs on
+    live.run(3600);
+    expect((await call('live_view', { what: 'overview' })).data.gameTime.time).toBe('11:00');
+    expect((await call('company_overview')).data.gameTime.time).toBe('10:00');
+    const refused = await call('create_workflow', { name: 'x' });
+    expect(refused.error).toBe(true);
+    expect(refused.text).toMatch(/Network Control is not open/);
+
+    live.state.control.unlocked = true;
+    const route = Object.keys(live.state.routes)[0];
+    const made = await call('create_workflow', {
+      name: 'Morning note',
+      nodes: [{ id: 'n1', type: 'trigger.time', config: { time: '07:00' } }, { id: 'n2', type: 'action.notify', config: { title: 'Good morning' } }],
+      edges: [{ from: 'n1', out: 'event', to: 'n2', in: 'when' }],
+      enabled: true,
+    });
+    expect(made.error, made.text).toBe(false);
+    expect(made.data).toMatchObject({ mode: 'suggest', enabled: true, valid: true });
+    expect(live.state.automation.workflows[made.data.id].by).toBe('agent');
+    expect(live.state.notifications.at(-1)!.title).toBe('Claude Code added the workflow “Morning note”');
+    const list = (await call('list_workflows')).data.workflows;
+    expect(list.map((w: { name: string; madeByAgent: boolean }) => [w.name, w.madeByAgent])).toEqual([['Morning note', true]]);
+    expect((await call('get_workflow', { id: made.data.id })).data.nodes).toHaveLength(2);
+    expect((await call('live_analytics', { query: { groupBy: 'line', includeToday: true } })).data.rows[0].key).toBe(route);
+    expect((await call('workflow_blocks', { category: 'trigger' })).data.nodes.every((n: { trigger: boolean }) => n.trigger)).toBe(true);
+    expect((await call('delete_workflow', { id: made.data.id })).data).toEqual({ deleted: made.data.id });
+    live.state.control.unlocked = false;
+  });
+
+  it('says how to switch live access on when it is off', async () => {
+    unlinkSync(agentFile);
+    const off = await call('live_status');
+    expect(off.error).toBe(true);
+    expect(off.text).toMatch(/Settings → AI agents/);
+    writeFileSync(agentFile, JSON.stringify({ port: (bridge.address() as AddressInfo).port, token: 'wrong' }));
+    expect((await call('live_status')).text).toMatch(/Wrong or missing token/);
+    writeFileSync(agentFile, JSON.stringify({ port: (bridge.address() as AddressInfo).port, token: 't0ken' }));
   });
 
   it('reports the company as the game sees it', async () => {

@@ -1,3 +1,4 @@
+mod agent;
 mod saves;
 
 use std::path::PathBuf;
@@ -32,6 +33,12 @@ fn diag_report(report: String, png_base64: Option<String>) -> Result<(), String>
 fn diag_save_mode() -> Option<String> {
   diag_dir()?;
   std::env::var("PT_DIAG_SAVE").ok()
+}
+
+/// Diagnostics only: switch live access for AI agents on at start (PT_DIAG_AGENT=1).
+#[tauri::command]
+fn diag_agent() -> bool {
+  diag_dir().is_some() && std::env::var_os("PT_DIAG_AGENT").is_some()
 }
 
 #[tauri::command]
@@ -104,17 +111,21 @@ fn install_quit_menu(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_process::init())
+    .manage(agent::AgentState::default())
     .invoke_handler(tauri::generate_handler![
       diag_enabled,
       diag_report,
       diag_save_mode,
       diag_save_report,
+      diag_agent,
       find_node,
       saves::saves_list,
       saves::save_read,
       saves::save_write,
       saves::save_delete,
-      saves::app_exit
+      saves::app_exit,
+      agent::agent_live,
+      agent::agent_reply
     ])
     .setup(|app| {
       #[cfg(desktop)]
@@ -130,6 +141,11 @@ pub fn run() {
       }
       Ok(())
     })
-    .run(tauri::generate_context!())
-    .expect("error while building tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|app, event| {
+      if let tauri::RunEvent::Exit = event {
+        agent::shutdown(app);
+      }
+    });
 }

@@ -12,7 +12,7 @@ import { GameMenu } from './ui/GameMenu.tsx';
 import { Onboarding, GameOver } from './ui/Onboarding.tsx';
 import { useKeyboard } from './ui/keyboard.ts';
 import { mapRuntime } from './map/runtime.ts';
-import { session, useSession } from './app/session.ts';
+import { loadSettings, session, useSession } from './app/session.ts';
 import { exitApp, isDesktop, toggleFullscreen } from './app/persistence.ts';
 import { useUI } from './state/store.ts';
 import { CompanyMark } from './ui/logos.tsx';
@@ -20,6 +20,7 @@ import { UpdateBanner } from './ui/UpdateBanner.tsx';
 import { AutomationStudio } from './ui/automation/Studio.tsx';
 import { NetworkUnlock } from './ui/NetworkUnlock.tsx';
 import { installOnExit, startAutoUpdates } from './app/updates.ts';
+import { setAgentLive } from './app/agentBridge.ts';
 import './styles/ui.css';
 import './styles/game.css';
 
@@ -113,6 +114,7 @@ export function App() {
   const phase = useSession((s) => s.phase);
   const [hud, setHud] = useState(true);
   useEffect(() => startAutoUpdates(), []);
+  useEffect(() => void setAgentLive(loadSettings().agentLive), []);
   useEffect(() => {
     void session.refreshSaves();
     const h = (e: KeyboardEvent) => {

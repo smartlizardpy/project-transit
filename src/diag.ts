@@ -26,6 +26,8 @@ export async function startDiagnostics() {
   if (!enabled) return;
   const saveMode = await invoke<string | null>('diag_save_mode').catch(() => null);
   if (saveMode) void import('./diagSave.ts').then((m) => m.runSaveCheck(saveMode));
+  // after the start-up call that applies the saved setting (App.tsx), which would switch it off
+  if (await invoke<boolean>('diag_agent').catch(() => false)) setTimeout(() => void import('./app/agentBridge.ts').then((m) => m.setAgentLive(true)), 3000);
   window.addEventListener('error', (e) => errors.push(`${e.message} @ ${e.filename}:${e.lineno}`));
   window.addEventListener('unhandledrejection', (e) => errors.push(`rejection: ${String(e.reason)}`));
   stages.push('boot');

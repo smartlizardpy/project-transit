@@ -65,7 +65,7 @@ The optional first-steps guide walks through steps 2–6, and you can hide it. T
 
 ## AI agents (MCP)
 
-The game includes a small [Model Context Protocol](https://modelcontextprotocol.io) server (`mcp/`) that lets AI agents read your saved games. It is read-only: it reads the desktop app's save files and never changes them. It needs [Node.js](https://nodejs.org) 18 or newer.
+The game includes a small [Model Context Protocol](https://modelcontextprotocol.io) server (`mcp/`) that lets AI agents read your saved games and, with **live access** on, work with the running game. It needs [Node.js](https://nodejs.org) 18 or newer.
 
 - **From the app:** Settings → AI agents.
   - **Copy for Claude Code** gives one terminal command that adds the server for all your projects.
@@ -87,6 +87,36 @@ The game includes a small [Model Context Protocol](https://modelcontextprotocol.
 | `query_save` | Raw save data by JSON pointer, for anything else |
 
 Every tool takes an optional `save` (a save id or company name) and defaults to the newest save. Saves are snapshots: the game autosaves every few minutes and when you quit, and ⌘S saves at once. The server reads `~/Library/Application Support/dev.projecttransit.prototype/saves` on macOS (`%APPDATA%` on Windows, `~/.local/share` on Linux). Set `PT_SAVES_DIR` to read another folder. Browser saves live in the browser and are not reachable.
+
+### Live access
+
+Switch on **Settings → AI agents → Live access** in the desktop app, and agents work with the running game instead of a save. It is off by default.
+
+| Tool | What it does |
+|---|---|
+| `live_status` | Whether the game is running with live access on, which company is open, the game time, and whether Network Control is open |
+| `live_view` | The running game now, with the same views as the save tools (overview, lines, a line's details, buses, stops, finances, history and more) |
+| `live_analytics` | Network Control analytics: any measure grouped by line, stop, bus, area, day, hour and more; where journeys go; estimated demand |
+| `live_improve_service` | Why passengers are unhappy, and the plan **Improve service** would propose. Read-only: you apply it in the game |
+| `workflow_blocks` | The Automation Studio blocks: inputs, outputs and settings |
+| `list_workflows`, `get_workflow` | The workflows, with mode, problems and last run; one workflow in full |
+| `create_workflow`, `update_workflow`, `delete_workflow` | Build a workflow in Automation Studio, and change or delete the ones the agent made |
+| `test_workflow` | Try a workflow in the Simulation Lab on copies of the company |
+
+What agents may and may not do:
+
+- They can read everything the save tools show, plus Network Control analytics (once Network Control is open).
+- They can build workflows, but only in **Suggest** mode (you approve each change) or **Observe** mode (nothing changes). Only you can switch a workflow to Automatic, in Automation Studio. If an agent changes the blocks of a workflow you switched to Automatic, it goes back to Suggest. Agents' workflows follow the same [safety rules](docs/automation-api.md#safety-rules) as yours.
+- They can change and delete only the workflows they made. Automation Studio marks these **AI agent**, and you get a notification whenever an agent adds, changes or deletes one.
+- They cannot change lines, buses, money or settings directly, and the game never runs code they send.
+
+How it works:
+
+- The game listens on `127.0.0.1` only, on a port the system picks.
+- It writes the port and a random token to `agent.json` in its data folder. Only your user account can read that file, and the game deletes it when you quit or switch live access off.
+- It refuses requests from web pages: any request with an `Origin` header, a `Host` that is not this address, or a body not sent as JSON.
+- Set `PT_AGENT_FILE` to point the MCP server at another connection file.
+- Live access needs the desktop app. The browser version cannot be reached.
 
 ## What is real, estimated and simulated
 

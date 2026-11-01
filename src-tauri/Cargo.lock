@@ -2536,6 +2536,7 @@ name = "project-transit"
 version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
+ "getrandom 0.3.4",
  "log",
  "serde",
  "serde_json",

@@ -9,6 +9,7 @@ import { CompanyMark } from './logos.tsx';
 import { Segmented } from './primitives.tsx';
 import { APP_VERSION, checkForUpdates, installAndRestart, useUpdates } from '../app/updates.ts';
 import { claudeCodeCommand, copyText, jsonConfig, mcpSetup, type McpSetup } from '../app/agents.ts';
+import { setAgentLive, useAgentLive } from '../app/agentBridge.ts';
 
 export function relTime(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -121,7 +122,7 @@ export function SettingsDialog({ onClose }: { onClose?: () => void }) {
           <div><b>Fullscreen</b><span>Also F11.</span></div>
           <button role="switch" aria-checked={full} aria-label="Fullscreen" className={'mn-switch' + (full ? ' on' : '')} onClick={() => void setFullscreen(!full).then(() => isFullscreen().then(setFull))}><i /></button>
         </div>
-        <AgentSettings />
+        <AgentSettings live={s.agentLive} setLive={(v) => { patch({ agentLive: v }); void setAgentLive(v); }} />
         {game && gs && (
           <>
             <div className="label mn-set-h">This company</div>
@@ -175,8 +176,9 @@ function UpdateSettings({ auto, setAuto }: { auto: boolean; setAuto: (v: boolean
   );
 }
 
-/** Copy the setup that lets Claude and other AI apps read your saved games (MCP, read-only). */
-function AgentSettings() {
+/** Copy the setup that lets Claude and other AI apps use the game through MCP, and live access. */
+function AgentSettings({ live, setLive }: { live: boolean; setLive: (v: boolean) => void }) {
+  const status = useAgentLive();
   const [setup, setSetup] = useState<McpSetup | null>(null);
   useEffect(() => void mcpSetup().then(setSetup).catch(() => setSetup(null)), []);
   const notify = useUI((s) => s.notify);
@@ -189,11 +191,23 @@ function AgentSettings() {
           <b>Connect Claude and other AI apps</b>
           <span>
             {isDesktop()
-              ? 'Lets AI agents read your saved games through MCP: lines, buses, money, objectives. Read-only; they cannot change your game. Save (⌘S) to give them the latest numbers.'
+              ? 'Lets AI agents read your saved games through MCP: lines, buses, money, objectives. Save (⌘S) to give them the latest numbers.'
               : 'Available in the desktop app, which keeps saves where AI agents can read them.'}
           </span>
         </div>
       </div>
+      {isDesktop() && (
+        <div className="mn-set-row">
+          <div>
+            <b>Live access</b>
+            <span>
+              Agents also see the running game as it is now, with Network Control analytics, and can build workflows in Automation Studio. Their workflows run in Observe or Suggest mode, so nothing changes until you approve it. They cannot change lines, buses or money themselves.
+              {status.error ? ` Could not start: ${status.error}` : live && status.on ? ` On${status.requests ? `: ${status.requests} request${status.requests === 1 ? '' : 's'} answered` : ''}.` : ''}
+            </span>
+          </div>
+          <button role="switch" aria-checked={live} aria-label="Live access for AI agents" className={'mn-switch' + (live ? ' on' : '')} onClick={() => setLive(!live)}><i /></button>
+        </div>
+      )}
       {setup && (
         <>
           <div className="mn-agent-btns">

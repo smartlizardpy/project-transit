@@ -58,6 +58,7 @@ export function createWorkflow(game: Game, init: Partial<Workflow> & { name: str
     rev: 1,
     errors: 0,
   };
+  if (init.by === 'agent') wf.by = 'agent';
   a.workflows[id] = wf;
   a.order.push(id);
   if (init.nodes || init.edges) {
@@ -156,7 +157,7 @@ export function duplicateWorkflow(game: Game, id: string): Result<string> {
   const wf = game.state.automation.workflows[id];
   if (!wf) return fail('That workflow no longer exists.');
   const copy = structuredClone(wf);
-  return createWorkflow(game, { ...copy, name: `${wf.name} (copy)`, mode: 'observe' });
+  return createWorkflow(game, { ...copy, by: undefined, name: `${wf.name} (copy)`, mode: 'observe' });
 }
 
 /** Move a workflow in the list. */
