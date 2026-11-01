@@ -41,7 +41,7 @@ pnpm test         # game-core tests (vitest)
 7. **Manage the company.**
    - **Finances (M):** daily results, per-line profit, the ledger, loans and the fare.
    - **Company (C):** objectives and territory.
-   - **Satisfaction:** the popover in the top bar explains what passengers dislike most.
+   - **Satisfaction:** the popover in the top bar explains what passengers dislike most. **Improve service** finds the causes (waiting, slow journeys, full buses, people with no bus home) and proposes changes: spare and idle buses moved to the lines that need them, buses bought if there is money to spare, timetables fitted to the buses, shorter routes. Test the changes on copies of your company for 6 or 24 game hours, then apply them or undo them. See [`docs/improve-service.md`](docs/improve-service.md).
    - **Route warnings** (in the line inspector and line editor) can be clicked: the route check shows why a line makes a detour and offers fixes with a before/after comparison.
    - **Depots:** a bus can be based at another depot from its inspector; a parked bus drives there.
    - **The city lives by itself.** People go to work, school, university, the shops, hospitals, the airport and events, and choose between walking, cycling, car, taxi, the city's metro, tram, rail and ferries, and your buses. Click a place (airport, station, university, hospital, mall, stadium…) for its card: opening hours, busy hours and how people get there. Weather, matches, concerts and rail disruptions change who travels. Service plans switch timetables for school holidays, weekends and events.

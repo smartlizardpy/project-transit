@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pause, Play, FastForward, CaretDoubleRight, CaretRight, ListBullets, MapPin, Wallet, TrendUp, TrendDown, Smiley, SmileyMeh, SmileySad, Bell, Bus, ChartLineUp, Path, Buildings, FloppyDisk, Trophy, Warning } from '@phosphor-icons/react';
+import { Pause, Play, FastForward, CaretDoubleRight, CaretRight, ListBullets, MapPin, Wallet, TrendUp, TrendDown, Smiley, SmileyMeh, SmileySad, Bell, Bus, ChartLineUp, Path, Buildings, FloppyDisk, Trophy, Warning, MagicWand } from '@phosphor-icons/react';
 import { useUI } from '../state/store.ts';
 import { useGameUpdates } from './hooks.ts';
 import { Tip, LoadBar } from './primitives.tsx';
@@ -301,7 +301,7 @@ export function Stats() {
                 {SAT_COMPONENTS.map((k, i) => {
                   const v = w.comp[i];
                   const detail = [
-                    `avg wait ${(w.avgWait / 60).toFixed(1)} min`,
+                    `avg wait ${w.avgWait.toFixed(1)} min`,
                     'compared with driving the same trip',
                     w.load !== null ? `avg occupancy ${Math.round(w.load * 100)}%` : 'no load data yet',
                     w.ontime !== null ? `${Math.round(w.ontime * 100)}% of departures on time${w.missed ? ` · ${w.missed} missed` : ''}` : 'no departures yet',
@@ -330,6 +330,9 @@ export function Stats() {
               {w.abandoned > 0 && <div className="p-sub" style={{ marginTop: 8 }}>{w.abandoned.toLocaleString()} passengers gave up waiting in the last 24 h.</div>}
             </>
           )}
+          <button className="btn primary block" style={{ marginTop: 10 }} onClick={() => { setSatOpen(false); openPanel('service'); }}>
+            <MagicWand size={15} weight="bold" />Improve service
+          </button>
         </div>
       )}
       {bellOpen && (

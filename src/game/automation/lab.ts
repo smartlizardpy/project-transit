@@ -8,6 +8,7 @@ import { Game } from '../engine.ts';
 import type { GameState } from '../types.ts';
 import type { ActionOutcome, Mode, RunRecord } from './types.ts';
 import { DAY } from '../content.ts';
+import { dayTotals } from '../finance.ts';
 import { hhmm } from '../time.ts';
 
 export const LAB_HOURS = [2, 4, 8, 24] as const;
@@ -30,6 +31,13 @@ export interface LabMetrics {
   fares: number;
   /** change in the bank balance over the run (fares minus every cost paid) */
   result: number;
+  /** operating result over the run: fares minus running costs, purchases left out */
+  operating: number;
+  /** the waiting and journey-time parts of satisfaction, 0–100 */
+  waitScore: number | null;
+  journeyScore: number | null;
+  /** travellers who found no bus home */
+  stranded: number;
 }
 
 export interface LabResult {
@@ -65,12 +73,14 @@ export interface LabOptions {
 interface Totals {
   boardings: number; trips: number; ontime: number; missed: number; fares: number; deps: number; load: number;
   journeys: number; abandoned: number; waitSum: number; waitN: number; satS: number; satN: number; leftBehind: number; balance: number;
+  waitS: number; journeyS: number; stranded: number; operating: number;
 }
 
 /** Totals of everything recorded from day `d0` to now. Differences of two snapshots give a window. */
-function totals(state: GameState, d0: number): Totals {
+export function labTotals(state: GameState, d0: number): Totals {
   const a = state.analytics;
-  const t: Totals = { boardings: 0, trips: 0, ontime: 0, missed: 0, fares: 0, deps: 0, load: 0, journeys: 0, abandoned: 0, waitSum: 0, waitN: 0, satS: 0, satN: 0, leftBehind: 0, balance: state.finance.balance };
+  const t: Totals = { boardings: 0, trips: 0, ontime: 0, missed: 0, fares: 0, deps: 0, load: 0, journeys: 0, abandoned: 0, waitSum: 0, waitN: 0, satS: 0, satN: 0, leftBehind: 0, balance: state.finance.balance, waitS: 0, journeyS: 0, stranded: 0, operating: 0 };
+  for (const d of Object.keys(state.finance.daily)) if (Number(d) >= d0) t.operating += dayTotals(state, Number(d)).result;
   const recs = [...a.days.filter((d) => d.day >= d0), a.today];
   const sum = (x: number[]) => x.reduce((p, q) => p + q, 0);
   for (const rec of recs) {
@@ -90,11 +100,14 @@ function totals(state: GameState, d0: number): Totals {
     t.abandoned += sum(rec.net.ab);
     t.satS += rec.net.ss;
     t.satN += rec.net.sn;
+    t.waitS += rec.net.comp[0] ?? 0;
+    t.journeyS += rec.net.comp[1] ?? 0;
+    t.stranded += sum(rec.net.sd ?? []);
   }
   return t;
 }
 
-function metrics(a: Totals, b: Totals): LabMetrics {
+export function labMetrics(a: Totals, b: Totals): LabMetrics {
   const d = (k: keyof Totals) => b[k] - a[k];
   const r1 = (x: number) => Math.round(x * 10) / 10;
   const trips = d('trips'), deps = d('deps'), waitN = d('waitN'), satN = d('satN');
@@ -111,6 +124,10 @@ function metrics(a: Totals, b: Totals): LabMetrics {
     leftBehind: d('leftBehind'),
     fares: Math.round(d('fares') * 100) / 100,
     result: Math.round(d('balance') * 100) / 100,
+    operating: Math.round(d('operating') * 100) / 100,
+    waitScore: satN ? r1((d('waitS') / satN) * 100) : null,
+    journeyScore: satN ? r1((d('journeyS') / satN) * 100) : null,
+    stranded: d('stranded'),
   };
 }
 
@@ -134,7 +151,7 @@ export async function runLab(game: Game, workflowId: string, opts: LabOptions, p
   test.updateWorkflow(workflowId, { enabled: true, mode, allowHighImpact: opts.allowHighImpact || wf.allowHighImpact });
   const from = game.t, to = from + hours * 3600;
   const d0 = Math.floor(from / DAY);
-  const t0b = totals(base.state, d0), t0t = totals(test.state, d0);
+  const t0b = labTotals(base.state, d0), t0t = labTotals(test.state, d0);
   const runStart = test.state.automation.counters.run;
   for (let t = from; t < to; t += CHUNK) {
     if (cancelled?.()) return null;
@@ -168,8 +185,8 @@ export async function runLab(game: Game, workflowId: string, opts: LabOptions, p
     from,
     to,
     label: `${hhmm(from)} to ${hhmm(to)}${hours >= 24 ? ' the next day' : to % DAY < from % DAY ? ' (next day)' : ''}`,
-    baseline: metrics(t0b, totals(base.state, d0)),
-    variant: metrics(t0t, totals(test.state, d0)),
+    baseline: labMetrics(t0b, labTotals(base.state, d0)),
+    variant: labMetrics(t0t, labTotals(test.state, d0)),
     runs: runs.length,
     outcomes,
     samples: runs.filter((r) => r.actions.length).slice(-20).reverse().map((r) => ({ ...r, trace: undefined })),

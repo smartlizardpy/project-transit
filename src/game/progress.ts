@@ -8,7 +8,7 @@ import { DAY, ECON, HOUR, MODELS } from './content.ts';
 import { dayTotals, post } from './finance.ts';
 import { distanceM, type LngLat } from './world/graph.ts';
 import type { Zone } from './world/region.ts';
-import { recJourney, recMissed, recTripDone } from './analytics/record.ts';
+import { changesOf, recJourney, recMissed, recTripDone } from './analytics/record.ts';
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 
@@ -89,7 +89,7 @@ export function scoreJourney(state: GameState, g: PaxGroup, completed: boolean, 
   const boards = Math.max(1, g.leg + 1);
   const rel = clamp01(1 - (g.dl / 60 / boards - 1) / 7);
   const price = clamp01(1.25 - (0.45 * state.company.fare) / ECON.referenceFare);
-  const transfers = g.legs.length - 1;
+  const transfers = changesOf(g.legs);
   if (!completed) return { overall: 0.04, comp: [0, 0, g.r > 0 ? crowd : 0.5, rel, price] as [number, number, number, number, number] };
   const overall = clamp01(0.3 * wait + 0.25 * journey + 0.15 * crowd + 0.15 * rel + 0.15 * price - 0.07 * transfers);
   return { overall, comp: [wait, journey, crowd, rel, price] as [number, number, number, number, number] };

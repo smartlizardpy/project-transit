@@ -13,7 +13,7 @@ import type { GameState, Id, Leg, PaxGroup, Vehicle } from './types.ts';
 import { MODEL } from './content.ts';
 import { accrueFare } from './finance.ts';
 import { recordTrip } from './progress.ts';
-import { recAlight, recBoard, recFare, recGaveUp, recLeftBehind } from './analytics/record.ts';
+import { isChange, recAlight, recBoard, recFare, recGaveUp, recLeftBehind } from './analytics/record.ts';
 import { hourOfDay } from './time.ts';
 import { distanceM } from './world/graph.ts';
 import { ActivityModel, returnMinutes, returnShareByHour, type ChoiceContext, type DayEstimate } from './activity/model.ts';
@@ -290,6 +290,26 @@ export function computeItineraries(S: number, services: PatternService[], walk: 
       const b0 = list[0];
       const alt = list.slice(1).filter((x) => x.gt <= b0.gt + 4 && (x.leg.r !== b0.leg.r || x.leg.p !== b0.leg.p)).map((x) => x.leg);
       best.set(o * S + d, { gt: b0.gt, legs: [b0.leg], alt, ivt: b0.ivt, wait: b0.wait, transfers: 0, walk: 0 });
+    }
+    // round a loop: a stop before this one on a loop is reached by staying with the line, riding
+    // to its terminus and on with the next trip round (not a change: the same line, the same stop)
+    for (const { svc, pos } of at[o]) {
+      const sv = services[svc];
+      const L = sv.sIdx.length;
+      if (pos === 0 || L < 4 || sv.pattern.stops[0] !== sv.pattern.stops[L - 1]) continue;
+      const w = expWait(sv.headway);
+      const toEnd = sv.tmin[L - 1] - sv.tmin[pos];
+      const term = sv.pattern.stops[L - 1];
+      for (let j = 1; j < pos; j++) {
+        const d = sv.sIdx[j];
+        if (d < 0 || d === o) continue;
+        const ivt = toEnd + sv.tmin[j] - sv.tmin[0];
+        const gt = 3.6 * w + ivt;
+        const cur = best.get(o * S + d);
+        if (cur && cur.gt <= gt) continue;
+        const leg: Leg = { r: sv.pattern.route, p: sv.pattern.index, a: term };
+        best.set(o * S + d, { gt, legs: [leg, { r: sv.pattern.route, p: sv.pattern.index, a: sv.pattern.stops[j] }], alt: [], ivt, wait: 2 * w, transfers: 0, walk: 0 });
+      }
     }
     // one transfer: at the stop the first bus reaches, or after a short walk to a stop nearby
     for (let x = 0; x < S; x++) {
@@ -668,7 +688,7 @@ export function serveStop(game: Game, v: Vehicle, p: Pattern, idx: number, opts:
       if (headway > 12) waited = Math.min(waited, 240 + 12 * headway + Math.max(0, v.delay));
       part.w += Math.max(0, waited);
       part.dl += Math.abs(v.delay);
-      recBoard(state, stop, p.route, v, take, waited, part.leg > 0, part.k, p);
+      recBoard(state, stop, p.route, v, take, waited, isChange(part.legs, part.leg), part.k, p);
       if (!part.fr) {
         part.fr = p.route;
         const amt = state.company.fare * part.n;
