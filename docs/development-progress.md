@@ -226,3 +226,4 @@ Tracked in detail in [`docs/network-control-progress.md`](network-control-progre
       - a request with an `Origin` header and one without the token were refused;
       - `agent.json` was mode 0600 and was removed on quit.
   - Fixed: the satisfaction popover showed the average wait divided by 60 again ("avg wait 0.1 min" for a 7.4-minute wait).
+  - Released as v0.4.1. PR #7.
