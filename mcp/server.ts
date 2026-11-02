@@ -1,9 +1,14 @@
-// Project Transit MCP server: lets AI agents read your saved games (read-only).
-// Started by mcp/main.ts (stdio). The desktop app ships it as one bundled file
+// Project Transit MCP server: lets AI agents read your saved games, and, with live access on,
+// the running game. Started by mcp/main.ts (stdio). The desktop app ships it as one bundled file
 // (pnpm build:mcp) and Settings → AI agents copies the setup for Claude and other apps.
 //
-// It reads the desktop app's save folder. PT_SAVES_DIR points it somewhere else. Saves are
-// snapshots: the game autosaves every few minutes and when you quit; ⌘S saves now.
+// Save tools read the desktop app's save folder (read-only). PT_SAVES_DIR points them somewhere
+// else. Saves are snapshots: the game autosaves every few minutes and when you quit; ⌘S saves now.
+//
+// Live tools (live_*, and the workflow tools) ask the running game through its local bridge while
+// the player has Settings → AI agents → Live access on. They read the game as it is now and build
+// workflows in Automation Studio, in Observe or Suggest mode only. PT_AGENT_FILE points them at
+// another connection file.
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -12,15 +17,25 @@ import { z } from 'zod';
 import type { GameState } from '../src/game/types.ts';
 import { SAVE_VERSION } from '../src/game/types.ts';
 import * as view from './data.ts';
+import { agentName, askLive } from './live.ts';
 
 const APP_ID = 'dev.projecttransit.prototype';
 
-export function savesDir(): string {
-  if (process.env.PT_SAVES_DIR) return process.env.PT_SAVES_DIR;
+/** The desktop app's data folder. */
+function appDir(): string {
   const home = homedir();
-  if (process.platform === 'darwin') return join(home, 'Library', 'Application Support', APP_ID, 'saves');
-  if (process.platform === 'win32') return join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), APP_ID, 'saves');
-  return join(process.env.XDG_DATA_HOME ?? join(home, '.local', 'share'), APP_ID, 'saves');
+  if (process.platform === 'darwin') return join(home, 'Library', 'Application Support', APP_ID);
+  if (process.platform === 'win32') return join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), APP_ID);
+  return join(process.env.XDG_DATA_HOME ?? join(home, '.local', 'share'), APP_ID);
+}
+
+export function savesDir(): string {
+  return process.env.PT_SAVES_DIR || join(appDir(), 'saves');
+}
+
+/** Where the running game says how to reach it (only while live access is on). */
+export function agentFile(): string {
+  return process.env.PT_AGENT_FILE || join(appDir(), 'agent.json');
 }
 
 interface Meta {
@@ -65,7 +80,7 @@ function readSave(dir: string, id: string): GameState {
   throw new Error(`Save "${id}" was not found or could not be read.`);
 }
 
-export function createServer(dir = savesDir()) {
+export function createServer(dir = savesDir(), liveFile = agentFile()) {
   const server = new McpServer({ name: 'project-transit', version: typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev' });
 
   const pick = (save?: string): { state: GameState; meta: Meta | null } => {
@@ -138,7 +153,101 @@ export function createServer(dir = savesDir()) {
     return view.lineCharacter(s, r);
   });
 
+  registerLive(server, liveFile, reply, fail);
+
   tool('query_save', 'Raw save data (money in the game\'s base unit, about euros; times in game seconds) for anything the other tools leave out, by JSON pointer (e.g. /routes/r1/timetable, /company, /pax/waiting). Large objects return their keys.', { pointer: z.string().describe('JSON pointer, starting with /') }, (s, a) => view.query(s, String(a.pointer)));
 
   return server;
+}
+
+type Reply = (data: unknown) => { content: { type: 'text'; text: string }[] };
+type Fail = (e: unknown) => { isError: boolean; content: { type: 'text'; text: string }[] };
+
+const lineArg = z.string().describe('Line id (r1), number (1) or name');
+const nodeShape = z.object({
+  id: z.string().describe('Your id for the block, unique in the workflow (e.g. n1)'),
+  type: z.string().describe('Block type from workflow_blocks, e.g. trigger.every'),
+  config: z.record(z.string(), z.unknown()).optional().describe('Settings by id (see workflow_blocks); left out = the default'),
+  label: z.string().optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  disabled: z.boolean().optional(),
+});
+const edgeShape = z.object({
+  from: z.string().describe('Block id the value comes from'),
+  out: z.string().describe('Output id on that block'),
+  to: z.string().describe('Block id it goes to'),
+  in: z.string().describe('Input id on that block'),
+});
+const graphArgs = {
+  nodes: z.array(nodeShape).optional().describe('Every block in the workflow (replaces the current ones)'),
+  edges: z.array(edgeShape).optional().describe('Every connection (replaces the current ones)'),
+};
+
+/** Tools that ask the running game (live access). */
+function registerLive(server: McpServer, file: string, reply: Reply, fail: Fail) {
+  const who = () => agentName(server.server.getClientVersion()?.name);
+  const ro = { readOnlyHint: true, openWorldHint: false };
+  const writes = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+  const live = (name: string, description: string, shape: z.ZodRawShape, method: string, annotations: Record<string, boolean> = ro, params: (a: Record<string, unknown>) => unknown = (a) => a) =>
+    server.registerTool(name, { description, inputSchema: shape, annotations }, async (args: Record<string, unknown>) => {
+      try {
+        return reply(await askLive(file, method, params(args ?? {}), who()));
+      } catch (e) {
+        return fail(e);
+      }
+    });
+
+  live('live_status', 'LIVE: whether the desktop game is running with live access on, the company open, its game day and time, and whether Network Control (analytics, Automation Studio) is open. Start here for live tools.', {}, 'status');
+
+  live('live_view', 'LIVE: the running game as it is now, not a save. Same views as the save tools: overview, lines, line_details (needs line), buses, stops, finances (days), history, objectives, notifications (limit, unreadOnly), territory, places (category, query, limit), weather_calendar, events (kind), line_character (needs line).', {
+    what: z.enum(['overview', 'lines', 'line_details', 'buses', 'stops', 'finances', 'history', 'objectives', 'notifications', 'territory', 'places', 'weather_calendar', 'events', 'line_character']),
+    line: lineArg.optional(),
+    days: z.number().int().min(1).max(60).optional(),
+    limit: z.number().int().min(1).max(300).optional(),
+    unreadOnly: z.boolean().optional(),
+    category: z.string().optional(),
+    query: z.string().optional(),
+    kind: z.string().optional(),
+  }, 'view');
+
+  live('live_analytics', 'LIVE: Network Control analytics from the running game (needs Network Control open). kind "aggregate": query { groupBy: network|line|stop|vehicle|zone|day|hour|weekday|weather|daykind|eventday|type, days?: {last: N} or {from, to}, includeToday?, hours?: [from, to], dayType?: all|weekday|weekend, weekday?: 0-6 (0 = Monday), lines?: [ids], stops?: [ids] } gives every measure per row (boardings, journeys, gave up, waits, load, punctuality, revenue, costs...). kind "od": where journeys go, query { level: stop|zone, days?, includeToday?, lines?, origin?, destination?, limit? }. kind "demand": estimated travel demand, query { level: zone, view?: all|unserved, origin?, destination?, limit? }.', {
+    kind: z.enum(['aggregate', 'od', 'demand']).optional().describe('Default aggregate'),
+    query: z.record(z.string(), z.unknown()).describe('See the description'),
+  }, 'analytics');
+
+  live('live_improve_service', 'LIVE: why passengers are unhappy (waiting, journey time, crowding, reliability, fares), line by line, and the plan the game\'s Improve service would suggest: moving or buying buses, timetables fitted to the buses, shorter routes. Read-only: the player applies a plan in the game (Satisfaction → Improve service).', {}, 'improve_service');
+
+  live('workflow_blocks', 'LIVE: the Automation Studio blocks you can build workflows from: type, inputs, outputs and settings. Filter by category (trigger, data, logic, math, state, action, advanced) or a search word.', {
+    category: z.enum(['trigger', 'data', 'logic', 'math', 'state', 'action', 'advanced']).optional(),
+    search: z.string().optional(),
+  }, 'node_types');
+
+  live('list_workflows', 'LIVE: the workflows in Automation Studio with mode, on/off, whether they are valid, who made them and their last run.', {}, 'workflows');
+
+  live('get_workflow', 'LIVE: one workflow in full: blocks with settings, connections, limits and any problems.', { id: z.string().describe('Workflow id from list_workflows') }, 'workflow');
+
+  live('create_workflow', 'LIVE: build a workflow in Automation Studio in the running game. It runs in Suggest mode (the player approves each change) or Observe mode (it only records what it would do): agents cannot choose Automatic. Its actions follow the same rules and limits as the player\'s. The player is told. enabled: true switches it on if it has no problems. Get block types and ports from workflow_blocks first.', {
+    name: z.string().max(60),
+    description: z.string().max(300).optional(),
+    mode: z.enum(['suggest', 'observe']).optional().describe('Default suggest'),
+    enabled: z.boolean().optional(),
+    ...graphArgs,
+  }, 'create_workflow', writes);
+
+  live('update_workflow', 'LIVE: change a workflow you made (not the player\'s): blocks, connections, name, mode (suggest or observe) or on/off. If the player had switched it to Automatic, changing its blocks puts it back in Suggest mode.', {
+    id: z.string(),
+    name: z.string().max(60).optional(),
+    description: z.string().max(300).optional(),
+    mode: z.enum(['suggest', 'observe']).optional(),
+    enabled: z.boolean().optional(),
+    ...graphArgs,
+  }, 'update_workflow', writes);
+
+  live('delete_workflow', 'LIVE: delete a workflow you made (not the player\'s).', { id: z.string() }, 'delete_workflow', { ...writes, destructiveHint: true });
+
+  live('test_workflow', 'LIVE: try a workflow in the Simulation Lab: plays the next 2, 4, 8 or 24 game hours on two copies of the company, without and with the workflow running automatically, and compares them. The real game is not changed.', {
+    id: z.string(),
+    hours: z.union([z.literal(2), z.literal(4), z.literal(8), z.literal(24)]).optional().describe('Default 4'),
+  }, 'test_workflow', { readOnlyHint: true, openWorldHint: false });
 }

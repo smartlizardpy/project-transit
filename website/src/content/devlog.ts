@@ -30,6 +30,12 @@ export interface Update {
 /** Newest first. */
 export const UPDATES: Update[] = [
   {
+    date: '2026-11-01',
+    title: '0.4.1: Improve service, and AI agents in the running game',
+    body: 'A new Improve service button in the satisfaction popover finds why passengers are unhappy (long waits, slow journeys, full buses, people with no bus home) and proposes changes you could make yourself: spare buses moved to where people wait, timetables fitted to the buses, and shorter routes. Try them on a copy of your company first, then apply or undo them. Loop lines now take people home: riders going back to an earlier stop stay on the bus round the loop. With live access switched on, AI agents can read the running game and its analytics, and build and test Automation Studio workflows. Their workflows suggest changes for you to approve; only you can make one automatic.',
+    href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.4.1',
+  },
+  {
     date: '2026-10-31',
     title: '0.4.0: A city that moves by itself',
     body: 'People now make whole days of trips: work, school, university, shopping, hospitals, the airport, nights out and events. Ten kinds of traveller choose between walking, cycling, car, taxi, the city’s own metro, trams, rail and ferries, and your buses. Airports, stations, universities and other places have opening hours, busy hours and a place card. Weather follows each city’s climate, with forecasts, and matches, concerts and rail closures change who travels. Riders can change lines on foot, or take your bus to a station and carry on by metro. Automation Studio gets control-room blocks such as holding buses for connections and lending buses between lines, plus 49 starter workflows.',

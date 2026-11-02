@@ -11,7 +11,7 @@ export type Selection =
   | { kind: 'zone'; id: string }
   | { kind: 'place'; id: string }
   | null;
-export type Panel = 'fleet' | 'finance' | 'lines' | 'company' | 'network' | null;
+export type Panel = 'fleet' | 'finance' | 'lines' | 'company' | 'network' | 'service' | null;
 export type NetworkTab = 'overview' | 'passengers' | 'stops' | 'lines' | 'fleet' | 'reports' | 'automation';
 
 /** A route check (interactive diagnostic) open in the inspector. `route` null = the line being drafted. */

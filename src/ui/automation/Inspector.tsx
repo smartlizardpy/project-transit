@@ -108,6 +108,7 @@ export function WorkflowInspector({ game, wf, draft, setDraft, onEnabled, onClea
           <div className="st-switchrow"><div><b>Switched on</b><div className="st-help">Takes effect straight away, whatever else is unsaved.</div></div><Switch on={wf.enabled} onChange={onEnabled} label="Workflow switched on" /></div>
         )}
         {wf.stopped && <div className="pn-warn">Switched off by the game: {wf.stopped}</div>}
+        {wf.by === 'agent' && <div className="st-help">Made by an AI agent with live access. It can keep changing this workflow; changing its blocks while it is on Automatic puts it back in Suggest mode.</div>}
       </div>
 
       {!isFn && (

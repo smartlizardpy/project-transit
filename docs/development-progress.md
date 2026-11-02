@@ -9,7 +9,7 @@ Status key:
 
 A feature is not marked done just because its UI exists.
 
-Last updated: 2026-10-30.
+Last updated: 2026-11-01.
 
 ## Milestone A — A real bus service ✅
 
@@ -207,3 +207,23 @@ Tracked in detail in [`docs/network-control-progress.md`](network-control-progre
       - v0.3.0: Network Control (analytics, Automation Studio, Simulation Lab), clickable route diagnostics, moving buses between depots. Details in `docs/network-control-progress.md`.
 - **2026-10-31.**
   - v0.4.0: the City Activity Engine (phases 0–7: places, tours, traveller types, nested mode choice, the city's own transit, weather, events, service plans, trust minutes, walking changes) and more Automation Studio blocks (peaks, sharing buses between lines, connection holds, control-room blocks, "why reputation fell", 49 starter workflows). Details in `docs/city-activity-engine-progress.md` and `docs/network-control-progress.md`. PR #4.
+- **2026-11-01.** From the player's requests: "a button that will optimise bus routes" (their Barcelona company was at 54%, because of waiting and journey times), and "create workflows with the MCP, on the live game, and fetch live analytics".
+  - **Loop lines stranded people.** A traveller going from a later stop back to an earlier one on a loop had no itinerary, so people who rode a loop out could not get home. In the Barcelona save that was about 1,800–2,000 people a day, mostly in the daytime. Travellers now ride on through the terminus, with no change counted. `loops.test.ts`: a loop strands 3, against 40 before the fix; a two-way line on the same streets strands 3.
+  - **Improve service** (Satisfaction → Improve service; `src/game/optimise.ts`, `src/ui/ImproveService.tsx`, [improve-service.md](improve-service.md)).
+    - It finds the causes and proposes steps: moving spare and idle buses, buying buses with money to spare, fitting timetables to the buses (with 10% spare time), and shorter routes.
+    - You can test the steps on copies of the company for 6 or 24 game hours, then apply them with undo.
+    - `improve.test.ts` (5 tests).
+    - On the Barcelona save (production build, next 24 h): satisfaction 62% → 74%, average wait 6.6 → 4.2 min, journeys 5,911 → 12,318.
+  - **Live access for AI agents** (Settings → AI agents → Live access; off by default).
+    - Rust `src-tauri/src/agent.rs`: a local endpoint with a token. The game answers requests with `src/game/agents/api.ts`.
+    - 11 new MCP tools: live views, Network Control analytics, the Improve service plan, and building, testing and deleting workflows. Agents' workflows run in Suggest or Observe mode only.
+    - Tests:
+      - Rust: 4 tests (refuses web pages, wrong hosts and tokens; carries requests; connection file is owner-only);
+      - `agents.test.ts`: what agents may and may not do;
+      - `mcp/server.test.ts`: MCP client → server → bridge → game.
+    - Checked in the real desktop app (debug build, `PT_DIAG_AGENT=1`):
+      - the bundled MCP server got answers in 25–50 ms;
+      - a request with an `Origin` header and one without the token were refused;
+      - `agent.json` was mode 0600 and was removed on quit.
+  - Fixed: the satisfaction popover showed the average wait divided by 60 again ("avg wait 0.1 min" for a 7.4-minute wait).
+  - Released as v0.4.1. PR #7.

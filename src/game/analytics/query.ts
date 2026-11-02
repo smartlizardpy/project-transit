@@ -673,10 +673,13 @@ export function itineraryLabel(game: Game, sig: string): string {
   const out: string[] = [];
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i];
+    const stopName = () => st.stops[p]?.name ?? names.s[p] ?? 'a removed stop';
     if (i % 2 === 0) {
+      // the same line again after its terminus: staying with a loop, already named
+      if (i > 0 && parts[i - 2] === p) continue;
       const r = st.routes[p];
       out.push(`Line ${r?.number ?? names.r[p]?.n ?? '?'}`);
-    } else out.push(`change at ${st.stops[p]?.name ?? names.s[p] ?? 'a removed stop'}`);
+    } else out.push(parts[i + 1] === parts[i - 1] ? `round the loop through ${stopName()}` : `change at ${stopName()}`);
   }
   return out.join(' → ');
 }

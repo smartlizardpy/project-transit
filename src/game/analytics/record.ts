@@ -123,6 +123,19 @@ export function recGaveUp(state: GameState, stop: Id, route: Id | undefined, n: 
   if (route && state.routes[route]) routeDay(state, route).g += n;
 }
 
+/**
+ * Changes in a journey: onto another line, or a walk to another stop. Staying with a loop line
+ * through its terminus (the same line, at the same stop) is not a change.
+ */
+export function changesOf(legs: readonly { r: Id; b?: Id }[]): number {
+  let n = 0;
+  for (let i = 1; i < legs.length; i++) if (legs[i].r !== legs[i - 1].r || legs[i].b) n++;
+  return n;
+}
+
+/** Is boarding leg `i` a change from the leg before (see `changesOf`)? */
+export const isChange = (legs: readonly { r: Id; b?: Id }[], i: number) => i > 0 && (legs[i].r !== legs[i - 1].r || !!legs[i].b);
+
 /** Lines used and transfer stops of an itinerary, e.g. `r1` or `r1.s5.r3`. */
 export function itinerarySig(g: PaxGroup): string {
   return g.legs.map((l, i) => (i < g.legs.length - 1 ? `${l.r}.${l.a}` : l.r)).join('.');
@@ -138,7 +151,7 @@ export function recJourney(state: GameState, g: PaxGroup, completed: boolean, sa
     net.j[h] += g.n;
     net.jt += ((t - g.t0) / 60) * g.n;
     net.wt += (g.w / 60) * g.n;
-    if (g.legs.length > 1) net.xf += g.n;
+    if (changesOf(g.legs)) net.xf += g.n;
     if (g.k !== undefined) (net.jk ??= types0())[g.k] += g.n;
   } else {
     net.ab[h] += g.n;

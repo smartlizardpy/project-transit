@@ -31,3 +31,14 @@
 .pn-chart text { fill: var(--text-3); font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .pn-legend { display: flex; gap: 12px; font-size: 11px; font-weight: 600; color: var(--text-3); }
 .pn-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+/* Improve service */
+.improve-comps { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.improve-step { gap: 6px; padding: 12px; }
+.improve-step.off { opacity: 0.6; }
+.improve-step-head { display: flex; align-items: center; gap: 8px; }
+.improve-step-head .grow { flex: 1; min-width: 0; }
+.improve-lines { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.improve-line { padding: 0; background: none; border: 0; cursor: pointer; }
+.improve-details { margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.5; color: var(--text-2); }
+.improve-details li + li { margin-top: 2px; }

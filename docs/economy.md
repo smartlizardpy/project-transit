@@ -77,7 +77,7 @@ Buses wear by about 0.01% of condition per km. Below 45% condition they can brea
   - Every 0.15 above the reference fare adds a minute of perceived journey time, scaled by the traveller's fare sensitivity. Raising the fare earns more per rider but loses riders.
   - The car slows with simulated traffic, so the bus wins more riders at rush hour.
   - From your stops near a station, people can ride your bus there and go on by the city's transit.
-- **Satisfaction:** each completed journey is scored on waiting (30%), journey time compared with a car (25%), crowding (15%), reliability (15%) and price (15%). There is a small penalty for each transfer. Passengers who give up waiting score very low.
+- **Satisfaction:** each completed journey is scored on waiting (30%), journey time compared with a car (25%), crowding (15%), reliability (15%) and price (15%). There is a small penalty for each transfer. Staying on a loop line through its terminus and round the loop is not a transfer. Passengers who give up waiting, or find no bus home, score very low. **Satisfaction → Improve service** finds what costs the most and proposes changes ([improve-service.md](improve-service.md)).
 
 ## Reputation
 

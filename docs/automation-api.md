@@ -164,6 +164,10 @@ A **test run** from the editor never changes the game or the workflow's memory; 
 - **Your own changes win**: a change you make by hand (bus assignment, depot, timetable, suspension, fare, cancelling a planned extra departure) blocks automations from undoing it for 24 game hours.
 - **History**: the latest 300 runs are kept; the node-by-node trace (inputs, outputs, and why a condition was true or false) is kept for each workflow's latest 3 runs.
 
+### Workflows made by AI agents
+
+With **Settings → AI agents → Live access** on, an AI agent can build workflows through the MCP server (README, "Live access"). Its workflows are marked `by: 'agent'` and show an **AI agent** tag. They start in Suggest mode (or Observe, if the agent asks), and an agent can never switch one to Automatic. If an agent changes the blocks of one you switched to Automatic, it goes back to Suggest. Agents can change and delete only their own workflows. Every addition, change and deletion sends you a notification. Duplicating an agent's workflow makes the copy yours.
+
 ## Simulation Lab
 
 `lab.ts` copies the saved company twice in memory, runs one copy without the workflow and one with it for 2–24 game hours, and compares journeys, boardings, abandoned journeys, trips, missed departures, punctuality, waiting, load, satisfaction, passengers left behind, fares and the change in balance. The live game is untouched (tested). Both copies use the same random seed, and other workflows run in both. The figures are measured in the copies, but they are one possible future: once the workflow changes something the copies drift apart, so small differences can be chance. It is not a forecast.

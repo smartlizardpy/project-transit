@@ -71,6 +71,8 @@ export interface Workflow {
   errors: number;
   /** why the game switched it off, if it did */
   stopped?: string;
+  /** made by an AI agent through live access (agents may change only these) */
+  by?: 'agent';
 }
 
 export interface QueuedEvent {

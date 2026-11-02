@@ -51,6 +51,7 @@ export function WorkflowRow({ game, wf, onOpen }: { game: Game; wf: Workflow; on
           <button onClick={() => onOpen(wf.id)}>{wf.name}</button>
           {isFn ? <span className="pn-tag">Function</span> : <ModeTag mode={wf.mode} />}
           {val && !val.ok && <span className="pn-tag bad">Has problems</span>}
+          {wf.by === 'agent' && <span className="pn-tag" title="Made by an AI agent with live access. Agents may change or delete only the workflows they made.">AI agent</span>}
         </div>
         <div className="st-wf-meta">
           {triggerSummary(game, wf)}<br />

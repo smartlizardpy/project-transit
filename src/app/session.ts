@@ -56,16 +56,19 @@ export interface AppSettings {
   autosaveMinutes: number;
   /** desktop: look for updates on launch and every few hours */
   autoUpdate: boolean;
+  /** desktop: AI agents may read the running game and build workflows (off by default) */
+  agentLive: boolean;
 }
 
 const SETTINGS_KEY = 'pt-settings-v1';
 export function loadSettings(): AppSettings {
-  const d: AppSettings = { autosaveMinutes: 5, autoUpdate: true };
+  const d: AppSettings = { autosaveMinutes: 5, autoUpdate: true, agentLive: false };
   try {
     const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}');
     return {
       autosaveMinutes: typeof raw.autosaveMinutes === 'number' ? raw.autosaveMinutes : d.autosaveMinutes,
       autoUpdate: typeof raw.autoUpdate === 'boolean' ? raw.autoUpdate : d.autoUpdate,
+      agentLive: raw.agentLive === true,
     };
   } catch {
     return d;

@@ -15,6 +15,7 @@ import { CATEGORY_LABEL, dayTotals } from '../game/finance.ts';
 import { hhmm } from '../game/time.ts';
 import type { LedgerCategory } from '../game/types.ts';
 import { NetworkControl } from './network/NetworkControl.tsx';
+import { ImproveService } from './ImproveService.tsx';
 import { companyLevel } from '../game/control.ts';
 import '../styles/panels.css';
 
@@ -49,6 +50,7 @@ export function Panels() {
       {shown === 'lines' && <LinesPanel game={game} />}
       {shown === 'company' && <CompanyPanel game={game} />}
       {shown === 'network' && <NetworkControl game={game} />}
+      {shown === 'service' && <ImproveService game={game} />}
     </section>
   );
 }

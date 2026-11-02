@@ -1,6 +1,6 @@
 [package]
 name = "project-transit"
-version = "0.4.0"
+version = "0.4.1"
 description = "Project Transit: run a bus company in a real city"
 authors = ["Project Transit"]
 license = ""
@@ -30,6 +30,7 @@ log = "0.4"
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-log = "2"
 base64 = "0.22"
+getrandom = "0.3"
 tauri-plugin-process = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
