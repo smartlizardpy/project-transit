@@ -945,6 +945,105 @@ a:hover {
   color: var(--band-ink);
 }
 
+/* playing together: two screens side by side, then how to start and how it behaves */
+
+.band--signal {
+  --band-bg: #1c4c70;
+  --band-ink: #f6f5ef;
+  --band-ink-2: #dbe8f1;
+  --band-ink-3: #c3d6e4;
+}
+
+.coop-film {
+  margin-top: clamp(40px, 5vw, 64px);
+  gap: 14px;
+}
+
+.coop-film .film {
+  aspect-ratio: 1932 / 720;
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: 0 40px 80px -40px rgba(3, 18, 30, 0.8);
+}
+
+/* the two labels sit over the two halves of the clip */
+.coop-who {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  font-size: var(--t-small);
+  font-weight: 650;
+  color: var(--band-ink);
+}
+
+.coop-who span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.coop-who i {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+}
+
+.coop-grid {
+  display: grid;
+  gap: clamp(36px, 5vw, 64px);
+  margin-top: clamp(44px, 5.5vw, 72px);
+}
+
+@media (min-width: 1000px) {
+  .coop-grid {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    align-items: start;
+  }
+}
+
+.coop-sub {
+  margin-bottom: 14px;
+}
+
+.coop-steps .step {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.coop-steps .step p,
+.coop-facts p {
+  color: var(--band-ink-2);
+}
+
+.coop-facts {
+  display: grid;
+  gap: 28px clamp(20px, 3vw, 36px);
+}
+
+.coop-facts p {
+  margin-top: 6px;
+}
+
+@media (min-width: 640px) {
+  .coop-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.coop-note {
+  margin-top: clamp(36px, 5vw, 56px);
+  padding-top: clamp(24px, 3.5vw, 36px);
+  max-width: 78ch;
+  border-top: 1px solid rgba(246, 245, 239, 0.18);
+  color: var(--band-ink-2);
+}
+
+.coop-note strong {
+  color: var(--band-ink);
+}
+
 .steps {
   display: grid;
   gap: 6px;

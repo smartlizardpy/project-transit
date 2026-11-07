@@ -7,9 +7,9 @@ export const ISSUES = `${REPO}/issues`;
 
 /** The newest published build. Update with each release (see website/README.md). */
 export const RELEASE = {
-  version: '0.4.2',
+  version: '0.5.0',
   date: '2026-11-07',
-  url: `${REPO}/releases/tag/v0.4.2`,
+  url: `${REPO}/releases/tag/v0.5.0`,
 };
 
 export const BASE = import.meta.env.BASE_URL;
@@ -30,6 +30,7 @@ export const STOPS = [
   { id: 'living', name: 'Living city' },
   { id: 'company', name: 'Company' },
   { id: 'automation', name: 'Automation' },
+  { id: 'together', name: 'Together' },
   { id: 'screenshots', name: 'Screenshots' },
   { id: 'development', name: 'Development' },
 ] as const;
