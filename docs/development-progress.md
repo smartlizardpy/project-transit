@@ -233,3 +233,13 @@ Tracked in detail in [`docs/network-control-progress.md`](network-control-progre
   - **Settings → Graphics**: frame rate limit (30/60/120/off), resolution (100/75/50%), and a frame rate readout (`src/ui/PerfMeter.tsx`) that names the graphics card and flags integrated or software graphics.
   - The bus marker canvas follows the map's resolution and is not cleared when nothing was drawn; WASD panning no longer speeds up on fast screens.
   - Released as v0.4.2.
+- **2026-11-07.** Play together: up to four people run one company in one game, peer to peer (`docs/multiplayer-plan.md`).
+  - **Lockstep, like OpenTTD** (`src/net/lockstep.ts`). Every computer runs the same simulation and only player actions travel. The host stamps each action with the game second it applies at; guests never run past the host's frame. Joining sends the host's save and built map data, gzipped.
+  - **Every change is an action** (`src/game/actions.ts`, `src/app/act.ts`). The interface no longer calls game methods directly; Improve service plans and route fixes, with their undo, are actions too.
+  - **Drift safety net** (`src/net/checksum.ts`). Every ten game minutes guests send a fingerprint; one that differs gets a fresh copy of the game in about a second.
+  - **Same maths everywhere** (`src/game/dmath.ts`). Mac (JavaScriptCore) and Windows (V8) disagree in the last bit of `Math.exp`, `sin`, `pow`, `atan2` and others; the simulation now uses fdlibm-style versions built from + − × ÷ √, bit-identical in Node, Chromium and WebKit (`scripts/check-dmath.mjs`). Locale string ordering became code-unit ordering. The hourly passenger choice is about 2.5 ms (9%) slower.
+  - Fixed on the way: a game loaded from a save reacted differently to a line change made before its first game minute (the journey cache started empty). `game.freshDemand()`; `src/game/test/act-on-copy.test.ts`.
+  - **WebRTC** via Trystero (public Nostr relays introduce the players; the code encrypts the offer). Loaded only when someone hosts or joins. Checked in the macOS webview; two-browser end-to-end test in `scripts/coop.mjs`.
+  - Interface: Play with friends in the game menu, Join a friend on the start screen, friends' cursors and pings on the map, a players strip and activity feed under the clock. AI agents can read but not change workflows during co-op.
+  - Website: a Together section with a two-screen clip recorded from the running game (`website/scripts/capture-coop-video.mjs`).
+  - Released as v0.5.0.

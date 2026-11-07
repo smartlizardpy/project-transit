@@ -10,6 +10,7 @@ import { Places } from './sections/Places.tsx';
 import { Routes } from './sections/Routes.tsx';
 import { Screenshots } from './sections/Screenshots.tsx';
 import { Terminus } from './sections/Terminus.tsx';
+import { Together } from './sections/Together.tsx';
 
 /** Which nav link each section belongs to. */
 const NAV_FOR: [string, string][] = [
@@ -18,6 +19,7 @@ const NAV_FOR: [string, string][] = [
   ['living', '#routes'],
   ['company', '#routes'],
   ['automation', '#routes'],
+  ['together', '#routes'],
   ['screenshots', '#screenshots'],
   ['development', '#development'],
   ['get', '#development'],
@@ -67,6 +69,7 @@ export function App() {
         <Living />
         <Company />
         <Automation />
+        <Together />
         <Screenshots />
         <Development />
         <Terminus />

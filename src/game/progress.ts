@@ -9,6 +9,7 @@ import { dayTotals, post } from './finance.ts';
 import { distanceM, type LngLat } from './world/graph.ts';
 import type { Zone } from './world/region.ts';
 import { changesOf, recJourney, recMissed, recTripDone } from './analytics/record.ts';
+import { cmp } from './dmath.ts';
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 
@@ -292,7 +293,7 @@ function missedByLine(game: Game, day: number): { id: Id; n: number }[] {
   return Object.entries(rec.routes)
     .map(([id, rd]) => ({ id, n: rd.m.reduce((x, y) => x + y, 0) }))
     .filter((x) => x.n > 0 && game.state.routes[x.id])
-    .sort((p, q) => q.n - p.n || p.id.localeCompare(q.id));
+    .sort((p, q) => q.n - p.n || cmp(p.id, q.id));
 }
 
 /** Why a line misses departures, when it is plain: no buses at all, or fewer than its timetable needs. */

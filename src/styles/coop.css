@@ -1,0 +1,44 @@
+/* Co-op: dialogs, the strip under the clock, and friends' cursors on the map. */
+
+.co-av { display: inline-grid; place-items: center; flex: none; border-radius: 50%; color: #14181a; font-weight: 800; letter-spacing: -0.02em; box-shadow: 0 0 0 2px var(--card); }
+
+.co-players { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.co-players li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--card-raised); }
+.co-players b { font-size: 14px; font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.co-players span { font-size: 12px; color: var(--text-3); font-weight: 600; }
+
+.co-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.co-field > span { font-size: 12px; font-weight: 700; color: var(--text-2); }
+.co-field input { height: 40px; padding: 0 12px; border-radius: 10px; border: 0; outline: none; background: var(--card-deep); color: var(--text); font: inherit; font-size: 15px; font-weight: 600; box-shadow: inset 0 0 0 1px var(--hairline-strong); }
+.co-field input:focus { box-shadow: inset 0 0 0 2px var(--accent); }
+.co-field input.co-code-in { font-size: 20px; font-weight: 800; letter-spacing: 0.12em; font-variant-numeric: tabular-nums; }
+
+.co-code { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 12px 12px 12px 16px; border-radius: 12px; background: var(--card-deep); box-shadow: inset 0 0 0 1px var(--hairline-strong); }
+.co-code span { flex: 1; font-size: 26px; font-weight: 800; letter-spacing: 0.12em; font-variant-numeric: tabular-nums; user-select: all; }
+.co-hint { display: flex; align-items: center; gap: 6px; margin: -6px 0 12px; font-size: 12px; color: var(--text-3); font-weight: 600; }
+
+.co-status { margin-bottom: 12px; font-size: 13px; font-weight: 600; color: var(--text-2); }
+.co-bar { position: relative; height: 4px; margin-top: 8px; border-radius: 2px; background: var(--card-deep); overflow: hidden; }
+.co-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--accent); transition: width 200ms var(--ease-out); }
+.co-bar i.indef { width: 30%; animation: co-slide 1.2s ease-in-out infinite; }
+@keyframes co-slide { from { left: -30%; } to { left: 100%; } }
+
+/* the strip under the clock */
+.co-hud { position: absolute; top: calc(var(--edge) + 68px); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
+.co-hud > * { pointer-events: auto; }
+.co-pill { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px 0 6px; border-radius: 17px; color: var(--text); font-size: 12px; font-weight: 700; cursor: pointer; }
+.co-pill:hover { background: var(--card-raised); }
+.co-stack { display: flex; }
+.co-stack .co-av + .co-av { margin-left: -6px; }
+.co-wait { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 15px; font-size: 12px; font-weight: 700; color: var(--amber); }
+.co-feed { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 12px; background: rgba(14, 18, 16, 0.72); color: #eef0ec; font-size: 12px; font-weight: 600; white-space: nowrap; pointer-events: none !important; }
+.co-feed i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+/* friends on the map */
+.co-cursor { pointer-events: none; will-change: transform; }
+.co-cursor svg { display: block; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45)); }
+.co-cursor b { position: absolute; left: 16px; top: 16px; padding: 2px 7px; border-radius: 8px; color: #14181a; font: 700 11px/1.4 var(--font); white-space: nowrap; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
+.co-ping { pointer-events: none; width: 0; height: 0; }
+.co-ping i { position: absolute; left: -28px; top: -28px; width: 56px; height: 56px; border-radius: 50%; border: 3px solid var(--c); animation: co-ping 1.1s var(--ease-out) 2 both; }
+.co-ping i:nth-child(2) { animation-delay: 0.35s; }
+@keyframes co-ping { from { transform: scale(0.2); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }

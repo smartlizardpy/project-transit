@@ -14,6 +14,7 @@ import { hhmm } from './time.ts';
 import { tripSchedule } from './vehicles.ts';
 import { notify } from './progress.ts';
 import { requirement, type RunProfile } from './timetable.ts';
+import { hypot } from './dmath.ts';
 
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const fail = (error: string): Result<never> => ({ ok: false, error });
@@ -228,7 +229,7 @@ export function detourPlan(game: Game, route: Id, at: LngLat, radius: number, mi
   if (!(rad >= 100 && rad <= 800)) return fail('The area to avoid must be between 100 and 800 m across from its centre.');
   const g = game.region.graph;
   const [cx, cy] = game.geo.xy(at);
-  const inside = (n: number) => Math.hypot(g.x[n] - cx, g.y[n] - cy) <= rad;
+  const inside = (n: number) => hypot(g.x[n] - cx, g.y[n] - cy) <= rad;
   const pats = (game.patterns.get(route) ?? []).filter((p) => p.valid);
   const old = game.patterns.get(route) ?? [];
   const busy = new Set((s.detours ?? []).filter((d) => d.route === route).map((d) => d.key));

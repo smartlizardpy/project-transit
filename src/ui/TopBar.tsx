@@ -14,6 +14,7 @@ import type { Game } from '../game/engine.ts';
 import { companyLevel } from '../game/control.ts';
 import { WeatherChip } from './WeatherChip.tsx';
 import type { Notification } from '../game/types.ts';
+import { setSpeed } from '../app/act.ts';
 
 export function useOutside(ref: React.RefObject<HTMLElement | null>, onClose: () => void, active: boolean) {
   useEffect(() => {
@@ -181,7 +182,7 @@ export function TimeControls() {
       <div className="speed-seg five">
         <div className={`ind ${paused ? 'paused' : ''}`} style={{ transform: `translateX(${speed * 38}px)` }} />
         {SPEED_BUTTONS.map((s) => (
-          <button key={s.v} className={`has-tip ${s.v === speed ? 'on' : ''}`} onClick={() => game.setSpeed(s.v)} aria-label={s.label} disabled={game.halted && s.v > 0}>
+          <button key={s.v} className={`has-tip ${s.v === speed ? 'on' : ''}`} onClick={() => setSpeed(s.v)} aria-label={s.label} disabled={game.halted && s.v > 0}>
             {s.icon}
             <Tip label={s.label} k={s.k} side="below" />
           </button>

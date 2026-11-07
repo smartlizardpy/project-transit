@@ -5,6 +5,7 @@ import { focusVehicle } from './camera.ts';
 import { session, useSession } from '../app/session.ts';
 import { startDrafting } from './routeDraft.ts';
 import { goHome } from './ToolRail.tsx';
+import { setSpeed } from '../app/act.ts';
 
 /** Desktop shortcuts: Space, 1–4, WASD, Q/E, F, B/R/D tools, panels, Esc, Ctrl/Cmd+Z, Ctrl/Cmd+S. */
 export function useKeyboard() {
@@ -69,16 +70,16 @@ export function useKeyboard() {
       switch (k) {
         case ' ':
           e.preventDefault();
-          if (game.speed === 0) game.setSpeed(lastSpeed);
+          if (game.speed === 0) setSpeed(lastSpeed);
           else {
             lastSpeed = game.speed;
-            game.setSpeed(0);
+            setSpeed(0);
           }
           break;
-        case '1': game.setSpeed(1); break;
-        case '2': game.setSpeed(2); break;
-        case '3': game.setSpeed(3); break;
-        case '4': game.setSpeed(4); break;
+        case '1': setSpeed(1); break;
+        case '2': setSpeed(2); break;
+        case '3': setSpeed(3); break;
+        case '4': setSpeed(4); break;
         case 'v': ui.setTool('select'); break;
         case 'b': ui.setTool(ui.tool === 'stop' ? 'select' : 'stop'); break;
         case 'r': if (ui.tool === 'route') ui.setTool('select'); else startDrafting(null); break;

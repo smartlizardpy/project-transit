@@ -13,6 +13,7 @@ import type { TransitMode } from '../world/places.ts';
 import type { ActivityZones } from './zones.ts';
 import type { TourMatrix } from './od.ts';
 import { CHOICE, type TravellerType } from './params.ts';
+import { hypot } from '../dmath.ts';
 
 /** Assumed service by mode: average speed including stops (km/h) and the wait at the peak (minutes). */
 export const TRANSIT_SERVICE: Partial<Record<TransitMode, { kmh: number; wait: number }>> = {
@@ -132,7 +133,7 @@ function stationPaths(net: TransitNet, closed: Set<number>): Path[][] {
   // walking changes between nearby stations
   for (let a = 0; a < S; a++)
     for (let b = a + 1; b < S; b++) {
-      const d = Math.hypot(net.stations[a].x - net.stations[b].x, net.stations[a].y - net.stations[b].y);
+      const d = hypot(net.stations[a].x - net.stations[b].x, net.stations[a].y - net.stations[b].y);
       if (d > WALK_CHANGE_M) continue;
       const min = (d * CHOICE.detour) / CHOICE.walkSpeed;
       walks[a].push({ to: b, min });
@@ -208,7 +209,7 @@ export function buildTransitSkim(net: TransitNet | undefined, zs: ActivityZones,
     if (z.kind === 'beyond') return [];
     const out: { s: number; w: number }[] = [];
     net.stations.forEach((st, s) => {
-      const d = Math.hypot(st.x - z.x, st.y - z.y);
+      const d = hypot(st.x - z.x, st.y - z.y);
       if (d <= ACCESS_M) out.push({ s, w: Math.max(3, walkMin(d)) });
     });
     return out;

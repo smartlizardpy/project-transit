@@ -18,6 +18,9 @@ import { focusPoint, fitPoints } from '../ui/camera.ts';
 import { installShowcase } from './showcase.ts';
 import { createPacer } from './pacing.ts';
 import { stopSpots, type StopSpot } from '../game/spots.ts';
+import { act } from '../app/act.ts';
+import { coopActive, coopFrame } from '../net/coop.ts';
+import { installCoopLayer } from './coopLayer.ts';
 
 export interface Controller {
   vehicles: VehicleLayer;
@@ -71,7 +74,9 @@ export function installController(map: MlMap, city: CityLayer): Controller {
     const g = game;
     if (g && useSession.getState().phase === 'playing') {
       const modal = useUI.getState().modal;
-      if (!(modal && modal.kind === 'menu')) g.advance(dt);
+      // co-op: the shared clock runs on even when this player opens the menu
+      if (coopActive()) coopFrame(dt);
+      else if (!(modal && modal.kind === 'menu')) g.advance(dt);
       const ui = useUI.getState();
       if (ui.following) {
         const v = g.state.vehicles[ui.following];
@@ -257,12 +262,13 @@ export function installController(map: MlMap, city: CityLayer): Controller {
   };
 
   /** Build a stop where the player clicked (snapped to the street), or explain why not. */
-  const buildStopAt = (at: LngLat, name?: string): { id: string; built: boolean } | null => {
+  const buildStopAt = async (at: LngLat, name?: string): Promise<{ id: string; built: boolean } | null> => {
     if (!game) return null;
     const ui = useUI.getState();
     const c = checkStop(game.state, game.region, game.geo, at);
     if (!c.ok && c.clash) return { id: c.clash, built: false };
-    const res = game.placeStop(at, name);
+    const res = await act('placeStop', at, name);
+    if (!game) return null;
     if (!res.ok) {
       ui.notify(res.error, 'warn');
       if (!c.ok && c.zone && !game.state.territory.owned.includes(c.zone)) ui.select({ kind: 'zone', id: c.zone });
@@ -373,7 +379,7 @@ export function installController(map: MlMap, city: CityLayer): Controller {
     if (lng !== c.lng || lat !== c.lat) map.easeTo({ center: [lng, lat], duration: 600 });
   });
 
-  map.on('click', (e: MapMouseEvent) => {
+  map.on('click', async (e: MapMouseEvent) => {
     const ui = useUI.getState();
     const phase = useSession.getState().phase;
     const at: LngLat = [e.lngLat.lng, e.lngLat.lat];
@@ -401,7 +407,7 @@ export function installController(map: MlMap, city: CityLayer): Controller {
     if (ui.tool === 'stop') {
       const spot = spotAt(e.point);
       if (!spot) return spotHint();
-      const res = buildStopAt(spot.stop.lngLat, spot.stop.name || undefined);
+      const res = await buildStopAt(spot.stop.lngLat, spot.stop.name || undefined);
       if (res && !res.built) ui.select({ kind: 'stop', id: res.id });
       return;
     }
@@ -409,13 +415,15 @@ export function installController(map: MlMap, city: CityLayer): Controller {
       if (e.originalEvent.shiftKey || e.originalEvent.altKey) return addVia(e.point, at);
       const spot = spotAt(e.point);
       if (!spot) return spotHint();
-      const res = buildStopAt(spot.stop.lngLat, spot.stop.name || undefined);
+      const res = await buildStopAt(spot.stop.lngLat, spot.stop.name || undefined);
       if (res) addToDraft(res.id);
       return;
     }
     if (ui.tool === 'depot') {
-      const res = game.buildDepot(at);
+      const g = game;
+      const res = await act('buildDepot', at);
       if (!res.ok) return ui.notify(res.error, 'warn');
+      if (game !== g) return;
       ui.notify(`${game.state.depots[res.value].name} built (−${game.money(ECON.depotCost)}). Buy buses in the Fleet panel.`, 'good');
       ui.setTool('select');
       ui.select({ kind: 'depot', id: res.value });
@@ -424,6 +432,7 @@ export function installController(map: MlMap, city: CityLayer): Controller {
     }
   });
 
+  installCoopLayer(map);
   Object.assign(window as object, { __ui: useUI, __session: session });
   return { vehicles, markers };
 }

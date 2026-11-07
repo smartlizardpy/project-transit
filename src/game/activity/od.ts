@@ -7,6 +7,7 @@
 
 import { KINDS, KIND, KIND_COUNT } from './params.ts';
 import type { ActivityZones } from './zones.ts';
+import { exp, hypot } from '../dmath.ts';
 
 export interface TourMatrix {
   /** entries sorted by origin, then kind, then destination */
@@ -28,7 +29,7 @@ const BALANCE_ROUNDS = 5;
 
 export function zoneDistance(zs: ActivityZones, i: number, j: number): number {
   const a = zs.list[i], b = zs.list[j];
-  return i === j ? a.inner : Math.max(Math.hypot(a.x - b.x, a.y - b.y), (a.inner + b.inner) / 4);
+  return i === j ? a.inner : Math.max(hypot(a.x - b.x, a.y - b.y), (a.inner + b.inner) / 4);
 }
 
 export function distributeTours(zs: ActivityZones): TourMatrix {
@@ -55,7 +56,7 @@ export function distributeTours(zs: ActivityZones): TourMatrix {
     for (let i = 0; i < Z; i++) if (P[i] > 0) origins.push(i);
     // f(d) once per origin and destination
     const F = new Float64Array(origins.length * dests.length);
-    origins.forEach((i, oi) => dests.forEach((j, dj) => (F[oi * dests.length + dj] = Math.exp(-dist[i * Z + j] / kind.decay))));
+    origins.forEach((i, oi) => dests.forEach((j, dj) => (F[oi * dests.length + dj] = exp(-dist[i * Z + j] / kind.decay))));
     // balancing factors on the destination side (all 1 for singly constrained kinds)
     const B = new Float64Array(dests.length).fill(1);
     const target = dests.map((j) => (A[j] / sumA) * sumP);

@@ -22,6 +22,7 @@ import { NodeInspector, GroupInspector, WorkflowInspector } from './Inspector.ts
 import { RunList, TraceList, ActionList } from './Runs.tsx';
 import { Lab } from './Lab.tsx';
 import { IssueIcon, MODE_INFO, ModeTag, nodeTitle, whenLabel } from './common.tsx';
+import { act } from '../../app/act.ts';
 
 const nodeTypes = { stNode: StNode, stGroup: StGroup };
 const NODE_W = 212;
@@ -170,7 +171,7 @@ function EditorInner({ game, wfId, onLeave, onDirty }: { game: Game; wfId: strin
       const k = draftRef.current.nodes.length % 6;
       pos = { x: c.x - NODE_W / 2 + k * 28, y: c.y - 50 + k * 28 };
     }
-    const id = game.newNodeId();
+    const id = game.draftNodeId(draftRef.current.nodes.map((n) => n.id));
     update((d) => ({ ...d, nodes: [...d.nodes, { id, type, x: Math.round(pos!.x), y: Math.round(pos!.y), config: defaultConfig(type) }] }));
     setSel([id]); setSelEdges([]);
   }, [game, rf, update]);
@@ -193,7 +194,8 @@ function EditorInner({ game, wfId, onLeave, onDirty }: { game: Game; wfId: strin
     const src = draftRef.current.nodes.filter((n) => ids.has(n.id));
     if (!src.length) return;
     const map = new Map<string, string>();
-    const copies: WfNode[] = src.map((n) => { const id = game.newNodeId(); map.set(n.id, id); return { ...structuredClone(n), id, x: n.x + 40, y: n.y + 40, group: undefined }; });
+    const taken = draftRef.current.nodes.map((n) => n.id);
+    const copies: WfNode[] = src.map((n) => { const id = game.draftNodeId(taken); taken.push(id); map.set(n.id, id); return { ...structuredClone(n), id, x: n.x + 40, y: n.y + 40, group: undefined }; });
     const edges: WfEdge[] = draftRef.current.edges.filter((e) => map.has(e.from) && map.has(e.to)).map((e) => ({ ...e, id: uid('e'), from: map.get(e.from)!, to: map.get(e.to)! }));
     update((d) => ({ ...d, nodes: [...d.nodes, ...copies], edges: [...d.edges, ...edges] }));
     setSel(copies.map((c) => c.id)); setSelEdges([]);
@@ -270,9 +272,9 @@ function EditorInner({ game, wfId, onLeave, onDirty }: { game: Game; wfId: strin
     if (view !== 'edit') setView('edit');
   }, [game, trigger, rev, view]);
 
-  const doSave = useCallback((): boolean => {
+  const doSave = useCallback(async (): Promise<boolean> => {
     const d = draftRef.current;
-    const r = game.updateWorkflow(wfId, { name: d.name, description: d.description ?? '', nodes: d.nodes, edges: d.edges, groups: d.groups, viewport: vp.current ?? d.viewport, mode: d.mode, allowHighImpact: d.allowHighImpact, limits: d.limits });
+    const r = await act('updateWorkflow', wfId, { name: d.name, description: d.description ?? '', nodes: d.nodes, edges: d.edges, groups: d.groups, viewport: vp.current ?? d.viewport, mode: d.mode, allowHighImpact: d.allowHighImpact, limits: d.limits });
     if (!r.ok) { say(r.error, 'bad'); return false; }
     markSaved();
     say(errors.length ? 'Saved. It will not run until the problems are fixed.' : 'Saved.');
@@ -280,8 +282,8 @@ function EditorInner({ game, wfId, onLeave, onDirty }: { game: Game; wfId: strin
   }, [game, wfId, markSaved, say, errors.length]);
 
   const runNow = useCallback(() => {
-    const go = () => {
-      const r = game.runWorkflowNow(wfId, { test: false, node: trigger });
+    const go = async () => {
+      const r = await act('runWorkflowNow', wfId, { test: false, node: trigger });
       if (!r.ok) { say(r.error, 'bad'); return; }
       setTest({ run: r.value, rev, live: true }); setRunOpen(true);
     };
@@ -292,7 +294,7 @@ function EditorInner({ game, wfId, onLeave, onDirty }: { game: Game; wfId: strin
   const requestLeave = useCallback((then: () => void) => {
     if (!dirty) { then(); return; }
     setAsk({ title: 'Discard your changes?', body: 'This workflow has changes that are not saved yet.', actions: [
-      { label: 'Save and close', kind: 'primary', run: () => { if (doSave()) then(); } },
+      { label: 'Save and close', kind: 'primary', run: () => void doSave().then((ok) => ok && then()) },
       { label: 'Discard changes', kind: 'danger', run: then },
     ] });
   }, [dirty, doSave]);
@@ -304,7 +306,7 @@ function EditorInner({ game, wfId, onLeave, onDirty }: { game: Game; wfId: strin
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
       if (ask) { if (e.key === 'Escape') setAsk(null); return; }
-      if (mod && k === 's') { e.preventDefault(); doSave(); return; }
+      if (mod && k === 's') { e.preventDefault(); void doSave(); return; }
       if (isTyping(e.target)) return;
       if (mod && k === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
       if (mod && k === 'y') { e.preventDefault(); redo(); return; }
@@ -372,7 +374,7 @@ function EditorInner({ game, wfId, onLeave, onDirty }: { game: Game; wfId: strin
             <button className="btn sm" disabled={!canRun} onClick={runNow} title={canRun ? 'Run the saved workflow now, for real' : dirty ? 'Save first: Run now uses the saved workflow' : 'Fix the problems first'}><PlayCircle size={14} weight="bold" /><span className="t">Run now</span></button>
           </>
         )}
-        <button className="btn sm primary" disabled={!dirty} onClick={doSave} title="Save (Ctrl/Cmd+S)"><FloppyDisk size={14} weight="bold" /><span className="t">Save</span></button>
+        <button className="btn sm primary" disabled={!dirty} onClick={() => void doSave()} title="Save (Ctrl/Cmd+S)"><FloppyDisk size={14} weight="bold" /><span className="t">Save</span></button>
         <button className={`icon-btn ${peek ? 'on' : ''}`} onClick={() => useUI.getState().setStudio({ peek: !peek })} aria-label={peek ? 'Show the workspace' : 'Show the map'} title={peek ? 'Show the workspace' : 'Peek at the map'}>{peek ? <EyeSlash size={17} weight="bold" /> : <Eye size={17} weight="bold" />}</button>
         <button className="icon-btn" onClick={() => requestLeave(() => useUI.getState().setStudio({ open: false }))} aria-label="Close Automation Studio"><X size={17} weight="bold" /></button>
       </div>
@@ -424,8 +426,8 @@ function EditorInner({ game, wfId, onLeave, onDirty }: { game: Game; wfId: strin
                   </div></div>
                 ) : (
                   <WorkflowInspector game={game} wf={saved} draft={draft} setDraft={wfSetter}
-                    onEnabled={(v) => { const r = game.updateWorkflow(wfId, { enabled: v }); if (!r.ok) say(r.error, 'bad'); else if (v && !validation.ok) say('Switched on, but it cannot run until the problems are fixed.', 'bad'); }}
-                    onClearMemory={() => { game.clearWorkflowMemory(wfId); say('Memory cleared.'); }} />
+                    onEnabled={async (v) => { const r = await act('updateWorkflow', wfId, { enabled: v }); if (!r.ok) say(r.error, 'bad'); else if (v && !validation.ok) say('Switched on, but it cannot run until the problems are fixed.', 'bad'); }}
+                    onClearMemory={() => void act('clearWorkflowMemory', wfId).then(() => say('Memory cleared.'))} />
                 )}
               </div>
               {selNode && <div className="st-hint">Ctrl/Cmd+D duplicates · Delete removes · Ctrl/Cmd+G groups</div>}

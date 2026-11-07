@@ -13,6 +13,7 @@ import { SEASON_LABEL, dayTypeLabel } from '../calendar.ts';
 import type { LineForecastHour } from '../passengers.ts';
 import { PLACE_LABEL, describeScale, walkDistanceM, type CityPlace, type PlaceCategory } from '../world/places.ts';
 import { placeDay, placeTravel } from '../analytics/query.ts';
+import { cmp, hypot } from '../dmath.ts';
 
 /** Event kinds a trigger or data node can filter on. */
 export const EVENT_FILTER = [
@@ -47,7 +48,7 @@ export function linesNear(game: Game, at: [number, number], m = 1000): Id[] {
       const s = game.state.stops[id];
       if (!s) continue;
       const [x, y] = game.geo.xy(s.lngLat);
-      if (Math.hypot(x - vx, y - vy) <= m) {
+      if (hypot(x - vx, y - vy) <= m) {
         out.push(r.id);
         break;
       }
@@ -244,7 +245,7 @@ export function demandForecast(game: Game, hours: number, line?: Id): ForecastOu
       busiestIn: best ? best.in : null, busiestPerDeparture: best ? best.perDeparture : null,
     } as Rec;
   });
-  lines.sort((a, b) => (b.riders as number) - (a.riders as number) || String(a.id).localeCompare(String(b.id)));
+  lines.sort((a, b) => (b.riders as number) - (a.riders as number) || cmp(String(a.id), String(b.id)));
   const net = f.map((h) => ({ time: hhmm(h.t), boardings: Math.round([...h.lines.values()].reduce((a, b) => a + b, 0)), journeys: Math.round(h.total), goingHome: Math.round(h.home) }) as Rec);
   const total = lines.reduce((a, l) => a + (l.riders as number), 0);
   const end = Math.floor(game.t / HOUR) * HOUR + hours * HOUR;
@@ -292,5 +293,5 @@ export function placesOf(game: Game, category: string, line?: Id, limit = 20): C
   const r = line ? game.state.routes[line] : null;
   const pts = r ? [...new Set([...r.stops, ...(r.returnStops ?? [])])].map((s) => game.state.stops[s]?.lngLat).filter(Boolean) as [number, number][] : null;
   const near = pts ? all.filter((p) => pts.some((at) => walkDistanceM(p, at) <= 1000)) : all;
-  return near.sort((a, b) => a.scale.tier - b.scale.tier || b.scale.value - a.scale.value || a.id.localeCompare(b.id)).slice(0, limit);
+  return near.sort((a, b) => a.scale.tier - b.scale.tier || b.scale.value - a.scale.value || cmp(a.id, b.id)).slice(0, limit);
 }

@@ -18,9 +18,14 @@ export const useAgentLive = create<{ on: boolean; requests: number; last: string
 
 let unlisten: (() => void) | null = null;
 
+/** Agent requests that change the game. */
+const COOP_BLOCKED = new Set(['create_workflow', 'update_workflow', 'delete_workflow']);
+
 async function answer(r: Request) {
   let body: string;
   try {
+    // co-op: a change made here would reach only this computer's copy of the shared game
+    if (session.coop && COOP_BLOCKED.has(r.method)) throw new AgentError('While friends are playing together, AI agents can read the game but not change workflows.');
     body = JSON.stringify({ ok: true, result: await handleAgentRequest(session.game, r.method, r.params, r.who) });
   } catch (e) {
     const msg = e instanceof AgentError ? e.message : `The game could not do that: ${e instanceof Error ? e.message : String(e)}`;

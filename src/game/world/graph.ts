@@ -1,3 +1,4 @@
+import { acos, cos, hypot } from '../dmath.ts';
 // Drivable road graph: building, spatial queries and routing.
 // Pure TypeScript (no DOM): runs in the region worker, the main thread and Node tests.
 //
@@ -56,7 +57,7 @@ export interface Segment {
 }
 
 export function projector(origin: LngLat) {
-  const kx = 111320 * Math.cos((origin[1] * Math.PI) / 180);
+  const kx = 111320 * cos((origin[1] * Math.PI) / 180);
   const ky = 110574;
   return {
     kx,
@@ -67,8 +68,8 @@ export function projector(origin: LngLat) {
 }
 
 export function distanceM(a: LngLat, b: LngLat): number {
-  const k = Math.cos(((a[1] + b[1]) / 2) * (Math.PI / 180));
-  return Math.hypot((b[0] - a[0]) * 111320 * k, (b[1] - a[1]) * 110574);
+  const k = cos(((a[1] + b[1]) / 2) * (Math.PI / 180));
+  return hypot((b[0] - a[0]) * 111320 * k, (b[1] - a[1]) * 110574);
 }
 
 // ─────────────────────────────────────────────────────────────── building
@@ -208,7 +209,7 @@ function snapDangles(b: Building, P: ReturnType<typeof projector>, maxM: number)
       const [cx, cy] = xy(c);
       const dx = cx - ax, dy = cy - ay;
       const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1e-9)));
-      const d = Math.hypot(ax + t * dx - px, ay + t * dy - py);
+      const d = hypot(ax + t * dx - px, ay + t * dy - py);
       if (d < bestD) {
         bestD = d;
         best = e;
@@ -250,7 +251,7 @@ function densify(b: Building, P: ReturnType<typeof projector>, maxM: number) {
     const a = b.ea[e], c = b.eb[e];
     const [ax, ay] = P.toXY(b.lng[a], b.lat[a]);
     const [cx, cy] = P.toXY(b.lng[c], b.lat[c]);
-    const L = Math.hypot(cx - ax, cy - ay);
+    const L = hypot(cx - ax, cy - ay);
     const parts = Math.ceil(L / maxM);
     if (parts <= 1) continue;
     let prev = a;
@@ -350,7 +351,7 @@ function finalise(b: Building, origin: LngLat): RoadGraph {
     g.x[v] = x;
     g.y[v] = y;
   }
-  for (let e = 0; e < m; e++) g.len[e] = Math.max(0.1, Math.hypot(g.x[g.eb[e]] - g.x[g.ea[e]], g.y[g.eb[e]] - g.y[g.ea[e]]));
+  for (let e = 0; e < m; e++) g.len[e] = Math.max(0.1, hypot(g.x[g.eb[e]] - g.x[g.ea[e]], g.y[g.eb[e]] - g.y[g.ea[e]]));
   rebuildAdjacency(g);
   return g;
 }
@@ -392,9 +393,9 @@ export function turnAngle(g: RoadGraph, deIn: number, deOut: number): number {
   const a = tail(g, deIn), b = head(g, deIn), c = head(g, deOut);
   const ux = g.x[b] - g.x[a], uy = g.y[b] - g.y[a];
   const vx = g.x[c] - g.x[b], vy = g.y[c] - g.y[b];
-  const lu = Math.hypot(ux, uy) || 1, lv = Math.hypot(vx, vy) || 1;
+  const lu = hypot(ux, uy) || 1, lv = hypot(vx, vy) || 1;
   const cos = Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (lu * lv)));
-  return Math.acos(cos);
+  return acos(cos);
 }
 
 function turnPenalty(g: RoadGraph, deIn: number, deOut: number): number {
@@ -467,7 +468,7 @@ export function nearestEdge(g: RoadGraph, idx: SpatialIndex, x: number, y: numbe
         const ex = g.x[b] - g.x[a], ey = g.y[b] - g.y[a];
         const t = Math.max(0, Math.min(1, ((x - g.x[a]) * ex + (y - g.y[a]) * ey) / (ex * ex + ey * ey || 1e-9)));
         const px = g.x[a] + t * ex, py = g.y[a] + t * ey;
-        const d = Math.hypot(px - x, py - y);
+        const d = hypot(px - x, py - y);
         if (d < bestD) {
           bestD = d;
           best = { edge: e, t, d, x: px, y: py };
@@ -485,7 +486,7 @@ export function nearestNode(g: RoadGraph, idx: SpatialIndex, x: number, y: numbe
     for (let dy = -r; dy <= r; dy++)
       for (const v of idx.nodes.get(cellKey(cx + dx, cy + dy)) ?? []) {
         if (filter && !filter(v)) continue;
-        const d = Math.hypot(g.x[v] - x, g.y[v] - y);
+        const d = hypot(g.x[v] - x, g.y[v] - y);
         if (d < bestD) {
           bestD = d;
           best = v;
@@ -621,7 +622,7 @@ export function route(g: RoadGraph, from: number, to: number, opts: RouteOptions
   ws.reset();
   const vmax = 62 / 3.6 / 0.9;
   const tx = g.x[to], ty = g.y[to];
-  const h = (v: number) => Math.hypot(g.x[v] - tx, g.y[v] - ty) / vmax;
+  const h = (v: number) => hypot(g.x[v] - tx, g.y[v] - ty) / vmax;
   const cost = (de: number) => {
     const e = de >> 1;
     let c = (g.len[e] / (FREE_KMH[g.cls[e]] / 3.6)) * PREF[g.cls[e]];

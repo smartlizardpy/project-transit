@@ -131,6 +131,11 @@ class Session {
   /** saves run one at a time, in the order they were asked for */
   private saveChain: Promise<unknown> = Promise.resolve();
   private savesPending = 0;
+  /**
+   * Co-op role (src/net/coop.ts). A guest's game is a copy of the host's: it never grows the map
+   * or autosaves by itself; the host sends it the bigger map instead.
+   */
+  coop: 'host' | 'guest' | null = null;
 
   onGame(fn: GameListener): () => void {
     this.listeners.add(fn);
@@ -150,6 +155,7 @@ class Session {
 
   /** Load more map whenever the company's territory nears the edge of what is loaded. */
   private watchGrowth(g: Game) {
+    if (this.coop === 'guest') return;
     let owned = g.state.territory.owned.join();
     g.on('changed', () => {
       const now = g.state.territory.owned.join();
@@ -167,7 +173,7 @@ class Session {
    */
   async grow(): Promise<boolean> {
     const g = this.game;
-    if (!g || this.growing) return false;
+    if (!g || this.growing || this.coop === 'guest') return false;
     const tiles = tilesNeeded(g.region.spec, g.state.territory.owned);
     if (!tiles) return false;
     this.growing = true;
@@ -380,9 +386,38 @@ class Session {
     this.lastAutosave = Date.now();
     this.autosaveTimer = window.setInterval(() => {
       const mins = loadSettings().autosaveMinutes;
-      if (!mins || !this.game || useSession.getState().phase !== 'playing') return;
+      if (!mins || !this.game || this.coop === 'guest' || useSession.getState().phase !== 'playing') return;
       if (Date.now() - this.lastAutosave >= mins * 60_000) void this.save('auto');
     }, 15_000);
+  }
+
+  /**
+   * Co-op guest: run a game received from the host. `data` is the host's map (null: the map did not
+   * change). `why` is 'join' for the first copy; later copies keep the camera and open panels.
+   */
+  adoptCoopGame(state: GameState, data: RegionData | null, why: 'join' | 'resync' | 'grow'): Game {
+    let region = this.region;
+    if (data) {
+      region = prepareRegion(data);
+      this.region = region;
+      this.regionKey = `${region.spec.id}|${region.spec.tiles.map((t) => t.join(',')).join(';')}`;
+    }
+    if (!region) throw new Error('The map of the shared game is missing.');
+    const game = new Game(upgradeState(state), region);
+    clearInterval(this.autosaveTimer);
+    useSession.setState({ phase: 'playing', progress: null, pending: null, error: null });
+    this.setGame(game, why === 'join' ? undefined : { grown: true });
+    return game;
+  }
+
+  /** A co-op session ended: the game open here (a guest's copy too) is a normal game again. */
+  leaveCoop() {
+    const wasGuest = this.coop === 'guest';
+    this.coop = null;
+    if (wasGuest && this.game) {
+      this.startAutosave();
+      this.watchGrowth(this.game);
+    }
   }
 
   /** Leave the game. If saving first fails, the player stays in the game (and is told why). */

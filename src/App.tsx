@@ -24,6 +24,7 @@ import { installOnExit, startAutoUpdates } from './app/updates.ts';
 import { setAgentLive } from './app/agentBridge.ts';
 import './styles/ui.css';
 import './styles/game.css';
+import { CoopEnded, CoopHud } from './ui/Coop.tsx';
 
 function Boot() {
   const [done, setDone] = useState(false);
@@ -160,6 +161,7 @@ export function App() {
           <MapControls />
           <Onboarding />
           <AutomationStudio />
+          <CoopHud />
         </div>
       )}
       {playing && <NetworkUnlock />}
@@ -168,6 +170,7 @@ export function App() {
       <StartMenu />
       <NewCompany />
       <GameMenu />
+      <CoopEnded />
       <Toast />
       <UpdateBanner />
       <SessionNotices />

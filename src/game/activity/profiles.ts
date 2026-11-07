@@ -12,6 +12,7 @@ import type { CityPlace } from '../world/places.ts';
 import type { DayType } from '../calendar.ts';
 import { hashString } from '../hash.ts';
 import { KINDS, KIND_COUNT, type Curve, type Gate } from './params.ts';
+import { exp, sq } from '../dmath.ts';
 
 export interface Timing {
   start?: { weekday: Curve; weekend: Curve; exams?: Curve };
@@ -168,7 +169,7 @@ export function marketDayOf(p: CityPlace): number {
   return hashString(`market|${p.id}`) % 6;
 }
 
-const gauss = (x: number, mu: number, s: number) => Math.exp(-((x - mu) ** 2) / (2 * s * s));
+const gauss = (x: number, mu: number, s: number) => exp(-(sq(x - mu)) / (2 * s * s));
 function shape(c: Curve): Float64Array {
   const a = new Float64Array(24);
   let sum = 0;

@@ -14,6 +14,7 @@ import { departWanted, simEvent } from './automation/events.ts';
 import { occupied, offloadAll, serveStop, stopNeeded } from './passengers.ts';
 import { edgeBetween, routeWithFallback } from './world/graph.ts';
 import { hhmm } from './time.ts';
+import { atan2 } from './dmath.ts';
 
 /** Time to get a parked bus and its driver ready, seconds. */
 export const PREP = 6 * 60;
@@ -86,7 +87,7 @@ export function vehicleXY(game: Game, v: Vehicle): { x: number; y: number; headi
   const a = pointAt(p, s);
   const b = pointAt(p, Math.min(p.length, s + 6), a.i);
   const c = s + 6 > p.length ? pointAt(p, Math.max(0, s - 6), a.i) : null;
-  const heading = c ? Math.atan2(a.y - c.y, a.x - c.x) : Math.atan2(b.y - a.y, b.x - a.x);
+  const heading = c ? atan2(a.y - c.y, a.x - c.x) : atan2(b.y - a.y, b.x - a.x);
   return { x: a.x, y: a.y, heading };
 }
 

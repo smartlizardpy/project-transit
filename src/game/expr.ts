@@ -9,6 +9,8 @@
 //   revenue / vehicleHours            occupancy > 0.8 and waiting >= 20
 //   line.number == "12" ? 1 : 0       round(avg(pluck(lines, "occupancy")) * 100, 1)
 
+import { pow } from './dmath.ts';
+
 export type EValue = null | number | string | boolean | EValue[] | { [k: string]: EValue };
 
 export const EXPR_API_VERSION = 1;
@@ -249,7 +251,7 @@ export const FUNCTIONS: Record<string, Fn> = {
   min: { min: 1, max: 20, doc: 'Smallest number (of the values, or of a list).', run: (a, c) => { const v = a.length === 1 && Array.isArray(a[0]) ? nums(a[0], 'min') : a.map(num).filter((x): x is number => x !== null); tick(c, v.length); return v.length ? Math.min(...v) : null; } },
   max: { min: 1, max: 20, doc: 'Largest number (of the values, or of a list).', run: (a, c) => { const v = a.length === 1 && Array.isArray(a[0]) ? nums(a[0], 'max') : a.map(num).filter((x): x is number => x !== null); tick(c, v.length); return v.length ? Math.max(...v) : null; } },
   abs: { min: 1, max: 1, doc: 'Absolute value.', run: ([x]) => { const n = num(x); return n === null ? null : Math.abs(n); } },
-  round: { min: 1, max: 2, doc: 'Round, optionally to a number of decimals: round(x, 1).', run: ([x, d]) => { const n = num(x); if (n === null) return null; const k = Math.max(0, Math.min(6, Math.floor(num(d ?? 0) ?? 0))); const f = 10 ** k; return Math.round(n * f) / f; } },
+  round: { min: 1, max: 2, doc: 'Round, optionally to a number of decimals: round(x, 1).', run: ([x, d]) => { const n = num(x); if (n === null) return null; const k = Math.max(0, Math.min(6, Math.floor(num(d ?? 0) ?? 0))); const f = pow(10, k); return Math.round(n * f) / f; } },
   floor: { min: 1, max: 1, doc: 'Round down.', run: ([x]) => { const n = num(x); return n === null ? null : Math.floor(n); } },
   ceil: { min: 1, max: 1, doc: 'Round up.', run: ([x]) => { const n = num(x); return n === null ? null : Math.ceil(n); } },
   sqrt: { min: 1, max: 1, doc: 'Square root.', run: ([x]) => { const n = num(x); return n === null || n < 0 ? null : Math.sqrt(n); } },
@@ -351,7 +353,7 @@ function evalNode(n: Node, vars: Record<string, EValue>, ctx: Ctx): EValue {
         case '*': return clean(x * y);
         case '/': return y === 0 ? null : clean(x / y);
         case '%': return y === 0 ? null : clean(x % y);
-        case '**': return clean(x ** y);
+        case '**': return clean(pow(x, y));
       }
       throw new ExprError(`Unknown operator ${n.op}.`, n.at);
     }

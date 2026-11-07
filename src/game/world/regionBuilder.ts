@@ -10,6 +10,7 @@ import type { DemandGrid, OsmStop, Place, Poi, PoiKind, RegionData, RegionSpec, 
 import { buildTransit } from './transitBuilder.ts';
 import { buildPlaces, PLACE_AEROWAY, PLACE_LANDCOVER, PLACE_LANDUSE, PLACE_POI, ringArea, type RawAerodrome, type RawLine, type RawPoi, type RawPoly } from './placeBuilder.ts';
 import { hashString } from '../hash.ts';
+import { atan2, cmp, hypot } from '../dmath.ts';
 
 const Z = 14;
 
@@ -171,16 +172,16 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
   let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
   tiles.forEach((t, ti) => {
     progress?.('Reading map data', ti, tiles.length);
-    w = Math.min(w, mercXToLng(t.x / 2 ** Z));
-    e = Math.max(e, mercXToLng((t.x + 1) / 2 ** Z));
-    n = Math.max(n, mercYToLat(t.y / 2 ** Z));
-    s = Math.min(s, mercYToLat((t.y + 1) / 2 ** Z));
+    w = Math.min(w, mercXToLng(t.x / (1 << Z)));
+    e = Math.max(e, mercXToLng((t.x + 1) / (1 << Z)));
+    n = Math.max(n, mercYToLat(t.y / (1 << Z)));
+    s = Math.min(s, mercYToLat((t.y + 1) / (1 << Z)));
     if (!t.data) {
       missingTiles++;
       return;
     }
     const vt = new VectorTile(new PbfReader(t.data instanceof Uint8Array ? t.data : new Uint8Array(t.data)));
-    const toLL = (extent: number) => (p: Pt): LngLat => [mercXToLng((t.x + p.x / extent) / 2 ** Z), mercYToLat((t.y + p.y / extent) / 2 ** Z)];
+    const toLL = (extent: number) => (p: Pt): LngLat => [mercXToLng((t.x + p.x / extent) / (1 << Z)), mercYToLat((t.y + p.y / extent) / (1 << Z))];
 
     // ---------------- roads
     const T = vt.layers.transportation;
@@ -498,7 +499,7 @@ export function buildRegion(spec: RegionSpec, tiles: TileInput[], progress?: Pro
     centre: spec.centre,
     toXY: P.toXY,
     toLngLat: P.toLngLat,
-    inRegion: (lng, lat) => tileSet.has(`${Math.floor(lngToMercX(lng) * 2 ** Z)},${Math.floor(latToMercY(lat) * 2 ** Z)}`),
+    inRegion: (lng, lat) => tileSet.has(`${Math.floor(lngToMercX(lng) * (1 << Z))},${Math.floor(latToMercY(lat) * (1 << Z))}`),
     pois: regPois,
     polys: [...regPolys.values()],
     lines: regLines,
@@ -564,7 +565,7 @@ export const WATER_KM2 = 0.12;
 
 const COMPASS8 = ['East', 'North-East', 'North', 'North-West', 'West', 'South-West', 'South', 'South-East'];
 function compass8(dx: number, dy: number): string {
-  const a = Math.atan2(dy, dx);
+  const a = atan2(dy, dx);
   return COMPASS8[(Math.round(a / (Math.PI / 4)) + 8) % 8];
 }
 
@@ -575,7 +576,7 @@ function compass8(dx: number, dy: number): string {
  * These are game areas, not official administrative boundaries.
  */
 function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], spec: RegionSpec, P: ReturnType<typeof projector>): Zone[] {
-  const N = 2 ** Z;
+  const N = (1 << Z);
   const tiles = spec.tiles;
   const index = new Map<string, number>();
   tiles.forEach(([x, y], i) => index.set(`${x},${y}`, i));
@@ -620,7 +621,7 @@ function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], spec: Region
       return { p, x, y, rank: PLACE_RANK[p.kind], d: density(x, y), tile: tileOfLL(p.lngLat[0], p.lngLat[1]) };
     })
     .filter((c) => c.d > 50)
-    .sort((a, b) => a.rank - b.rank || b.d - a.d || a.p.name.localeCompare(b.p.name));
+    .sort((a, b) => a.rank - b.rank || b.d - a.d || cmp(a.p.name, b.p.name));
   const best = new Map<number, (typeof cands)[number]>();
   for (const c of cands) if (c.tile >= 0 && !best.has(c.tile)) best.set(c.tile, c);
 
@@ -654,7 +655,7 @@ function buildZones(places: Place[], grid: DemandGrid, pois: Poi[], spec: Region
     const [x, y] = wsum[i] ? [wx[i] / wsum[i], wy[i] / wsum[i]] : geo[i].xy;
     let near: (typeof cands)[number] | null = null, nd = Infinity;
     for (const q of cands) {
-      const d = Math.hypot(q.x - x, q.y - y);
+      const d = hypot(q.x - x, q.y - y);
       if (d < nd) {
         nd = d;
         near = q;

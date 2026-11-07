@@ -4,6 +4,7 @@ import { buildIndex, projector, type LngLat } from './graph.ts';
 import type { Poi, Region, RegionData, Zone } from './region.ts';
 import { tileAt, zoneTile } from './zoneTiles.ts';
 import { PlaceIndex } from './places.ts';
+import { hypot, sq } from '../dmath.ts';
 
 export class Geo {
   readonly P: ReturnType<typeof projector>;
@@ -64,7 +65,7 @@ export class Geo {
     const [x, y] = this.xy(ll);
     let best = this.zoneSeeds[0], bd = Infinity;
     for (const s of this.zoneSeeds) {
-      const d = (s.x - x) ** 2 + (s.y - y) ** 2;
+      const d = sq(s.x - x) + sq(s.y - y);
       if (d < bd) {
         bd = d;
         best = s;
@@ -97,7 +98,7 @@ export class Geo {
             const ax = pts[k], ay = pts[k + 1], bx = pts[k + 2], by = pts[k + 3];
             const ex = bx - ax, ey = by - ay;
             const t = Math.max(0, Math.min(1, ((x - ax) * ex + (y - ay) * ey) / (ex * ex + ey * ey || 1)));
-            const d = Math.hypot(ax + t * ex - x, ay + t * ey - y);
+            const d = hypot(ax + t * ex - x, ay + t * ey - y);
             if (d < bd) {
               bd = d;
               best = this.region.streets[i].name;
@@ -111,7 +112,7 @@ export class Geo {
     const [x, y] = this.xy(ll);
     let best: string | null = null, bd = maxM;
     for (const s of this.stopXY) {
-      const d = Math.hypot(s.x - x, s.y - y);
+      const d = hypot(s.x - x, s.y - y);
       if (d < bd) {
         bd = d;
         best = s.name;
@@ -124,7 +125,7 @@ export class Geo {
     const [x, y] = this.xy(ll);
     const out: { p: Poi; d: number }[] = [];
     for (const q of this.poiXY) {
-      const d = Math.hypot(q.x - x, q.y - y);
+      const d = hypot(q.x - x, q.y - y);
       if (d <= maxM) out.push({ p: q.p, d });
     }
     return out.sort((a, b) => a.d - b.d);

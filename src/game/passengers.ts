@@ -20,6 +20,7 @@ import { ActivityModel, returnMinutes, returnShareByHour, type ChoiceContext, ty
 import { KIND, KINDS, KIND_COUNT, TRAVELLERS, trustMinutes } from './activity/params.ts';
 import { eventReturnMinutes } from './events.ts';
 import { hashString, unit } from './hash.ts';
+import { hypot } from './dmath.ts';
 
 /** minimum stop-to-stop distance for a bus trip (shorter journeys are walked) */
 const MIN_TRIP_M = 380;
@@ -104,7 +105,7 @@ export class DemandModel {
     const S = this.stops.length;
     const xy = this.stops.map((id) => game.geo.xy(state.stops[id].lngLat));
     this.dist = new Float32Array(S * S);
-    for (let o = 0; o < S; o++) for (let d = 0; d < S; d++) if (o !== d) this.dist[o * S + d] = Math.hypot(xy[o][0] - xy[d][0], xy[o][1] - xy[d][1]);
+    for (let o = 0; o < S; o++) for (let d = 0; d < S; d++) if (o !== d) this.dist[o * S + d] = hypot(xy[o][0] - xy[d][0], xy[o][1] - xy[d][1]);
     this.walk = Array.from({ length: S }, (_, o) => {
       const out: { s: number; min: number }[] = [];
       for (let d = 0; d < S; d++) if (d !== o && this.dist[o * S + d] <= WALK_CHANGE_M) out.push({ s: d, min: changeWalkMin(this.dist[o * S + d]) });
@@ -558,7 +559,8 @@ function legStillValid(game: Game, g: PaxGroup, stop: Id): boolean {
 
 /** Find a new itinerary from `stop` to the group's destination, or end the journey. */
 function replan(game: Game, g: PaxGroup, stop: Id) {
-  const dm = game.demand;
+  // can run between minutes (a bus pulled off a reshaped line), after a change made demand stale
+  const dm = game.freshDemand();
   const o = dm.index.get(stop), d = dm.index.get(g.d);
   if (stop === g.d) return arrive(game, g);
   if (o !== undefined && d !== undefined) {

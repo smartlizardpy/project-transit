@@ -23,6 +23,7 @@ import type { Game } from './engine.ts';
 import { STOP_RULES, ECON } from './content.ts';
 import { buildPatterns, checkStop, type Pattern } from './network.ts';
 import { stopSpots } from './spots.ts';
+import { atan2, hypot, sq } from './dmath.ts';
 
 // ───────────────────────────────────────────── types
 
@@ -277,7 +278,7 @@ export function shortestPath(g: RoadGraph, sources: number[], targets: number[],
 
 const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
 export function compass(dx: number, dy: number): string {
-  const a = (Math.atan2(dx, dy) * 180) / Math.PI;
+  const a = (atan2(dx, dy) * 180) / Math.PI;
   return COMPASS[((Math.round(a / 45) % 8) + 8) % 8];
 }
 
@@ -340,7 +341,7 @@ function deadEndsNear(region: Region, a: LngLat, b: LngLat): LngLat[] {
   const g = region.graph;
   const [ax, ay] = [(a[0] - g.origin[0]) * g.kx, (a[1] - g.origin[1]) * g.ky];
   const [bx, by] = [(b[0] - g.origin[0]) * g.kx, (b[1] - g.origin[1]) * g.ky];
-  const L = Math.hypot(bx - ax, by - ay) || 1;
+  const L = hypot(bx - ax, by - ay) || 1;
   const corridor = Math.max(50, Math.min(120, L * 0.2));
   const idx = region.index;
   const out: { ll: LngLat; d: number }[] = [];
@@ -354,7 +355,7 @@ function deadEndsNear(region: Region, a: LngLat, b: LngLat): LngLat[] {
         const e = g.adjEdge[g.adjStart[v]];
         if (g.cls[e] === RoadClass.service) continue;
         const t = Math.max(0, Math.min(1, ((g.x[v] - ax) * (bx - ax) + (g.y[v] - ay) * (by - ay)) / (L * L)));
-        const d = Math.hypot(ax + t * (bx - ax) - g.x[v], ay + t * (by - ay) - g.y[v]);
+        const d = hypot(ax + t * (bx - ax) - g.x[v], ay + t * (by - ay) - g.y[v]);
         if (d > corridor || t <= 0.05 || t >= 0.95) continue;
         // tile-clipping artefacts at the edge of the mapped area are not gaps
         if (g.lng[v] < b0.w + 0.002 || g.lng[v] > b0.e - 0.002 || g.lat[v] < b0.s + 0.0015 || g.lat[v] > b0.n - 0.0015) continue;
@@ -368,7 +369,7 @@ function barrierBetween(region: Region, a: LngLat, b: LngLat): string | null {
   const g = region.graph, d = region.demand;
   const [ax, ay] = [(a[0] - g.origin[0]) * g.kx, (a[1] - g.origin[1]) * g.ky];
   const [bx, by] = [(b[0] - g.origin[0]) * g.kx, (b[1] - g.origin[1]) * g.ky];
-  const L = Math.hypot(bx - ax, by - ay);
+  const L = hypot(bx - ax, by - ay);
   // land without any streets along the line (water, rail corridors, parks, closed sites)
   let run = 0, longest = 0;
   const step = 15;
@@ -656,7 +657,7 @@ export function catchmentOf(region: Region, points: LngLat[]): { residents: numb
     for (let j = j0; j <= j1; j++)
       for (let i = i0; i <= i1; i++) {
         const cx = d.x0 + (i + 0.5) * d.cell, cy = d.y0 + (j + 0.5) * d.cell;
-        if ((cx - x) ** 2 + (cy - y) ** 2 <= R * R) cells.add(j * d.w + i);
+        if (sq(cx - x) + sq(cy - y) <= R * R) cells.add(j * d.w + i);
       }
   }
   let residents = 0, jobs = 0;

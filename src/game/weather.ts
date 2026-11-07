@@ -11,6 +11,7 @@
 // from the saved weather plus a hashed error, so it is usually right but not always.
 
 import { mix, unit } from './hash.ts';
+import { asin, cos, log, sin, sq } from './dmath.ts';
 
 export const WEATHER_VERSION = 1;
 
@@ -122,8 +123,8 @@ export function climateAt(c: Climate, phase: number): ClimateMonth {
 /** Kilometres between two points. */
 export function greatCircleKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const r = Math.PI / 180;
-  const a = Math.sin(((lat2 - lat1) * r) / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2;
-  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
+  const a = sq(sin(((lat2 - lat1) * r) / 2)) + cos(lat1 * r) * cos(lat2 * r) * sq(sin(((lon2 - lon1) * r) / 2));
+  return 2 * 6371 * asin(Math.min(1, Math.sqrt(a)));
 }
 
 // ───────────────────────────────────────────── the generator
@@ -133,7 +134,7 @@ const STREAM_FORECAST = 0xf0ca;
 
 /** A standard normal draw from two uniforms (Box–Muller). */
 function normal(u1: number, u2: number): number {
-  return Math.sqrt(-2 * Math.log(1 - u1)) * Math.cos(2 * Math.PI * u2);
+  return Math.sqrt(-2 * log(1 - u1)) * cos(2 * Math.PI * u2);
 }
 
 /** Inverse of the standard normal CDF (Acklam's rational approximation, error below 1e-8). */
@@ -144,7 +145,7 @@ export function probit(p: number): number {
   const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
   const q0 = clamp(p, 1e-9, 1 - 1e-9);
   if (q0 < 0.02425) {
-    const q = Math.sqrt(-2 * Math.log(q0));
+    const q = Math.sqrt(-2 * log(q0));
     return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
   }
   if (q0 > 1 - 0.02425) return -probit(1 - q0);
@@ -187,7 +188,7 @@ export function generateDay(seed: number, day: number, m: ClimateMonth, prev: Da
     // the day's total: at least 10 mm on heavy days, 1–10 mm otherwise
     const mean = Math.max(1.5, m.rain);
     const total =
-      kind === 'heavy' ? 10 - Math.max(3, mean * 0.8) * Math.log(1 - u(9)) : clamp(1 - Math.min(5, mean * 0.55) * Math.log(1 - u(9)), 1, 9.9);
+      kind === 'heavy' ? 10 - Math.max(3, mean * 0.8) * log(1 - u(9)) : clamp(1 - Math.min(5, mean * 0.55) * log(1 - u(9)), 1, 9.9);
     spread(mm, kind, total, u);
   }
   return { v: WEATHER_VERSION, kind, hi: round1(hi), lo: round1(lo), z: Math.round(z * 1000) / 1000, mm };
@@ -208,7 +209,7 @@ function spread(mm: number[], kind: WeatherKind, total: number, u: (k: number) =
     // a front: rain for 4–16 hours (downpours are shorter), heaviest in the middle
     const dur = kind === 'heavy' ? 4 + Math.floor(u(10) * 8) : 5 + Math.floor(u(10) * 12);
     const start = Math.floor(u(11) * (25 - dur));
-    for (let h = 0; h < dur; h++) w[start + h] = Math.sin((Math.PI * (h + 0.5)) / dur);
+    for (let h = 0; h < dur; h++) w[start + h] = sin((Math.PI * (h + 0.5)) / dur);
   }
   const sum = w.reduce((a, b) => a + b, 0) || 1;
   for (let h = 0; h < 24; h++) mm[h] = round1((total * w[h]) / sum);
@@ -259,7 +260,7 @@ export function hourCondition(w: DayWeather, h: number): HourCondition {
 export function hourTemp(w: DayWeather, h: number): number {
   const x = h + 0.5;
   // rising from 05 to 15, falling from 15 to 05 the next day
-  const f = x >= 5 && x <= 15 ? (1 - Math.cos((Math.PI * (x - 5)) / 10)) / 2 : (1 + Math.cos((Math.PI * ((x + 24 - 15) % 24)) / 14)) / 2;
+  const f = x >= 5 && x <= 15 ? (1 - cos((Math.PI * (x - 5)) / 10)) / 2 : (1 + cos((Math.PI * ((x + 24 - 15) % 24)) / 14)) / 2;
   return w.lo + (w.hi - w.lo) * f;
 }
 

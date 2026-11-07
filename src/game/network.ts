@@ -8,6 +8,7 @@ import { buildPath, type Path } from './paths.ts';
 import type { GameState, Id, Route } from './types.ts';
 import { STOP_RULES } from './content.ts';
 import { patternDiagnostics, type Diagnostic } from './diagnostics.ts';
+import { hypot } from './dmath.ts';
 
 // ───────────────────────────────────────────── placement
 
@@ -69,12 +70,12 @@ export function checkStop(state: GameState, region: Region, geo: Geo, at: LngLat
 export function pairedHalt(g: RoadGraph, idx: SpatialIndex, node: number, edge: number): number {
   if (!(g.flags[edge] & EDGE_ONEWAY)) return -1;
   const dx = g.x[g.eb[edge]] - g.x[g.ea[edge]], dy = g.y[g.eb[edge]] - g.y[g.ea[edge]];
-  const L = Math.hypot(dx, dy) || 1;
+  const L = hypot(dx, dy) || 1;
   const hit = nearestEdge(g, idx, g.x[node], g.y[node], 45, (e) => {
     if (e === edge || !(g.flags[e] & EDGE_ONEWAY) || !STOP_CLASSES.has(g.cls[e]) || g.flags[e] & (EDGE_BRIDGE | EDGE_TUNNEL)) return false;
     if (g.ea[e] === node || g.eb[e] === node) return false;
     const ex = g.x[g.eb[e]] - g.x[g.ea[e]], ey = g.y[g.eb[e]] - g.y[g.ea[e]];
-    return (dx * ex + dy * ey) / (L * (Math.hypot(ex, ey) || 1)) < -0.6;
+    return (dx * ex + dy * ey) / (L * (hypot(ex, ey) || 1)) < -0.6;
   });
   if (!hit) return -1;
   return hit.t < 0.5 ? g.ea[hit.edge] : g.eb[hit.edge];

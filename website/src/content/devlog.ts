@@ -31,6 +31,12 @@ export interface Update {
 export const UPDATES: Update[] = [
   {
     date: '2026-11-07',
+    title: '0.5.0: Play together',
+    body: 'Up to four people can now run one company in the same game. The host chooses Play with friends in the menu and sends a code; friends choose Join a friend and type it in. Everyone sees each other’s mouse on the map, anyone can build, buy or change anything, and Option-click (Alt-click) points at a spot for everyone. Computers connect directly, with no accounts or game server. To keep every copy identical, the simulation now does its maths the same way on every computer, Mac and Windows alike.',
+    href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.5.0',
+  },
+  {
+    date: '2026-11-07',
     title: '0.4.2: Smoother on fast screens, and the interface stays put',
     body: 'On 144 Hz and 240 Hz screens the map was redrawn on every screen frame, which made the game lag on some gaming PCs. It now draws at about 60 frames a second by default, while moving the map stays as smooth as your screen. Settings has a new Graphics section: a frame rate limit, a lower resolution for slower graphics, and a frame rate readout that names the graphics card the game is using, so you can tell when Windows runs it on the integrated chip. Also fixed: typing a capital U in the company name hid the whole interface (F10 or Shift+U brings it back), and panning with WASD was too fast on fast screens.',
     href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.4.2',
@@ -89,6 +95,7 @@ export const UPDATES: Update[] = [
 /** What comes next. "planned" means designed but not started. */
 export const NEXT: { title: string; status: Status; body: string }[] = [
   { title: 'Playtesting the pace', status: 'partial', body: 'How quickly a new company reaches its second and third areas, tuned with real players.' },
+  { title: 'Race a friend', status: 'planned', body: 'The same city for each player, separate companies, one clock and a live scoreboard. Playing together in one company is already in the game.' },
   { title: 'Your own trams and metro', status: 'planned', body: 'In the design document, not yet in the game. The city’s own metro, trams, rail and ferries already carry people and compete with your buses.' },
   { title: 'Deeper depots and economics', status: 'planned', body: 'More to manage once the bus game is balanced.' },
 ];

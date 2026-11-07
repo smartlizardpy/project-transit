@@ -16,6 +16,7 @@ import { distanceM, freeSpeed, nearestNode, route as routeLeg, type LngLat } fro
 import { changeWalkMin, waitingAt } from '../passengers.ts';
 import { demandForecast } from './city.ts';
 import { upcomingTrips } from '../operations.ts';
+import { cmp, hypot } from '../dmath.ts';
 
 const r1 = (x: number) => Math.round(x * 10) / 10;
 const isRec = (v: Value | undefined): v is Rec => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -60,7 +61,7 @@ export function pointOf(game: Game, v: Value | undefined): LngLat | null {
 
 export const metresBetween = (game: Game, a: LngLat, b: LngLat) => {
   const [ax, ay] = game.geo.xy(a), [bx, by] = game.geo.xy(b);
-  return Math.hypot(ax - bx, ay - by);
+  return hypot(ax - bx, ay - by);
 };
 
 /** The lines calling at each stop (both directions). */
@@ -95,7 +96,7 @@ export function nearbyStops(game: Game, at: LngLat, walkM: number, limit = 20): 
     const m = metresBetween(game, at, st.lngLat);
     if (m * WALK_FACTOR <= walkM) found.push({ id: st.id, m });
   }
-  found.sort((a, b) => a.m - b.m || a.id.localeCompare(b.id));
+  found.sort((a, b) => a.m - b.m || cmp(a.id, b.id));
   return found.slice(0, limit).map(({ id, m }) => {
     const st = s.stops[id];
     const ls = lines.get(id) ?? [];
@@ -126,7 +127,7 @@ export function roadTrip(game: Game, a: LngLat, b: LngLat): Rec | null {
   }
   return {
     kind: 'route', km: r1(leg.metres / 1000), minutes: r1(leg.seconds / 60), minutesNow: r1(now / 60),
-    slowerBy: leg.seconds > 0 ? Math.round((now / leg.seconds - 1) * 100) : 0, straightKm: r1(Math.hypot(ax - bx, ay - by) / 1000),
+    slowerBy: leg.seconds > 0 ? Math.round((now / leg.seconds - 1) * 100) : 0, straightKm: r1(hypot(ax - bx, ay - by) / 1000),
     oneWayRules: leg.contraflow.length === 0, estimate: true,
   };
 }
@@ -180,7 +181,7 @@ export function coverage(game: Game, stops: Id[], walkM: number, area?: string |
     const i0 = Math.max(0, Math.floor((x - r - d.x0) / d.cell)), i1 = Math.min(d.w - 1, Math.floor((x + r - d.x0) / d.cell));
     const j0 = Math.max(0, Math.floor((y - r - d.y0) / d.cell)), j1 = Math.min(d.h - 1, Math.floor((y + r - d.y0) / d.cell));
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      if (Math.hypot(d.x0 + (i + 0.5) * d.cell - x, d.y0 + (j + 0.5) * d.cell - y) <= r) covered[j * d.w + i] = 1;
+      if (hypot(d.x0 + (i + 0.5) * d.cell - x, d.y0 + (j + 0.5) * d.cell - y) <= r) covered[j * d.w + i] = 1;
     }
   }
   let res = 0, jobs = 0, resIn = 0, jobsIn = 0;
@@ -261,7 +262,7 @@ export function transferPoints(game: Game, line: Id | null, walkM: number, limit
       });
     }
   }
-  out.sort((a, b) => (b.changesPerDay as number) - (a.changesPerDay as number) || (a.walk as number) - (b.walk as number) || String(a.id).localeCompare(String(b.id)));
+  out.sort((a, b) => (b.changesPerDay as number) - (a.changesPerDay as number) || (a.walk as number) - (b.walk as number) || cmp(String(a.id), String(b.id)));
   return out.slice(0, limit);
 }
 
@@ -420,7 +421,7 @@ export function missedConnections(game: Game, line: Id | null, horizonMin: numbe
       });
     }
   }
-  out.sort((a, b) => Number(b.missed) - Number(a.missed) || (b.people as number) - (a.people as number) || String(a.id).localeCompare(String(b.id)));
+  out.sort((a, b) => Number(b.missed) - Number(a.missed) || (b.people as number) - (a.people as number) || cmp(String(a.id), String(b.id)));
   return out.slice(0, limit);
 }
 
@@ -493,7 +494,7 @@ export function lineGaps(game: Game, route: Id, o: GapOptions = GAP_DEFAULTS) {
   let bunched = 0, worst: number | null = null;
   const gapsFound: { pat: number; ahead: Running; behind: Running; minutes: number }[] = [];
   for (const list of byPat.values()) {
-    list.sort((a, b) => b.pos - a.pos || a.v.id.localeCompare(b.v.id));
+    list.sort((a, b) => b.pos - a.pos || cmp(a.v.id, b.v.id));
     for (let i = 0; i < list.length; i++) {
       const ahead = i > 0 ? (list[i - 1].pos - list[i].pos) / 60 : null;
       const behind = i + 1 < list.length ? (list[i].pos - list[i + 1].pos) / 60 : null;
@@ -630,7 +631,7 @@ export function corridorStops(game: Game, a: Id, b: Id, max = 20): Id[] | null {
   if (!leg) return null;
   const xs = leg.nodes.map((n) => g.x[n]), ys = leg.nodes.map((n) => g.y[n]);
   const cum = [0];
-  for (let i = 1; i < xs.length; i++) cum.push(cum[i - 1] + Math.hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1]));
+  for (let i = 1; i < xs.length; i++) cum.push(cum[i - 1] + hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1]));
   const total = cum[cum.length - 1];
   const NEAR = 150;
   const minX = Math.min(...xs) - NEAR, maxX = Math.max(...xs) + NEAR, minY = Math.min(...ys) - NEAR, maxY = Math.max(...ys) + NEAR;
@@ -644,7 +645,7 @@ export function corridorStops(game: Game, a: Id, b: Id, max = 20): Id[] | null {
       const dx = xs[i + 1] - xs[i], dy = ys[i + 1] - ys[i];
       const L2 = dx * dx + dy * dy;
       const f = L2 > 0 ? Math.max(0, Math.min(1, ((x - xs[i]) * dx + (y - ys[i]) * dy) / L2)) : 0;
-      const d = Math.hypot(x - (xs[i] + f * dx), y - (ys[i] + f * dy));
+      const d = hypot(x - (xs[i] + f * dx), y - (ys[i] + f * dy));
       if (d < best) {
         best = d;
         at = cum[i] + f * Math.sqrt(L2);
@@ -652,7 +653,7 @@ export function corridorStops(game: Game, a: Id, b: Id, max = 20): Id[] | null {
     }
     if (best <= NEAR) found.push({ id: st.id, at });
   }
-  found.sort((p, q) => p.at - q.at || p.id.localeCompare(q.id));
+  found.sort((p, q) => p.at - q.at || cmp(p.id, q.id));
   const out: Id[] = [a];
   let last = 0;
   for (const f of found) {

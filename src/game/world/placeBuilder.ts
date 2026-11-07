@@ -13,6 +13,7 @@ import { distanceM, type LngLat } from './graph.ts';
 import { Grid, PLACE_LABEL, type CityPlace, type PlaceCategory, type PlaceScale, type ScaleUnit, type TransitMode } from './places.ts';
 import airportsData from '../../data/airports.json';
 import wikidataData from '../../data/wikidata-places.json';
+import { cmp, hypot } from '../dmath.ts';
 
 // ─────────────────────────────────────────── inputs collected by the region builder
 
@@ -122,7 +123,7 @@ function inPoly(p: RawPoly, x: number, y: number, pad = 0): boolean {
   if (p.rings.some((r) => pointInRing(x, y, r))) return true;
   if (!pad) return false;
   for (const r of p.rings)
-    for (let i = 0; i < r.length; i += 2) if (Math.hypot(r[i] - x, r[i + 1] - y) < pad) return true;
+    for (let i = 0; i < r.length; i += 2) if (hypot(r[i] - x, r[i + 1] - y) < pad) return true;
   return false;
 }
 
@@ -244,13 +245,13 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
   };
   const floorSum = (x: number, y: number, r: number) => {
     let s = 0;
-    for (const b of bgrid.near(x, y, r)) if (Math.hypot(b.x - x, b.y - y) <= r) s += b.fa;
+    for (const b of bgrid.near(x, y, r)) if (hypot(b.x - x, b.y - y) <= r) s += b.fa;
     return s;
   };
   /** the floor area of the largest building close by: the one a place without an outline is in */
   const largestNear = (x: number, y: number, r: number) => {
     let best = 0;
-    for (const b of bgrid.near(x, y, r)) if (b.fa > best && Math.hypot(b.x - x, b.y - y) <= r) best = b.fa;
+    for (const b of bgrid.near(x, y, r)) if (b.fa > best && hypot(b.x - x, b.y - y) <= r) best = b.fa;
     return best;
   };
 
@@ -264,7 +265,7 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
   const areaName = (x: number, y: number) => {
     let best: string | null = null, bd = Infinity;
     for (const l of labelGrid.near(x, y, 2500)) {
-      const d = Math.hypot(l.x - x, l.y - y);
+      const d = hypot(l.x - x, l.y - y);
       if (d < bd || (d === bd && best !== null && l.name < best)) {
         bd = d;
         best = l.name;
@@ -276,7 +277,7 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
     const { x, y, ...rest } = p;
     const [lng, lat] = toLngLat(x, y);
     // the projector is centred on the region centre
-    out.push({ ...rest, lngLat: [r6(lng), r6(lat)], reachable: inp.inRegion(lng, lat), distanceKm: +(Math.hypot(x, y) / 1000).toFixed(1) });
+    out.push({ ...rest, lngLat: [r6(lng), r6(lat)], reachable: inp.inRegion(lng, lat), distanceKm: +(hypot(x, y) / 1000).toFixed(1) });
   };
 
   // ---------------- named destinations, with their outline where one is mapped
@@ -305,7 +306,7 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
     .sort((a, b) => a.poi.rank - b.poi.rank || a.poi.name.length - b.poi.name.length || a.poi.id - b.poi.id);
   for (const c of named) {
     const poly = polyOf(c.cat, c.poi.x, c.poi.y);
-    const hit = (poly && byPoly.get(poly)) || gGrid.near(c.poi.x, c.poi.y, 250).find((g) => g.cat === c.cat && Math.hypot(g.x - c.poi.x, g.y - c.poi.y) < 250 && sameName(g.members[0].name, c.poi.name));
+    const hit = (poly && byPoly.get(poly)) || gGrid.near(c.poi.x, c.poi.y, 250).find((g) => g.cat === c.cat && hypot(g.x - c.poi.x, g.y - c.poi.y) < 250 && sameName(g.members[0].name, c.poi.name));
     if (hit) {
       hit.members.push(c.poi);
       if (poly && !hit.poly) {
@@ -363,7 +364,7 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
     for (const l of lineGrid.near(x, y, r)) {
       if (ids.has(l.id) || !pick(l)) continue;
       for (let i = 0; i < l.pts.length; i += 2)
-        if (Math.hypot(l.pts[i] - x, l.pts[i + 1] - y) < r) {
+        if (hypot(l.pts[i] - x, l.pts[i + 1] - y) < r) {
           ids.add(l.id);
           break;
         }
@@ -393,7 +394,7 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
     // one station: the same name within 400 m (platforms, an interchange), the same mode within
     // 120 m (stands of one bus station), or another mode within 80 m
     const hit = sGrid.near(poi.x, poi.y, 400).find((s) => {
-      const d = Math.hypot(s.x - poi.x, s.y - poi.y);
+      const d = hypot(s.x - poi.x, s.y - poi.y);
       return (d < 400 && sameName(s.name, poi.name)) || (d < 120 && s.modes.has(mode)) || (d < 80 && !s.modes.has(mode));
     });
     if (hit) {
@@ -425,7 +426,7 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
       : 4;
     if (modes.filter((m) => HEAVY.includes(m)).length > 1) tier = Math.max(1, tier - 1); // an interchange
     const access = modes.includes('metro') || modes.includes('rail')
-      ? entrances.filter((e) => Math.hypot(e.x - s.x, e.y - s.y) < 250).slice(0, 6).map((e) => {
+      ? entrances.filter((e) => hypot(e.x - s.x, e.y - s.y) < 250).slice(0, 6).map((e) => {
           const [lng, lat] = toLngLat(e.x, e.y);
           return [r6(lng), r6(lat)] as LngLat;
         })
@@ -450,7 +451,7 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
       cells.set(k, c);
     }
     const seen = new Set<string>();
-    const seeds = [...cells.entries()].filter(([, c]) => c.n >= seedMin).sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
+    const seeds = [...cells.entries()].filter(([, c]) => c.n >= seedMin).sort((a, b) => b[1].n - a[1].n || cmp(a[0], b[0]));
     for (const [k0, c0] of seeds) {
       if (seen.has(k0)) continue;
       const stack = [k0];
@@ -460,7 +461,7 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
         const k = stack.pop()!;
         const c = cells.get(k);
         // a district stays within about a kilometre of its densest block
-        if (seen.has(k) || !c || c.n < joinMin || Math.hypot(c.cx - c0.cx, c.cy - c0.cy) * cell > 900) continue;
+        if (seen.has(k) || !c || c.n < joinMin || hypot(c.cx - c0.cx, c.cy - c0.cy) * cell > 900) continue;
         seen.add(k);
         members.push(k);
         n += c.n;
@@ -527,7 +528,7 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
     let ax = lx, ay = ly, mapped = false, best = 0;
     for (const ap of aprons) {
       const mx = (ap.x0 + ap.x1) / 2, my = (ap.y0 + ap.y1) / 2;
-      if (Math.hypot(mx - lx, my - ly) > 4000) continue;
+      if (hypot(mx - lx, my - ly) > 4000) continue;
       for (const b of bgrid.near(mx, my, Math.max(ap.x1 - ap.x0, ap.y1 - ap.y0) / 2 + 250))
         if (b.fa > best && inPoly(ap, b.x, b.y, 200)) {
           best = b.fa;
@@ -547,7 +548,7 @@ export function buildPlaces(inp: PlaceInputs): CityPlace[] {
   }
 
   applyWikidata(out, toXY);
-  return out.sort((a, b) => a.category.localeCompare(b.category) || a.scale.tier - b.scale.tier || a.id.localeCompare(b.id));
+  return out.sort((a, b) => cmp(a.category, b.category) || a.scale.tier - b.scale.tier || cmp(a.id, b.id));
 }
 
 /** Size from footprint and floor area: estimates (game settings), except outlines, which are mapped. Sources read "Estimated …". */
@@ -617,7 +618,7 @@ function applyWikidata(places: CityPlace[], toXY: PlaceInputs['toXY']) {
     const [wx, wy] = toXY(w.lng, w.lat);
     let best: CityPlace | null = null, bs = -1, bd = Infinity;
     for (const c of byCat.get(w.kind) ?? []) {
-      const d = Math.hypot(c.x - wx, c.y - wy);
+      const d = hypot(c.x - wx, c.y - wy);
       const sc = nameScore(w.name, c.p.name);
       // a university's coordinate may sit at another faculty: an exact name match may be further away
       if (d >= 400 && !(sc >= 0.99 && d < 1500)) continue;

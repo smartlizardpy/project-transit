@@ -1,28 +1,34 @@
 // Workflow rows, templates and creation helpers, shared by the Automation tab and the Studio's home.
 import { useState } from 'react';
 import { Plus, PencilSimple, Copy, Trash, Lightning } from '@phosphor-icons/react';
-import type { Game } from '../../game/engine.ts';
+import type { Game, Result } from '../../game/engine.ts';
 import { NODE, triggerLabel, defaultConfig } from '../../game/automation/registry.ts';
-import { TEMPLATES, TEMPLATE_GROUPS, fromTemplate } from '../../game/automation/templates.ts';
+import { TEMPLATES, TEMPLATE_GROUPS } from '../../game/automation/templates.ts';
 import type { WfNode, Workflow } from '../../game/automation/types.ts';
 import { DAY } from '../../game/content.ts';
 import { useUI } from '../../state/store.ts';
 import { ModeTag, Switch, whenLabel } from './common.tsx';
+import { act, send } from '../../app/act.ts';
 
 export function openInStudio(id: string | null) { useUI.getState().setStudio({ open: true, workflow: id, peek: false }); }
 
 /** A new workflow with its starting node already on the canvas. */
-export function createBlank(game: Game, kind: 'workflow' | 'function'): string | null {
+export async function createBlank(game: Game, kind: 'workflow' | 'function'): Promise<string | null> {
   const n = game.workflowList().filter((w) => w.kind === kind).length + 1;
-  const mk = (type: string, x: number, y: number): WfNode => ({ id: game.newNodeId(), type, x, y, config: defaultConfig(type) });
+  const taken: string[] = [];
+  const mk = (type: string, x: number, y: number): WfNode => {
+    const id = game.draftNodeId(taken);
+    taken.push(id);
+    return { id, type, x, y, config: defaultConfig(type) };
+  };
   const nodes = kind === 'workflow' ? [mk('trigger.every', 80, 100)] : [mk('adv.input', 80, 100), mk('adv.output', 520, 100)];
-  const r = game.createWorkflow({ name: kind === 'workflow' ? `New workflow ${n}` : `New function ${n}`, kind, nodes, edges: [] });
+  const r = await act('createWorkflow', { name: kind === 'workflow' ? `New workflow ${n}` : `New function ${n}`, kind, nodes, edges: [] });
   if (!r.ok) { useUI.getState().notify(r.error, 'warn'); return null; }
   return r.value;
 }
 
-export function startFromTemplate(game: Game, id: string): string | null {
-  const r = fromTemplate(game, id);
+export async function startFromTemplate(id: string): Promise<string | null> {
+  const r = (await send({ m: 'fromTemplate', args: [id] })) as Result<string>;
   if (!r.ok) { useUI.getState().notify(r.error, 'warn'); return null; }
   return r.value;
 }
@@ -58,21 +64,21 @@ export function WorkflowRow({ game, wf, onOpen }: { game: Game; wf: Workflow; on
           {isFn ? `${wf.nodes.length} nodes` : last ? <>Last run {whenLabel(last.t)} · {last.status === 'ok' ? 'ran' : last.status === 'error' ? 'failed' : 'limit reached'}{today ? ` · today ${today.runs} run${today.runs === 1 ? '' : 's'}, ${today.actions} action${today.actions === 1 ? '' : 's'}` : ' · nothing yet today'}</> : wf.enabled ? 'Has not run yet' : 'Has not run'}
         </div>
       </div>
-      {!isFn && <Switch on={wf.enabled} onChange={(v) => { const r = game.updateWorkflow(wf.id, { enabled: v }); setErr(r.ok ? '' : r.error); }} label={`${wf.name} switched on`} />}
+      {!isFn && <Switch on={wf.enabled} onChange={async (v) => { const r = await act('updateWorkflow', wf.id, { enabled: v }); setErr(r.ok ? '' : r.error); }} label={`${wf.name} switched on`} />}
       {wf.stopped && <div className="st-wf-stop">Switched off by the game: {wf.stopped}</div>}
       {err && <div className="st-wf-stop">{err}</div>}
       <div className="st-wf-foot">
         <button className="btn sm" onClick={() => onOpen(wf.id)}><PencilSimple size={13} weight="bold" />Open in Studio</button>
-        <button className="btn sm" onClick={() => { const r = game.duplicateWorkflow(wf.id); if (!r.ok) setErr(r.error); }}><Copy size={13} weight="bold" />Duplicate</button>
+        <button className="btn sm" onClick={async () => { const r = await act('duplicateWorkflow', wf.id); if (!r.ok) setErr(r.error); }}><Copy size={13} weight="bold" />Duplicate</button>
         {confirm
-          ? <><button className="btn sm danger" onClick={() => { const r = game.deleteWorkflow(wf.id); if (!r.ok) { setErr(r.error); setConfirm(false); } }}>Delete for good</button><button className="btn sm" onClick={() => setConfirm(false)}>Keep it</button></>
+          ? <><button className="btn sm danger" onClick={async () => { const r = await act('deleteWorkflow', wf.id); if (!r.ok) { setErr(r.error); setConfirm(false); } }}>Delete for good</button><button className="btn sm" onClick={() => setConfirm(false)}>Keep it</button></>
           : <button className="btn sm" onClick={() => setConfirm(true)} aria-label={`Delete ${wf.name}`}><Trash size={13} weight="bold" /></button>}
       </div>
     </div>
   );
 }
 
-export function TemplateList({ game, onOpen }: { game: Game; onOpen: (id: string) => void }) {
+export function TemplateList({ onOpen }: { game?: Game; onOpen: (id: string) => void }) {
   return (
     <div className="list" style={{ gap: 6 }}>
       {TEMPLATE_GROUPS.map((g) => {
@@ -82,7 +88,7 @@ export function TemplateList({ game, onOpen }: { game: Game; onOpen: (id: string
           <div key={g.id} className="st-tpl-group">
             <div className="st-tpl-head"><b>{g.label}</b><span>{g.help}</span></div>
             {list.map((t) => (
-              <button key={t.id} className="st-tpl" onClick={() => { const id = startFromTemplate(game, t.id); if (id) onOpen(id); }}>
+              <button key={t.id} className="st-tpl" onClick={async () => { const id = await startFromTemplate(t.id); if (id) onOpen(id); }}>
                 <b><Lightning size={13} weight="bold" style={{ color: 'var(--amber)' }} />{t.name}<ModeTag mode={t.mode} /></b>
                 <span>{t.description}</span>
               </button>
@@ -97,8 +103,8 @@ export function TemplateList({ game, onOpen }: { game: Game; onOpen: (id: string
 export function NewButtons({ game, onOpen }: { game: Game; onOpen: (id: string) => void }) {
   return (
     <div className="pn-actions">
-      <button className="btn primary" onClick={() => { const id = createBlank(game, 'workflow'); if (id) onOpen(id); }}><Plus size={14} weight="bold" />New workflow</button>
-      <button className="btn" onClick={() => { const id = createBlank(game, 'function'); if (id) onOpen(id); }} title="A reusable piece other workflows can use">New function</button>
+      <button className="btn primary" onClick={async () => { const id = await createBlank(game, 'workflow'); if (id) onOpen(id); }}><Plus size={14} weight="bold" />New workflow</button>
+      <button className="btn" onClick={async () => { const id = await createBlank(game, 'function'); if (id) onOpen(id); }} title="A reusable piece other workflows can use">New function</button>
     </div>
   );
 }
