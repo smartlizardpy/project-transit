@@ -20,6 +20,8 @@ import { createPacer } from './pacing.ts';
 import { stopSpots, type StopSpot } from '../game/spots.ts';
 import { act } from '../app/act.ts';
 import { coopActive, coopFrame } from '../net/coop.ts';
+import { raceActive, raceFrame } from '../net/race.ts';
+import { installRivalsLayer } from './rivalsLayer.ts';
 import { installCoopLayer } from './coopLayer.ts';
 
 export interface Controller {
@@ -74,8 +76,9 @@ export function installController(map: MlMap, city: CityLayer): Controller {
     const g = game;
     if (g && useSession.getState().phase === 'playing') {
       const modal = useUI.getState().modal;
-      // co-op: the shared clock runs on even when this player opens the menu
+      // co-op and races: the shared clock runs on even when this player opens the menu
       if (coopActive()) coopFrame(dt);
+      else if (raceActive()) raceFrame(dt);
       else if (!(modal && modal.kind === 'menu')) g.advance(dt);
       const ui = useUI.getState();
       if (ui.following) {
@@ -433,6 +436,7 @@ export function installController(map: MlMap, city: CityLayer): Controller {
   });
 
   installCoopLayer(map);
+  installRivalsLayer(map);
   Object.assign(window as object, { __ui: useUI, __session: session });
   return { vehicles, markers };
 }

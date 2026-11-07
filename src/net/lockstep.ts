@@ -50,6 +50,8 @@ export interface CoopEvents {
   loading?(share: number, why: SnapshotMeta['why']): void;
   /** guest: the host turned us away, or ended the session */
   ended?(reason: string): void;
+  /** guest: the code belongs to a race, not a shared game (the guest stops; racing.ts takes over) */
+  race?(welcome: Extract<Msg, { k: 'race' }>, from: string): void;
 }
 
 function runAction(game: Game, a: Action, local?: LocalHooks): unknown {
@@ -339,6 +341,12 @@ export class GuestSim {
       this.me = m.you;
       this.players = m.players;
       this.ev.players?.(m.players);
+      return;
+    }
+    if (m.k === 'race') {
+      if (this.host || this.closed) return;
+      this.closed = true;
+      this.ev.race?.(m, from);
       return;
     }
     if (m.k === 'cursor' || m.k === 'ping') return this.ev.presence?.(m, from);

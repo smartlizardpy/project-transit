@@ -5,20 +5,12 @@ import { useEffect, useState } from 'react';
 import { Copy, Check, UsersThree, SignOut, HourglassMedium } from '@phosphor-icons/react';
 import '../styles/coop.css';
 import { coopAvailable, dismissEnded, hostGame, joinGame, leaveCoop, normaliseCode, savedName, useCoop } from '../net/coop.ts';
-import type { Player } from '../net/protocol.ts';
+import { Avatar, NameField, NO_RTC } from './Friends.tsx';
+import { useRace, leaveRace, dismissRace } from '../net/race.ts';
+import { RaceLobby } from './Race.tsx';
 import { copyText } from '../app/agents.ts';
 import { Dialog } from './GameMenu.tsx';
 import { useUI } from '../state/store.ts';
-
-const initials = (name: string) => name.trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '?';
-
-function Avatar({ p, size = 26 }: { p: Player; size?: number }) {
-  return (
-    <span className="co-av" style={{ background: p.colour, width: size, height: size, fontSize: size * 0.42 }} title={p.host ? `${p.name} (host)` : p.name}>
-      {initials(p.name)}
-    </span>
-  );
-}
 
 function PlayerList() {
   const players = useCoop((s) => s.players);
@@ -35,17 +27,6 @@ function PlayerList() {
     </ul>
   );
 }
-
-function NameField({ value, onChange, autoFocus }: { value: string; onChange: (v: string) => void; autoFocus?: boolean }) {
-  return (
-    <label className="co-field">
-      <span>Your name</span>
-      <input value={value} maxLength={24} placeholder="How friends see you" autoFocus={autoFocus} onChange={(e) => onChange(e.target.value)} />
-    </label>
-  );
-}
-
-const NO_RTC = 'Playing together needs WebRTC, which this copy of the game does not have (some Linux systems leave it out). It works in the macOS and Windows apps and in Chrome, Edge, Firefox and Safari.';
 
 /** Game menu → Play with friends. */
 export function CoopPanel() {
@@ -100,32 +81,45 @@ export function JoinDialog({ onClose }: { onClose: () => void }) {
   const phase = useCoop((s) => s.phase);
   const loading = useCoop((s) => s.loading);
   const ended = useCoop((s) => s.ended);
+  const raceRole = useRace((s) => s.role);
+  const raceEnded = useRace((s) => (s.phase === 'ended' ? s.ended : null));
   const [name, setName] = useState(savedName);
   const [code, setCode] = useState('');
   const busy = phase === 'connecting' || phase === 'loading';
   const valid = normaliseCode(code);
+  const problem = ended ?? raceEnded;
   const cancel = () => {
     if (busy) leaveCoop();
     if (ended) dismissEnded();
+    if (raceEnded) dismissRace();
     onClose();
   };
   const go = () => {
     if (!valid || !name.trim()) return;
     if (ended) dismissEnded();
+    if (raceEnded) dismissRace();
     void joinGame(valid, name);
   };
+  // the code was for a race: its lobby
+  if (raceRole === 'guest') {
+    return (
+      <Dialog title="Race a friend" onClose={() => { leaveRace(); onClose(); }}>
+        <RaceLobby />
+      </Dialog>
+    );
+  }
   return (
     <Dialog title="Join a friend" onClose={cancel}>
       {!coopAvailable() ? <p className="mn-note warn">{NO_RTC}</p> : (
         <form className="co-join" onSubmit={(e) => { e.preventDefault(); go(); }}>
-          <p className="mn-note">Ask your friend to open their game and choose <b>Play with friends</b> in the menu (Esc). They get a code to give you.</p>
+          <p className="mn-note">Ask your friend for their code. To play in their game, they choose <b>Play with friends</b> in the menu (Esc); for a race, <b>Race a friend</b> on the start screen.</p>
           <NameField value={name} onChange={setName} autoFocus={!name} />
           <label className="co-field">
             <span>Code</span>
             <input className="co-code-in" value={code} placeholder="ABCD-2345" autoFocus={!!name} spellCheck={false} autoCapitalize="characters" maxLength={9} disabled={busy}
               onChange={(e) => setCode(e.target.value.toUpperCase())} />
           </label>
-          {ended && <div className="mn-error" role="alert"><span>{ended}</span></div>}
+          {problem && <div className="mn-error" role="alert"><span>{problem}</span></div>}
           {busy && (
             <div className="co-status">
               {phase === 'connecting' ? 'Finding your friend’s game…' : `Downloading the game… ${Math.round((loading ?? 0) * 100)}%`}

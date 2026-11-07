@@ -185,8 +185,10 @@ export class MarkerLayer {
     if (!this.edges.length) return;
     const c = this.map.getCenter();
     const { clientWidth: W, clientHeight: H } = this.map.getContainer();
-    // inside the top bar, tool rail and bottom controls
-    const x0 = 92, x1 = W - 28, y0 = 104, y1 = H - 84;
+    // inside the top bar, tool rail and bottom controls, and below the co-op or race strip under the clock
+    const strip = document.querySelector('.co-hud > :first-child')?.getBoundingClientRect();
+    const top = this.map.getContainer().getBoundingClientRect().top;
+    const x0 = 92, x1 = W - 28, y0 = Math.max(104, strip?.height ? strip.bottom - top + 22 : 0), y1 = H - 84;
     const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
     const rot = (this.map.getBearing() * Math.PI) / 180;
     for (const { el, place } of this.edges) {

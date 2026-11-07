@@ -12,10 +12,11 @@ import { session } from '../app/session.ts';
 import { setActionRouter } from '../app/act.ts';
 import { GuestSim, HostSim, type CoopEvents } from './lockstep.ts';
 import type { Player, Stamped } from './protocol.ts';
-import type { rtcTransport as RtcTransport } from './rtc.ts';
 import type { Transport } from './transport.ts';
 import { checksum } from './checksum.ts';
 import { act } from '../app/act.ts';
+import { connect, makeCode, rememberName } from './room.ts';
+import { joinedRace } from './race.ts';
 
 export type CoopPhase = 'off' | 'hosting' | 'connecting' | 'loading' | 'playing' | 'ended';
 
@@ -54,39 +55,7 @@ export const presence = {
   },
 };
 
-const NAME_KEY = 'pt-coop-name';
-export function savedName(): string {
-  try {
-    return localStorage.getItem(NAME_KEY) ?? '';
-  } catch {
-    return '';
-  }
-}
-function rememberName(n: string) {
-  try {
-    localStorage.setItem(NAME_KEY, n);
-  } catch {
-    /* ignore */
-  }
-}
-
-/** Room codes: 8 characters without look-alikes (0/O, 1/I/L), e.g. "K7QM-2XVD". */
-export function makeCode(): string {
-  const abc = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-  const r = crypto.getRandomValues(new Uint8Array(8));
-  const s = [...r].map((b) => abc[b % abc.length]).join('');
-  return `${s.slice(0, 4)}-${s.slice(4)}`;
-}
-export const normaliseCode = (c: string) => {
-  const s = c.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return s.length === 8 ? `${s.slice(0, 4)}-${s.slice(4)}` : null;
-};
-
-/** WebRTC is missing in some webviews (Linux WebKitGTK builds without it). */
-export const coopAvailable = () => typeof RTCPeerConnection !== 'undefined';
-
-/** The WebRTC library loads only when someone hosts or joins. */
-const connect = async (code: string): Promise<ReturnType<typeof RtcTransport>> => (await import('./rtc.ts')).rtcTransport(code);
+export { savedName, makeCode, normaliseCode, coopAvailable } from './room.ts';
 
 let host: HostSim | null = null;
 let guest: GuestSim | null = null;
@@ -135,6 +104,20 @@ function events(): CoopEvents {
       useCoop.setState(share >= 1 ? { loading: null, phase: 'playing' } : { loading: share, phase: 'loading' });
     },
     ended: (reason) => finish(reason),
+    // the code was for a race: hand the connection over (race.ts)
+    race: (welcome, from) => {
+      const t = net, code = useCoop.getState().code;
+      if (!t || !code) return;
+      clearTimeout(connectTimer);
+      stopWatching?.();
+      stopWatching = null;
+      guest = null;
+      net = null;
+      setActionRouter(null);
+      session.coop = null;
+      useCoop.setState({ phase: 'off', role: null, code: null, me: null, players: [], loading: null, waiting: [], ended: null });
+      joinedRace(t, welcome, from, code);
+    },
   };
 }
 

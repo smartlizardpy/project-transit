@@ -53,6 +53,10 @@ pnpm test         # game-core tests (vitest)
     - **Friends:** choose **Join a friend** on the start screen and type the code in.
     - Everyone sees each other's cursors, and anyone can build, buy or change anything. Alt/Option-click the map to point at a spot.
     - The game connects computer to computer (WebRTC) and is saved on the host's computer. See [`docs/multiplayer-plan.md`](docs/multiplayer-plan.md).
+11. **Race a friend.** Up to four people each found a company in the same city at the same moment.
+    - **Host:** choose **Race a friend** on the start screen, pick a city and a length (1, 3 or 7 game days), and send the code. Start the race once friends have joined.
+    - **Friends:** choose **Join a friend** and type the code in.
+    - Everyone starts with the same money in the same home area, on one shared clock. The scoreboard under the clock counts journeys carried, rivals' lines show dashed on your map, and the most journeys at the end wins. Afterwards your company is a normal saved game.
 
 The optional first-steps guide walks through steps 2–6, and you can hide it. The game autosaves; ⌘S / Ctrl+S saves now; Esc opens the game menu (save, load, settings, quit).
 
