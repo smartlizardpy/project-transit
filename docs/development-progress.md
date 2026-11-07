@@ -227,3 +227,9 @@ Tracked in detail in [`docs/network-control-progress.md`](network-control-progre
       - `agent.json` was mode 0600 and was removed on quit.
   - Fixed: the satisfaction popover showed the average wait divided by 60 again ("avg wait 0.1 min" for a 7.4-minute wait).
   - Released as v0.4.1. PR #7.
+- **2026-11-07.** From a player on Windows (RTX 50-series): "the game lags a lot", and the interface did not appear.
+  - **The interface hid itself.** F10 / Shift+U toggled it even while typing, so a capital U in the company name hid it before the game started. It now works only in a running game and never in text fields; each game starts with it showing, and hiding it says how to bring it back.
+  - **Frame rate limit** (`src/map/pacing.ts`, `pacing.test.ts`). The map was redrawn on every screen frame: 144–240 times a second on gaming screens, 554 in a browser test with no limit. It now draws every k-th screen frame to stay near the limit (60 by default), with even spacing (72 fps at 144 Hz, 60 at 240 Hz). Camera moves are not limited.
+  - **Settings → Graphics**: frame rate limit (30/60/120/off), resolution (100/75/50%), and a frame rate readout (`src/ui/PerfMeter.tsx`) that names the graphics card and flags integrated or software graphics.
+  - The bus marker canvas follows the map's resolution and is not cleared when nothing was drawn; WASD panning no longer speeds up on fast screens.
+  - Released as v0.4.2.

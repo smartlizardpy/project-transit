@@ -17,6 +17,7 @@ import { exitApp, isDesktop, toggleFullscreen } from './app/persistence.ts';
 import { useUI } from './state/store.ts';
 import { CompanyMark } from './ui/logos.tsx';
 import { UpdateBanner } from './ui/UpdateBanner.tsx';
+import { PerfMeter } from './ui/PerfMeter.tsx';
 import { AutomationStudio } from './ui/automation/Studio.tsx';
 import { NetworkUnlock } from './ui/NetworkUnlock.tsx';
 import { installOnExit, startAutoUpdates } from './app/updates.ts';
@@ -115,10 +116,25 @@ export function App() {
   const [hud, setHud] = useState(true);
   useEffect(() => startAutoUpdates(), []);
   useEffect(() => void setAgentLive(loadSettings().agentLive), []);
+  // A new or loaded game always starts with the interface showing.
+  useEffect(() => {
+    if (phase === 'playing') setHud(true);
+  }, [phase]);
+  useEffect(() => {
+    if (!hud) useUI.getState().notify('Interface hidden. Press F10 or Shift+U to show it again.', 'info');
+  }, [hud]);
   useEffect(() => {
     void session.refreshSaves();
     const h = (e: KeyboardEvent) => {
-      if (e.key === 'F10' || (e.key.toLowerCase() === 'u' && e.shiftKey)) setHud((x) => !x);
+      // Hide or show the interface: only in a running game, and never while typing (a capital
+      // U in the company name used to hide it before the game had even started).
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      const hudKey = e.key === 'F10' || (e.key.toLowerCase() === 'u' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey);
+      if (hudKey && !typing && useSession.getState().phase === 'playing') {
+        e.preventDefault();
+        setHud((x) => !x);
+      }
       if (e.key === 'F11') {
         e.preventDefault();
         void toggleFullscreen();
@@ -156,6 +172,7 @@ export function App() {
       <UpdateBanner />
       <SessionNotices />
       <Attribution />
+      <PerfMeter />
       <Boot />
     </div>
   );

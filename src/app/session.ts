@@ -58,21 +58,39 @@ export interface AppSettings {
   autoUpdate: boolean;
   /** desktop: AI agents may read the running game and build workflows (off by default) */
   agentLive: boolean;
+  /** frames per second the map is drawn at while the camera is still (0: as fast as the screen) */
+  fpsLimit: number;
+  /** share of the screen's pixel density the map is drawn at (1, 0.75 or 0.5) */
+  renderScale: number;
+  /** show frames per second and the graphics card in a corner */
+  showFps: boolean;
 }
+
+export const FPS_LIMITS = [30, 60, 120, 0];
+export const RENDER_SCALES = [1, 0.75, 0.5];
 
 const SETTINGS_KEY = 'pt-settings-v1';
 export function loadSettings(): AppSettings {
-  const d: AppSettings = { autosaveMinutes: 5, autoUpdate: true, agentLive: false };
+  const d: AppSettings = { autosaveMinutes: 5, autoUpdate: true, agentLive: false, fpsLimit: 60, renderScale: 1, showFps: false };
   try {
     const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}');
     return {
       autosaveMinutes: typeof raw.autosaveMinutes === 'number' ? raw.autosaveMinutes : d.autosaveMinutes,
       autoUpdate: typeof raw.autoUpdate === 'boolean' ? raw.autoUpdate : d.autoUpdate,
       agentLive: raw.agentLive === true,
+      fpsLimit: FPS_LIMITS.includes(raw.fpsLimit) ? raw.fpsLimit : d.fpsLimit,
+      renderScale: RENDER_SCALES.includes(raw.renderScale) ? raw.renderScale : d.renderScale,
+      showFps: raw.showFps === true,
     };
   } catch {
     return d;
   }
+}
+const settingsListeners = new Set<(s: AppSettings) => void>();
+/** Hear about settings changes (graphics options apply at once). */
+export function onSettings(fn: (s: AppSettings) => void): () => void {
+  settingsListeners.add(fn);
+  return () => settingsListeners.delete(fn);
 }
 export function saveSettings(s: AppSettings) {
   try {
@@ -80,6 +98,7 @@ export function saveSettings(s: AppSettings) {
   } catch {
     /* ignore */
   }
+  settingsListeners.forEach((f) => f(s));
 }
 
 /** Upgrade older save formats. Throws with a readable message if the save is unusable. */

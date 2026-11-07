@@ -120,6 +120,8 @@ export class VehicleLayer {
   private tagKey = '';
   private canvas: HTMLCanvasElement;
   private canvasKey = '';
+  /** something was drawn on the marker canvas since it was last cleared */
+  private drawn = false;
   private ctx: CanvasRenderingContext2D;
   private geos = new Map<string, THREE.BufferGeometry>();
   private livery = '';
@@ -223,31 +225,35 @@ export class VehicleLayer {
    * desktop app, resizing it during a window resize or fullscreen change could leave old dots
    * frozen on screen. A new screen size or pixel density gets a fresh canvas instead.
    */
-  private resizeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
+  private resizeCanvas(map: MlMap | undefined) {
+    // drawn at the map's density, so a lower render scale makes this cheaper too
+    const dpr = map?.getPixelRatio() || window.devicePixelRatio || 1;
     const w = Math.max(window.screen.width, this.container.clientWidth);
     const h = Math.max(window.screen.height, this.container.clientHeight);
     const key = `${w}x${h}@${dpr}`;
-    if (key !== this.canvasKey) {
+    const fresh = key !== this.canvasKey;
+    if (fresh) {
       this.canvasKey = key;
-      const fresh = document.createElement('canvas');
-      fresh.className = 'vehicle-markers';
-      fresh.width = Math.round(w * dpr);
-      fresh.height = Math.round(h * dpr);
-      fresh.style.width = `${w}px`;
-      fresh.style.height = `${h}px`;
-      this.canvas.replaceWith(fresh);
-      this.canvas = fresh;
-      this.ctx = fresh.getContext('2d')!;
+      const c = document.createElement('canvas');
+      c.className = 'vehicle-markers';
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
+      c.style.width = `${w}px`;
+      c.style.height = `${h}px`;
+      this.canvas.replaceWith(c);
+      this.canvas = c;
+      this.ctx = c.getContext('2d')!;
     }
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.ctx.clearRect(0, 0, w, h);
+    // close up no markers are drawn: leave the empty canvas alone instead of clearing it every frame
+    if (this.drawn && !fresh) this.ctx.clearRect(0, 0, w, h);
+    this.drawn = false;
   }
 
   private update(now: number) {
     const map = (this.city as unknown as { map: MlMap }).map;
     const game = this.game;
-    this.resizeCanvas();
+    this.resizeCanvas(map);
     if (!map || !game) {
       this.ring.visible = this.hoverRing.visible = this.xray.visible = this.hero.visible = false;
       this.tag.classList.remove('show');
@@ -338,6 +344,7 @@ export class VehicleLayer {
   }
 
   private drawMarker(ctx: CanvasRenderingContext2D, game: Game, v: Vehicle, x: number, y: number, heading: number, alpha: number, selected: boolean, hovered: boolean) {
+    this.drawn = true;
     const r = v.route ? game.state.routes[v.route] : undefined;
     const colour = r?.colour ?? '#8b958f';
     const inService = v.status === 'in_service' || v.status === 'at_stop';

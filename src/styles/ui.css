@@ -336,6 +336,11 @@ button.lrow:hover { background: var(--card-hover); }
 .attrib a { color: inherit; text-decoration: none; }
 .attrib a:hover { text-decoration: underline; }
 
+/* frame rate readout (Settings → Show frame rate) */
+.perf-meter { position: absolute; left: 6px; bottom: 6px; z-index: 40; display: flex; gap: 8px; align-items: center; pointer-events: none; font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: #4f5852; background: rgba(235,232,224,0.86); padding: 2px 8px; border-radius: 6px; }
+.perf-meter b { color: #1f2a24; }
+.perf-meter .perf-warn { color: #b4462f; font-weight: 700; }
+
 /* legend for overlays */
 .legend { position: absolute; left: var(--edge); bottom: var(--edge); width: 260px; padding: 12px 14px; animation: panel-in var(--t-panel) var(--ease-out); --from: -10px; }
 .legend + .legend { bottom: calc(var(--edge) + 88px); }

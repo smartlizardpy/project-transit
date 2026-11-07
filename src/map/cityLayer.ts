@@ -394,6 +394,14 @@ export class CityLayer implements CustomLayerInterface {
     return n;
   }
 
+  /** The graphics card the browser engine draws with, as WebGL reports it (null before the map is up). */
+  get gpu(): string | null {
+    const gl = this.renderer?.getContext();
+    if (!gl) return null;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) ?? '') || null;
+  }
+
   get busy(): boolean {
     for (const t of this.tiles.values()) if (t.state === 'loading') return true;
     return false;

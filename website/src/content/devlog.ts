@@ -30,6 +30,12 @@ export interface Update {
 /** Newest first. */
 export const UPDATES: Update[] = [
   {
+    date: '2026-11-07',
+    title: '0.4.2: Smoother on fast screens, and the interface stays put',
+    body: 'On 144 Hz and 240 Hz screens the map was redrawn on every screen frame, which made the game lag on some gaming PCs. It now draws at about 60 frames a second by default, while moving the map stays as smooth as your screen. Settings has a new Graphics section: a frame rate limit, a lower resolution for slower graphics, and a frame rate readout that names the graphics card the game is using, so you can tell when Windows runs it on the integrated chip. Also fixed: typing a capital U in the company name hid the whole interface (F10 or Shift+U brings it back), and panning with WASD was too fast on fast screens.',
+    href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.4.2',
+  },
+  {
     date: '2026-11-01',
     title: '0.4.1: Improve service, and AI agents in the running game',
     body: 'A new Improve service button in the satisfaction popover finds why passengers are unhappy (long waits, slow journeys, full buses, people with no bus home) and proposes changes you could make yourself: spare buses moved to where people wait, timetables fitted to the buses, and shorter routes. Try them on a copy of your company first, then apply or undo them. Loop lines now take people home: riders going back to an earlier stop stay on the bus round the loop. With live access switched on, AI agents can read the running game and its analytics, and build and test Automation Studio workflows. Their workflows suggest changes for you to approve; only you can make one automatic.',

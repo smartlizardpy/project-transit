@@ -12,10 +12,13 @@ export function useKeyboard() {
     let lastSpeed = 1;
     const held = new Set<string>();
     let raf = 0;
-    const pan = () => {
+    let panAt = 0;
+    const pan = (now: number) => {
       const map = mapRuntime.map;
       if (map && held.size) {
-        const step = 14;
+        // 14 px per 60 Hz frame, so panning is as fast on a 144 Hz screen as on a 60 Hz one
+        const step = 14 * Math.min(3, panAt ? (now - panAt) / (1000 / 60) : 1);
+        panAt = now;
         let dx = 0, dy = 0;
         if (held.has('w')) dy -= step;
         if (held.has('s')) dy += step;
@@ -26,7 +29,10 @@ export function useKeyboard() {
           map.panBy([dx, dy], { duration: 0 });
         }
         raf = requestAnimationFrame(pan);
-      } else raf = 0;
+      } else {
+        raf = 0;
+        panAt = 0;
+      }
     };
     const down = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;

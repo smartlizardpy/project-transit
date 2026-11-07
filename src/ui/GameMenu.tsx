@@ -122,6 +122,27 @@ export function SettingsDialog({ onClose }: { onClose?: () => void }) {
           <div><b>Fullscreen</b><span>Also F11.</span></div>
           <button role="switch" aria-checked={full} aria-label="Fullscreen" className={'mn-switch' + (full ? ' on' : '')} onClick={() => void setFullscreen(!full).then(() => isFullscreen().then(setFull))}><i /></button>
         </div>
+        <div className="label mn-set-h">Graphics</div>
+        <div className="mn-set-row">
+          <div><b>Frame rate limit</b><span>Lower runs better on slower PCs and uses less power. Moving the map is never limited.</span></div>
+          <Segmented
+            options={[{ value: '30', label: '30' }, { value: '60', label: '60' }, { value: '120', label: '120' }, { value: '0', label: 'Off' }]}
+            value={String(s.fpsLimit)}
+            onChange={(v) => patch({ fpsLimit: Number(v) })}
+          />
+        </div>
+        <div className="mn-set-row">
+          <div><b>Resolution</b><span>Draw the map with fewer pixels than the screen has: faster, a little softer.</span></div>
+          <Segmented
+            options={[{ value: '1', label: '100%' }, { value: '0.75', label: '75%' }, { value: '0.5', label: '50%' }]}
+            value={String(s.renderScale)}
+            onChange={(v) => patch({ renderScale: Number(v) })}
+          />
+        </div>
+        <div className="mn-set-row">
+          <div><b>Show frame rate</b><span>Frames per second and the graphics card the game is using, in the bottom-left corner.</span></div>
+          <button role="switch" aria-checked={s.showFps} aria-label="Show frame rate" className={'mn-switch' + (s.showFps ? ' on' : '')} onClick={() => patch({ showFps: !s.showFps })}><i /></button>
+        </div>
         <AgentSettings live={s.agentLive} setLive={(v) => { patch({ agentLive: v }); void setAgentLive(v); }} />
         {game && gs && (
           <>
