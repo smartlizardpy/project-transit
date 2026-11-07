@@ -8,7 +8,7 @@ import { installDiagnosticsLayer } from './diagnosticsLayer.ts';
 import { VehicleLayer } from './vehicles3d.ts';
 import { MarkerLayer } from './markers.ts';
 import { useUI, type Selection } from '../state/store.ts';
-import { session, useSession } from '../app/session.ts';
+import { loadSettings, onSettings, session, useSession } from '../app/session.ts';
 import type { Game } from '../game/engine.ts';
 import { checkDepot, checkStop } from '../game/network.ts';
 import { routeWithFallback, type LngLat } from '../game/world/graph.ts';
@@ -16,6 +16,7 @@ import { ECON } from '../game/content.ts';
 import { activeSeq, addWaypoint, appendStop, computePreview, useDraftPreview } from '../ui/routeDraft.ts';
 import { focusPoint, fitPoints } from '../ui/camera.ts';
 import { installShowcase } from './showcase.ts';
+import { createPacer } from './pacing.ts';
 import { stopSpots, type StopSpot } from '../game/spots.ts';
 
 export interface Controller {
@@ -56,10 +57,15 @@ export function installController(map: MlMap, city: CityLayer): Controller {
   if (game) city.setDynamicOrigin(game.region.spec.centre);
 
   // ───────────────────────── simulation loop
+  // Frame limit: on fast screens (144 Hz, 240 Hz) draw only every k-th screen frame (see pacing.ts).
+  // Panning and zooming still draw at the screen's rate.
+  let fpsLimit = loadSettings().fpsLimit;
+  onSettings((s) => (fpsLimit = s.fpsLimit));
+  const pace = createPacer();
   let last = performance.now();
   let raf = 0;
   let waitingTick = 0;
-  const loop = (now: number) => {
+  const step = (now: number) => {
     const dt = Math.min(0.5, (now - last) / 1000);
     last = now;
     const g = game;
@@ -83,6 +89,12 @@ export function installController(map: MlMap, city: CityLayer): Controller {
       }
     } else showcase.frame(dt);
     map.triggerRepaint();
+  };
+  // The next frame is requested after triggerRepaint, so MapLibre's frame runs before ours.
+  // The other way round each repaint request lands while the last one is still pending, and
+  // the map draws only every second frame.
+  const loop = (now: number) => {
+    if (pace(now, fpsLimit)) step(now);
     raf = requestAnimationFrame(loop);
   };
   raf = requestAnimationFrame(loop);

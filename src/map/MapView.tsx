@@ -8,6 +8,7 @@ import { addMapImages } from './images.ts';
 import { mapRuntime } from './runtime.ts';
 import { installController } from './controller.ts';
 import { PRESETS } from '../app/presets.ts';
+import { loadSettings, onSettings } from '../app/session.ts';
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
@@ -45,7 +46,22 @@ export function MapView() {
     map.on('style.load', () => addMapImages(map));
     map.on('styleimagemissing', () => addMapImages(map));
     Object.assign(window as object, { __map: map, __city: city });
+    // Render scale: below 1 the map is drawn at fewer pixels than the screen has (faster on
+    // slow or integrated graphics). At 1 MapLibre follows the screen's density by itself.
+    let scale = 1;
+    const applyScale = (k: number) => {
+      if (k === scale && k === 1) return;
+      scale = k;
+      map.setPixelRatio((k < 1 ? (window.devicePixelRatio || 1) * k : null) as number);
+    };
+    applyScale(loadSettings().renderScale);
+    const offSettings = onSettings((s) => applyScale(s.renderScale));
+    // a window moved to a screen of another density
+    const onResize = () => scale < 1 && applyScale(scale);
+    window.addEventListener('resize', onResize);
     return () => {
+      offSettings();
+      window.removeEventListener('resize', onResize);
       mapRuntime.detach();
       map.remove();
     };
