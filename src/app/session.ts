@@ -292,6 +292,38 @@ class Session {
     void this.save('manual');
   }
 
+  /**
+   * Race: load the race city for the host (with the loading screen). Returns null if it failed;
+   * the start menu shows why.
+   */
+  async loadRaceCity(spec: RegionSpec): Promise<Region | null> {
+    useSession.setState({ phase: 'loading', pending: null, error: null });
+    try {
+      return await this.loadRegion(spec);
+    } catch (e) {
+      useSession.setState({ phase: 'menu', progress: null, error: (e as Error).message });
+      return null;
+    }
+  }
+
+  /**
+   * Race: found this player's company on the race map. Everyone uses the same map, seed, home area
+   * and start time, so the races start level. `data` is the host's map (guests); the host passes
+   * the region it loaded.
+   */
+  startRace(map: Region | RegionData, o: { seed: number; home: string }, company: { name: string; colour: string; logo: number }): Game {
+    const region = 'index' in map && map.index ? (map as Region) : prepareRegion(map as RegionData);
+    this.region = region;
+    this.regionKey = `${region.spec.id}|${region.spec.tiles.map((t) => t.join(',')).join(';')}`;
+    const state = newGameState({ region, company, homeZone: o.home, seed: o.seed, startWeekday: 0, startHour: 5 });
+    const game = new Game(state, region);
+    useSession.setState({ phase: 'playing', pending: null, progress: null, error: null, lastSaved: null });
+    this.setGame(game);
+    this.startAutosave();
+    void this.save('manual');
+    return game;
+  }
+
   cancelSetup() {
     useSession.setState({ phase: 'menu', pending: null, progress: null });
   }

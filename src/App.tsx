@@ -25,6 +25,7 @@ import { setAgentLive } from './app/agentBridge.ts';
 import './styles/ui.css';
 import './styles/game.css';
 import { CoopEnded, CoopHud } from './ui/Coop.tsx';
+import { RaceHud, RaceOver } from './ui/Race.tsx';
 
 function Boot() {
   const [done, setDone] = useState(false);
@@ -162,6 +163,7 @@ export function App() {
           <Onboarding />
           <AutomationStudio />
           <CoopHud />
+          <RaceHud />
         </div>
       )}
       {playing && <NetworkUnlock />}
@@ -171,6 +173,7 @@ export function App() {
       <NewCompany />
       <GameMenu />
       <CoopEnded />
+      <RaceOver />
       <Toast />
       <UpdateBanner />
       <SessionNotices />

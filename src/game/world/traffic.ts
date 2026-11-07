@@ -69,6 +69,11 @@ export class SimulatedTraffic implements TrafficProvider {
   readonly intensity: number;
   private cacheSlot = -1;
   private cache: Float32Array;
+  /**
+   * The time-of-day part of compute(), the same for every edge at one moment. Cached because a
+   * congestion refresh asks for it once per edge, and dmath's exp costs far more than Math.exp.
+   */
+  private at = { t: NaN, day: 0, weekend: false, base: 0, tide: 0 };
 
   private startWeekday: number;
 
@@ -121,15 +126,26 @@ export class SimulatedTraffic implements TrafficProvider {
     return 1 - 0.74 * pow(Math.max(0, Math.min(1, c)), 1.25);
   }
 
+  private timeOf(t: number) {
+    const a = this.at;
+    if (a.t !== t) {
+      const day = Math.floor(t / DAY);
+      const hour = (t - day * DAY) / 3600;
+      a.t = t;
+      a.day = day;
+      a.weekend = weekdayOf(this.startWeekday, t) >= 5;
+      a.base = this.profile(hour, a.weekend) * this.intensity;
+      a.tide = a.weekend ? 0 : (gauss(hour, 8.2, 1.4) - gauss(hour, 18, 1.6)) * 0.22;
+    }
+    return a;
+  }
+
   private compute(de: number, t: number, noise: boolean): number {
     const e = de >> 1;
-    const day = Math.floor(t / DAY);
-    const hour = (t - day * DAY) / 3600;
-    const weekend = weekdayOf(this.startWeekday, t) >= 5;
-    const base = this.profile(hour, weekend) * this.intensity;
+    const { day, weekend, base, tide: k } = this.timeOf(t);
     // morning peak flows one way along a street, the evening peak the other
     const dir = (de & 1) === 0 ? 1 : -1;
-    const tide = weekend ? 0 : (gauss(hour, 8.2, 1.4) - gauss(hour, 18, 1.6)) * 0.22 * this.bias[e] * dir;
+    const tide = weekend ? 0 : k * this.bias[e] * dir;
     let c = base * this.weight[e] * (1 + tide);
     if (noise) {
       const blockDay = hash(Math.floor(e / 20) * 977 + day * 7919);

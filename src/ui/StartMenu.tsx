@@ -1,21 +1,26 @@
 import { useEffect, useState } from 'react';
-import { Play, Plus, FolderOpen, GearSix, Power, X, UsersThree } from '@phosphor-icons/react';
+import { Play, Plus, FolderOpen, GearSix, Power, X, UsersThree, FlagCheckered } from '@phosphor-icons/react';
 import '../styles/menu.css';
 import { useSession, session } from '../app/session.ts';
 import { exitApp, isDesktop } from '../app/persistence.ts';
 import { LoadDialog, MenuBtn, SettingsDialog, relTime } from './GameMenu.tsx';
 import { useNewCompanyFlow } from './NewCompany.tsx';
 import { JoinDialog } from './Coop.tsx';
+import { RaceDialog } from './Race.tsx';
 
 export function StartMenu() {
   const phase = useSession((s) => s.phase);
   const saves = useSession((s) => s.saves);
   const error = useSession((s) => s.error);
   const flowOpen = useNewCompanyFlow((s) => s.open);
-  const [dlg, setDlg] = useState<'load' | 'settings' | 'join' | null>(null);
+  const [dlg, setDlg] = useState<'load' | 'settings' | 'join' | 'race' | null>(null);
   useEffect(() => {
     void session.refreshSaves();
   }, []);
+  // a game opened (a friend's, a race, a save): the dialog that led there is done
+  useEffect(() => {
+    if (phase === 'playing') setDlg(null);
+  }, [phase]);
   if (phase !== 'menu' || flowOpen) return null;
   const latest = [...saves].sort((a, b) => b.savedAt - a.savedAt)[0];
   return (
@@ -42,6 +47,7 @@ export function StartMenu() {
           )}
           <MenuBtn icon={<Plus />} label="New company" autoFocus={!latest} onClick={() => useNewCompanyFlow.setState({ open: true })} />
           <MenuBtn icon={<UsersThree />} label="Join a friend" onClick={() => setDlg('join')} />
+          <MenuBtn icon={<FlagCheckered />} label="Race a friend" onClick={() => setDlg('race')} />
           <MenuBtn icon={<FolderOpen />} label="Load game" meta={saves.length ? `${saves.length} saved` : undefined} onClick={() => setDlg('load')} />
           <MenuBtn icon={<GearSix />} label="Settings" onClick={() => setDlg('settings')} />
           {isDesktop() && <MenuBtn icon={<Power />} label="Exit" onClick={() => void exitApp()} />}
@@ -51,6 +57,7 @@ export function StartMenu() {
       {dlg === 'load' && <LoadDialog onClose={() => setDlg(null)} />}
       {dlg === 'settings' && <SettingsDialog onClose={() => setDlg(null)} />}
       {dlg === 'join' && <JoinDialog onClose={() => setDlg(null)} />}
+      {dlg === 'race' && <RaceDialog onClose={() => setDlg(null)} />}
     </div>
   );
 }

@@ -31,9 +31,14 @@ export interface Update {
 export const UPDATES: Update[] = [
   {
     date: '2026-11-07',
+    title: '0.6.0: Race a friend',
+    body: 'Choose Race a friend on the start screen, pick a city and a length, and send the code. Everyone founds a company in the same home area, with the same money, at the same moment, and one clock runs for all. A scoreboard under the clock counts each company’s journeys, your rivals’ lines show dashed on your map, and whoever has carried the most when time runs out wins. This is also the first download with playing together: the 0.5.0 build never reached the downloads page.',
+    href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.6.0',
+  },
+  {
+    date: '2026-11-07',
     title: '0.5.0: Play together',
     body: 'Up to four people can now run one company in the same game. The host chooses Play with friends in the menu and sends a code; friends choose Join a friend and type it in. Everyone sees each other’s mouse on the map, anyone can build, buy or change anything, and Option-click (Alt-click) points at a spot for everyone. Computers connect directly, with no accounts or game server. To keep every copy identical, the simulation now does its maths the same way on every computer, Mac and Windows alike.',
-    href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.5.0',
   },
   {
     date: '2026-11-07',
@@ -95,7 +100,6 @@ export const UPDATES: Update[] = [
 /** What comes next. "planned" means designed but not started. */
 export const NEXT: { title: string; status: Status; body: string }[] = [
   { title: 'Playtesting the pace', status: 'partial', body: 'How quickly a new company reaches its second and third areas, tuned with real players.' },
-  { title: 'Race a friend', status: 'planned', body: 'The same city for each player, separate companies, one clock and a live scoreboard. Playing together in one company is already in the game.' },
   { title: 'Your own trams and metro', status: 'planned', body: 'In the design document, not yet in the game. The city’s own metro, trams, rail and ferries already carry people and compete with your buses.' },
   { title: 'Deeper depots and economics', status: 'planned', body: 'More to manage once the bus game is balanced.' },
 ];

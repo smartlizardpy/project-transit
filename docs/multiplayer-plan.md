@@ -5,7 +5,7 @@ Friends play Project Transit together over the internet, peer to peer, with no s
 ## Modes
 
 1. **Co-op (built).** Two to four people run one company in one game. Everyone sees the others' cursors on the map, and anyone can build, buy or change anything. Nothing is restricted: if a friend is "helping", they just move their mouse and do things.
-2. **Race (next).** Same city, same seed, separate companies, one shared clock and a live scoreboard. Each player runs their own simulation, so this needs no lockstep.
+2. **Race (built).** Same city, same seed, separate companies, one shared clock and a live scoreboard. Each player runs their own simulation, so this needs no lockstep.
 
 Dropped: rival companies competing for the same passengers, and roles/permissions.
 
@@ -36,7 +36,16 @@ Dropped: rival companies competing for the same passengers, and roles/permission
 - `localeCompare` became `cmp`, a code-unit order, because collation depends on the system locale.
 - `node scripts/check-dmath.mjs` compares bit patterns in Node, Chromium and WebKit: 0 differences.
 - A guard test in `src/game/test/dmath.test.ts` keeps `Math.*` transcendentals, `**` and `localeCompare` out of `src/game`.
-- Cost: the hourly passenger choice is about 2.5 ms (about 9%) slower. The per-tick simulation is not measurably slower.
+- Cost: the hourly passenger choice is about 2.5 ms (about 9%) slower. The traffic model briefly doubled the cost of a game hour (it called `exp` six times per road per refresh); it now works out its time-of-day curve once per moment, which made the simulation faster than before the change.
+
+## How races work
+
+- **Lobby.** The host chooses **Race a friend** on the start screen, picks a preset city and a length (1, 3 or 7 game days) and gets a code. Friends use the same **Join a friend** dialog as co-op: the join flow says hello, and a race host answers with `race` instead of `welcome`, so `coop.ts` hands the connection to `race.ts`. City and length changes reach friends in the lobby (`rsetup`).
+- **Start.** The host loads the city (friends see "loading the city", `rstart`), picks a seed and the busiest area as everyone's home, founds its own company and sends the built map with the start (seed, home, start and end second, speed). Every computer calls `session.startRace`, so all companies start identical apart from their name and colour: same map, money, home area and moment (05:00 on day 1).
+- **One clock.** The host's clock waits at the start until every computer has its game (90 s at most), then runs. Like co-op, nobody runs past the host and the host stays within a second or so of the slowest player; anyone can pause or change speed. The race clock is separate from the host's own game, so a bankrupt company (whose game stops) doesn't stop the race. The clock stops at the finish.
+- **Scores and sketches.** Each computer sends its score (journeys carried, balance, reputation, lines, buses) when it changes, at most once a second, and a simplified sketch of its lines and stops when its network changes. The scoreboard ranks by journeys, then balance. Rivals' sketches are drawn dashed in their colour under your own lines (`src/map/rivalsLayer.ts`).
+- **Finish.** At the end second every computer reports a final score; the host sends the ranking (or sends it without a player who hasn't reported after 20 s). Each game stops and becomes a normal saved game. If the host leaves, the race ends and everyone plays on alone.
+- **Map growth** works as in single player: each company's map grows on its own computer.
 
 ## Code map
 
@@ -52,6 +61,11 @@ Dropped: rival companies competing for the same passengers, and roles/permission
 | `src/net/coop.ts` | Host/join/leave, wiring to the session and action router, the feed, cursors and pings |
 | `src/ui/Coop.tsx`, `src/map/coopLayer.ts`, `src/styles/coop.css` | Invite and join dialogs, the strip under the clock, cursors and pings on the map |
 | `scripts/coop.mjs` | Two real browsers over real WebRTC: found, invite, join, both act, force a drift, compare |
+| `src/net/racing.ts` | `RaceHost` / `RaceGuest`: the race clock, the start, scores, network sketches and the finish. No React; tested with an in-memory transport (`racing.test.ts`) |
+| `src/net/race.ts` | Open, join, start and leave a race; wiring to the session, the speed buttons and the UI |
+| `src/net/room.ts` | Room codes, the player's name, opening a connection (shared by co-op and races) |
+| `src/ui/Race.tsx`, `src/map/rivalsLayer.ts` | Race dialog and lobby, scoreboard, results; rivals' lines on the map |
+| `scripts/race.mjs` | Two real browsers over real WebRTC: open, join, start, build, race to the finish, compare results |
 
 ## Rules for new code
 
@@ -72,10 +86,6 @@ Dropped: rival companies competing for the same passengers, and roles/permission
 
 ## Next
 
-1. **Race mode.**
-   - Host picks city, seed and goal (first to level 3, most riders by day 30…).
-   - Each player plays their own game with the host's clock and speed.
-   - Stats are exchanged each game hour for a scoreboard.
-   - Optionally show the rival's lines faintly on your map (same city).
-2. **TURN fallback** for networks where direct connections fail.
-3. **Native check on Windows** (WebView2) with two real machines, Mac ↔ Windows, to confirm the math work in practice.
+1. **TURN fallback** for networks where direct connections fail.
+2. **Native check on Windows** (WebView2) with two real machines, Mac ↔ Windows, to confirm the math work in practice.
+3. **More race goals**: a race to a level or to a number of riders, any city (not just the presets), and racing on from a save.

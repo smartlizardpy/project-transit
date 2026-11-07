@@ -1,11 +1,11 @@
-// Messages between the computers in a co-op session. The host owns the clock and the order of
-// actions; everyone else follows. See docs/multiplayer-plan.md.
+// Messages between the computers in a co-op session or a race. The host owns the clock (and in
+// co-op the order of actions); everyone else follows. See docs/multiplayer-plan.md.
 
 import type { Action } from '../game/actions.ts';
 import type { LngLat } from '../game/world/graph.ts';
 
 /** Bumped when messages change shape: different versions refuse to play together. */
-export const PROTO = 1;
+export const PROTO = 2;
 
 export interface Player {
   /** transport peer id */
@@ -44,7 +44,21 @@ export type Msg =
   | { k: 'bye'; reason: string }
   // anyone → everyone
   | { k: 'cursor'; at: LngLat | null }
-  | { k: 'ping'; at: LngLat };
+  | { k: 'ping'; at: LngLat }
+  // races (racing.ts): host → guests
+  /** the answer to `hello` when the host is setting up a race (instead of `welcome`) */
+  | { k: 'race'; you: Player; players: Player[]; setup: RaceSetup }
+  /** the host changed the city or the length in the lobby */
+  | { k: 'rsetup'; setup: RaceSetup }
+  /** the host is loading the city; the map follows as a blob (see RaceStart) */
+  | { k: 'rstart' }
+  /** everyone may run their own game up to `upTo` */
+  | { k: 'clock'; upTo: number; speed: number }
+  | { k: 'rend'; results: RaceResult[] }
+  // races: anyone → everyone
+  | { k: 'score'; s: Score }
+  /** this player's lines, drawn faintly on the others' maps */
+  | { k: 'ghost'; lines: LngLat[][]; stops: LngLat[] };
 
 /** What a game snapshot carries (sent as a packed binary blob, see codec.ts). */
 export interface SnapshotMeta {
@@ -59,3 +73,41 @@ export interface SnapshotMeta {
 }
 
 export const PLAYER_COLOURS = ['#f2a93b', '#4fb3e8', '#e8607a', '#7ccf6a'];
+
+// ─────────────────────────────────────────── races
+
+/** What the host chose: the city, and how many game days the race runs. */
+export interface RaceSetup {
+  preset: string;
+  city: string;
+  area: string;
+  days: number;
+}
+
+/** Sent with the map when a race starts: everyone founds a company in the same area, same seed. */
+export interface RaceStart {
+  why: 'race';
+  seed: number;
+  home: string;
+  startT: number;
+  endT: number;
+  speed: number;
+}
+
+/** A player's standing. Journeys carried decide the race; ties go to the higher balance. */
+export interface Score {
+  t: number;
+  journeys: number;
+  balance: number;
+  rep: number;
+  lines: number;
+  buses: number;
+  bankrupt: boolean;
+}
+
+export interface RaceResult {
+  id: string;
+  name: string;
+  colour: string;
+  score: Score | null;
+}

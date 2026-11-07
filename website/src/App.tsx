@@ -11,6 +11,7 @@ import { Routes } from './sections/Routes.tsx';
 import { Screenshots } from './sections/Screenshots.tsx';
 import { Terminus } from './sections/Terminus.tsx';
 import { Together } from './sections/Together.tsx';
+import { Race } from './sections/Race.tsx';
 
 /** Which nav link each section belongs to. */
 const NAV_FOR: [string, string][] = [
@@ -20,6 +21,7 @@ const NAV_FOR: [string, string][] = [
   ['company', '#routes'],
   ['automation', '#routes'],
   ['together', '#routes'],
+  ['race', '#routes'],
   ['screenshots', '#screenshots'],
   ['development', '#development'],
   ['get', '#development'],
@@ -70,6 +72,7 @@ export function App() {
         <Company />
         <Automation />
         <Together />
+        <Race />
         <Screenshots />
         <Development />
         <Terminus />

@@ -12,7 +12,9 @@ import { claudeCodeCommand, copyText, jsonConfig, mcpSetup, type McpSetup } from
 import { setAgentLive, useAgentLive } from '../app/agentBridge.ts';
 import { act } from '../app/act.ts';
 import { CoopPanel } from './Coop.tsx';
+import { RacePanel } from './Race.tsx';
 import { useCoop } from '../net/coop.ts';
+import { useRace } from '../net/race.ts';
 
 export function relTime(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -256,6 +258,7 @@ export function GameMenu() {
   const [view, setView] = useState<'main' | 'load' | 'quit' | 'coop'>('main');
   const coopRole = useCoop((s) => s.role);
   const coopPlayers = useCoop((s) => s.players.length);
+  const racing = useRace((s) => s.phase === 'racing');
   const [saved, setSaved] = useState(false);
   const isMenu = modal?.kind === 'menu';
   useEffect(() => {
@@ -275,10 +278,10 @@ export function GameMenu() {
       <div className="card mn-dialog" role="dialog" aria-modal="true" aria-label="Game menu">
         {view === 'main' && (
           <>
-            <div className="mn-dialog-head"><h2>{coopRole ? 'Menu' : 'Paused'}</h2><button className="close-btn" onClick={close} aria-label="Close"><X size={14} weight="bold" /></button></div>
+            <div className="mn-dialog-head"><h2>{coopRole || racing ? 'Menu' : 'Paused'}</h2><button className="close-btn" onClick={close} aria-label="Close"><X size={14} weight="bold" /></button></div>
             <div className="mn-list">
               <MenuBtn icon={<Play weight="fill" />} label="Resume" onClick={close} primary autoFocus />
-              <MenuBtn icon={<UsersThree />} label="Play with friends" meta={coopRole ? `${coopPlayers} playing` : undefined} onClick={() => setView('coop')} />
+              <MenuBtn icon={<UsersThree />} label={racing ? 'Race' : 'Play with friends'} meta={racing ? 'Racing' : coopRole ? `${coopPlayers} playing` : undefined} onClick={() => setView('coop')} />
               <MenuBtn icon={<FloppyDisk />} label={saving ? 'Saving…' : saved ? 'Saved' : coopRole === 'guest' ? 'Save a copy' : 'Save game'} disabled={saving} onClick={save} />
               <MenuBtn icon={<FolderOpen />} label="Load game" onClick={() => setView('load')} />
               <MenuBtn icon={<GearSix />} label="Settings" onClick={() => openModal({ kind: 'settings' })} />
@@ -289,8 +292,8 @@ export function GameMenu() {
         )}
         {view === 'coop' && (
           <>
-            <div className="mn-dialog-head"><button className="icon-btn" onClick={() => setView('main')} aria-label="Back"><ArrowLeft size={16} /></button><h2>Play with friends</h2></div>
-            <CoopPanel />
+            <div className="mn-dialog-head"><button className="icon-btn" onClick={() => setView('main')} aria-label="Back"><ArrowLeft size={16} /></button><h2>{racing ? 'Race' : 'Play with friends'}</h2></div>
+            {racing ? <RacePanel /> : <CoopPanel />}
           </>
         )}
         {view === 'load' && (
