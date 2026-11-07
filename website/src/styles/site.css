@@ -954,6 +954,14 @@ a:hover {
   --band-ink-3: #c3d6e4;
 }
 
+/* races: the deep purple of the game's third line colour */
+.band--plum {
+  --band-bg: #3a2e5f;
+  --band-ink: #f6f5ef;
+  --band-ink-2: #e3def1;
+  --band-ink-3: #cdc5e4;
+}
+
 .coop-film {
   margin-top: clamp(40px, 5vw, 64px);
   gap: 14px;

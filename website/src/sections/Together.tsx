@@ -75,7 +75,7 @@ export function Together() {
           </ul>
         </div>
         <p className="coop-note">
-          <strong>Good to know:</strong> up to four players. Some work, school and mobile networks block direct connections; if joining fails, try another network. Some Linux systems can’t play together, because their web engine leaves out WebRTC. A race mode is planned: the same city, separate companies and a live scoreboard.
+          <strong>Good to know:</strong> up to four players. Some work, school and mobile networks block direct connections; if joining fails, try another network. Some Linux systems can’t play together, because their web engine leaves out WebRTC.
         </p>
       </div>
     </section>
