@@ -9,6 +9,7 @@
 import type { CityPlace, TransitMode } from './places.ts';
 import type { RawLine } from './placeBuilder.ts';
 import type { TransitNet } from './region.ts';
+import { hypot } from '../dmath.ts';
 
 export interface TransitInputs {
   lines: RawLine[];
@@ -121,7 +122,7 @@ function buildMode(mode: TransitMode, lines: RawLine[], stations: Candidate[], m
       if (prev >= 0 && v !== prev) {
         ea.push(prev);
         eb.push(v);
-        el.push(Math.hypot(vx[v] - vx[prev], vy[v] - vy[prev]));
+        el.push(hypot(vx[v] - vx[prev], vy[v] - vy[prev]));
       }
       prev = v;
     }
@@ -148,7 +149,7 @@ function buildMode(mode: TransitMode, lines: RawLine[], stations: Candidate[], m
       for (let dy = -1; dy <= 1; dy++)
         for (const u of vgrid.get((cx + dx) * K + cy + dy) ?? []) {
           if (u === v || touching.has(v * nV + u)) continue;
-          const d = Math.hypot(vx[u] - vx[v], vy[u] - vy[v]);
+          const d = hypot(vx[u] - vx[v], vy[u] - vy[v]);
           if (d < bd) { bd = d; best = u; }
         }
     if (best >= 0) { ea.push(v); eb.push(best); el.push(bd); }
@@ -185,7 +186,7 @@ function buildMode(mode: TransitMode, lines: RawLine[], stations: Candidate[], m
           const sx = vx[eb[e]] - ax, sy = vy[eb[e]] - ay;
           const l2 = sx * sx + sy * sy;
           const t = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * sx + (py - ay) * sy) / l2)) : 0;
-          const d = Math.hypot(px - (ax + t * sx), py - (ay + t * sy));
+          const d = hypot(px - (ax + t * sx), py - (ay + t * sy));
           if (d > SNAP_M[mode]) continue;
           const c = find(ea[e]);
           const old = out.get(c);

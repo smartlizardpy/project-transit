@@ -9,6 +9,7 @@ import { Switch, Empty, whenLabel } from './common.tsx';
 import { RunList } from './Runs.tsx';
 import { WorkflowRow, TemplateList, NewButtons, openInStudio } from './Lists.tsx';
 import '../../styles/automation.css';
+import { act } from '../../app/act.ts';
 
 export function AutomationTab({ game }: { game: Game }) {
   useGameUpdates(1);
@@ -18,8 +19,8 @@ export function AutomationTab({ game }: { game: Game }) {
   const runs = [...a.runs].sort((x, y) => y.t - x.t || y.id - x.id).filter((r) => !r.test);
   const [showTpl, setShowTpl] = useState(false);
   const [done, setDone] = useState<Record<number, { ok: boolean; text: string }>>({});
-  const act = (id: number, approve: boolean) => {
-    const r = approve ? game.approveProposal(id) : game.declineProposal(id);
+  const decide = async (id: number, approve: boolean) => {
+    const r = approve ? await act('approveProposal', id) : await act('declineProposal', id);
     setDone((d) => ({ ...d, [id]: r.ok ? { ok: true, text: approve ? `Approved. ${'value' in r && r.value ? r.value : ''}` : 'Declined.' } : { ok: false, text: r.error } }));
   };
   const resolved = Object.entries(done).filter(([id]) => !open.some((p) => p.id === Number(id)));
@@ -44,8 +45,8 @@ export function AutomationTab({ game }: { game: Game }) {
                 </div>
                 {done[p.id] && !done[p.id].ok && <div className="pn-warn bad">{done[p.id].text}</div>}
                 <div className="pn-actions">
-                  <button className="btn sm primary" onClick={() => act(p.id, true)}><Check size={13} weight="bold" />Approve</button>
-                  <button className="btn sm" onClick={() => act(p.id, false)}><X size={13} weight="bold" />Decline</button>
+                  <button className="btn sm primary" onClick={() => void decide(p.id, true)}><Check size={13} weight="bold" />Approve</button>
+                  <button className="btn sm" onClick={() => void decide(p.id, false)}><X size={13} weight="bold" />Decline</button>
                 </div>
               </div>
             );
@@ -63,7 +64,7 @@ export function AutomationTab({ game }: { game: Game }) {
         <NewButtons game={game} onOpen={openInStudio} />
         <div className="st-switchrow" style={{ marginTop: 12 }}>
           <div><b style={{ fontSize: 13 }}>Pause all automations</b><div className="st-help">Nothing runs while paused. Suggestions already waiting stay.</div></div>
-          <Switch on={a.paused} onChange={(v) => game.setAutomationPaused(v)} label="Pause all automations" />
+          <Switch on={a.paused} onChange={(v) => void act('setAutomationPaused', v)} label="Pause all automations" />
         </div>
         {a.paused && <div className="pn-warn" style={{ marginTop: 10 }}>All automations are paused.</div>}
       </div>

@@ -8,6 +8,7 @@ import type { Pattern } from '../game/network.ts';
 import type { RunProfile } from '../game/timetable.ts';
 import type { LngLat } from '../game/world/graph.ts';
 import { useUI, type RouteDraft } from '../state/store.ts';
+import { act } from '../app/act.ts';
 
 export function newDraft(game: Game, editing: string | null = null): RouteDraft {
   const r = editing ? game.state.routes[editing] : null;
@@ -145,14 +146,14 @@ export function startDrafting(editing: string | null = null) {
 }
 
 /** Save the draft: create a new line or update the edited one. */
-export function commitDraft(): boolean {
+export async function commitDraft(): Promise<boolean> {
   const game = session.game;
   const ui = useUI.getState();
   const d = ui.draft;
   if (!game || !d) return false;
   const def = draftDef(d);
   if (d.editing) {
-    const res = game.updateRoute(d.editing, def);
+    const res = await act('updateRoute', d.editing, def);
     if (!res.ok) {
       ui.notify(res.error, 'bad');
       return false;
@@ -163,7 +164,7 @@ export function commitDraft(): boolean {
     ui.select({ kind: 'line', id });
     return true;
   }
-  const res = game.createRoute(def);
+  const res = await act('createRoute', def);
   if (!res.ok) {
     ui.notify(res.error, 'bad');
     return false;

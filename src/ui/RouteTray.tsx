@@ -137,7 +137,7 @@ export function RouteTray() {
           <button className="btn sm" onClick={() => useUI.getState().setTool('select')}>
             <X size={14} weight="bold" /> Cancel
           </button>
-          <button className="btn sm primary has-tip" disabled={!valid || !changed || !affordable} onClick={commitDraft}>
+          <button className="btn sm primary has-tip" disabled={!valid || !changed || !affordable} onClick={() => void commitDraft()}>
             <Check size={14} weight="bold" /> {editing ? 'Save changes' : `Register line · ${game.money(ECON.routeFee, { compact: true })}`}
             {!affordable && <Tip label="Not enough funds" side="below" />}
           </button>

@@ -48,6 +48,12 @@ pnpm test         # game-core tests (vitest)
 8. **Network Control (K).** Opens after 30 operating days at company level 3; analytics are recorded from day one. It shows where passengers travel, stop, line and fleet figures, comparisons, your own metrics and saved reports. **Automation Studio** builds workflows that watch the network and act through the same rules as you, in Observe, Suggest or Automatic mode. See [`docs/automation-api.md`](docs/automation-api.md).
 9. **Expand.** Only your own areas are shown in full. Squares you can license next sit under a light veil with their price; everything else is blank paper. Click a veiled square (or use overlay O) to license it once you have the reputation and money. The map has no fixed edge: as you expand, more of the city loads around you (downloaded from OpenFreeMap, so this needs a connection beyond the bundled part of İstanbul). Overdraw for too long and the company becomes insolvent, then bankrupt.
 
+10. **Play with friends.** Up to four people can run one company together.
+    - **Host:** open the game menu (Esc) → **Play with friends** → **Invite friends**, and send them the code.
+    - **Friends:** choose **Join a friend** on the start screen and type the code in.
+    - Everyone sees each other's cursors, and anyone can build, buy or change anything. Alt/Option-click the map to point at a spot.
+    - The game connects computer to computer (WebRTC) and is saved on the host's computer. See [`docs/multiplayer-plan.md`](docs/multiplayer-plan.md).
+
 The optional first-steps guide walks through steps 2–6, and you can hide it. The game autosaves; ⌘S / Ctrl+S saves now; Esc opens the game menu (save, load, settings, quit).
 
 ### Controls

@@ -8,6 +8,7 @@ import { MEASURES, METRIC_VARIABLES, metricValue, type CustomMetric, type SavedR
 import { Segmented } from '../primitives.tsx';
 import { SectionHead, SOURCE_TEXT, filtersFromQuery, fmt, useAgg, useNC } from './common.tsx';
 import { Seasons } from './Seasons.tsx';
+import { act } from '../../app/act.ts';
 
 const UNITS: [Unit, string][] = [['count', 'Count'], ['money', 'Money'], ['percent', 'Percent'], ['minutes', 'Minutes'], ['hours', 'Hours'], ['km', 'Kilometres'], ['score', 'Score'], ['ratio', 'Ratio']];
 const warn = (t: string) => useUI.getState().notify(t, 'warn');
@@ -39,8 +40,8 @@ function Metrics({ game }: { game: Game }) {
   const draft: CustomMetric = { id: id ?? 'draft', name, expr, unit, decimals: dec === '' ? undefined : Number(dec), better };
   const preview = chk?.ok && week ? metricValue(draft, week.total.values) : null;
   const clear = () => { setId(undefined); setName(''); setExpr(''); setDec(''); setBetter('none'); };
-  const save = () => {
-    const r = game.saveMetric({ id, name, expr, unit, decimals: dec === '' ? undefined : Math.max(0, Math.min(4, Number(dec))), better });
+  const save = async () => {
+    const r = await act('saveMetric', { id, name, expr, unit, decimals: dec === '' ? undefined : Math.max(0, Math.min(4, Number(dec))), better });
     if (!r.ok) return warn(r.error);
     useUI.getState().notify(id ? 'Metric updated' : 'Metric saved. Tick "Show in tables" to add it as a column.', 'good');
     clear();
@@ -92,7 +93,7 @@ function Metrics({ game }: { game: Game }) {
                   <input type="checkbox" checked={extra.includes(m.id)} onChange={() => toggle(m.id)} /> Show in tables
                 </label>
                 <button className="icon-btn" onClick={() => edit(m)} aria-label="Edit metric" title="Edit"><PencilSimple size={15} weight="bold" /></button>
-                <button className="icon-btn" onClick={() => { const r = game.deleteMetric(m.id); if (!r.ok) warn(r.error); else if (extra.includes(m.id)) toggle(m.id); }} aria-label="Delete metric" title="Delete"><Trash size={15} weight="bold" /></button>
+                <button className="icon-btn" onClick={async () => { const r = await act('deleteMetric', m.id); if (!r.ok) warn(r.error); else if (extra.includes(m.id)) toggle(m.id); }} aria-label="Delete metric" title="Delete"><Trash size={15} weight="bold" /></button>
               </div>
             ))}
           </div>
@@ -108,8 +109,8 @@ function Saved({ game }: { game: Game }) {
   const reports = game.state.control.reports;
   const [ren, setRen] = useState<string | null>(null);
   const [text, setText] = useState('');
-  const commit = (r: SavedReport) => {
-    const x = game.saveReport({ ...r, name: text });
+  const commit = async (r: SavedReport) => {
+    const x = await act('saveReport', { ...r, name: text });
     if (!x.ok) warn(x.error);
     setRen(null);
   };
@@ -158,7 +159,7 @@ function Saved({ game }: { game: Game }) {
                   <button className="btn sm" onClick={() => open(r)}>Open</button>
                   <button className="icon-btn" onClick={() => { setRen(r.id); setText(r.name); }} aria-label="Rename report" title="Rename"><PencilSimple size={15} weight="bold" /></button>
                 </>}
-              <button className="icon-btn" onClick={() => { const x = game.deleteReport(r.id); if (!x.ok) warn(x.error); }} aria-label="Delete report" title="Delete"><Trash size={15} weight="bold" /></button>
+              <button className="icon-btn" onClick={async () => { const x = await act('deleteReport', r.id); if (!x.ok) warn(x.error); }} aria-label="Delete report" title="Delete"><Trash size={15} weight="bold" /></button>
             </div>
           ))}
         </div>

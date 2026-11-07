@@ -18,6 +18,7 @@ import { NetworkControl } from './network/NetworkControl.tsx';
 import { ImproveService } from './ImproveService.tsx';
 import { companyLevel } from '../game/control.ts';
 import '../styles/panels.css';
+import { act } from '../app/act.ts';
 
 const notify = (text: string, tone: 'good' | 'bad' | 'warn' | 'info') => useUI.getState().notify(text, tone);
 function run<T>(r: Result<T>, ok?: string): r is { ok: true; value: T } {
@@ -25,6 +26,8 @@ function run<T>(r: Result<T>, ok?: string): r is { ok: true; value: T } {
   notify(r.error, 'bad');
   return false;
 }
+/** Send an action and report its result like `run`. */
+const runAct = <T,>(p: Promise<Result<T>>, ok?: string) => p.then((r) => run(r, ok));
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 export function Panels() {
@@ -238,7 +241,7 @@ function BuyTab({ game }: { game: Game }) {
                 <option value="">Choose a line…</option>
                 {routes.map((r) => <option key={r.id} value={r.id}>{r.number} · {r.name}</option>)}
               </select>
-              <button className="btn sm primary" disabled={!routeId} onClick={() => { if (run(game.assignVehicle(boughtV.id, routeId), 'Bus assigned')) setBought(null); }}>Assign</button>
+              <button className="btn sm primary" disabled={!routeId} onClick={() => void runAct(act('assignVehicle', boughtV.id, routeId), 'Bus assigned').then((ok) => ok && setBought(null))}>Assign</button>
               <button className="btn sm" onClick={() => setBought(null)}>Later</button>
             </div>
           )}
@@ -268,7 +271,7 @@ function BuyTab({ game }: { game: Game }) {
               <div className="pn-note">Energy {m.energyPerKm.toFixed(2)} per km{m.electric ? ' (electricity, cheaper per unit)' : ''} · servicing about {Math.round(m.serviceCost * 100)}% of price</div>
               {ok ? (
                 <button className="btn primary block" disabled={!depot || full || !afford}
-                  onClick={() => { const r = game.buyVehicle(m.id, depot.id); if (run(r)) { notify(`Bought ${m.name}`, 'good'); setBought(r.value); setRouteId(''); } }}>
+                  onClick={async () => { const r = await act('buyVehicle', m.id, depot.id); if (run(r)) { notify(`Bought ${m.name}`, 'good'); setBought(r.value); setRouteId(''); } }}>
                   {!depot ? 'Needs a depot' : full ? 'Depot full' : !afford ? 'Not enough funds' : `Buy · ${game.money(m.price)}`}
                 </button>
               ) : (
@@ -301,7 +304,7 @@ function DepotsTab({ game }: { game: Game }) {
                 <div className="s">{use}/{d.capacity} bays · level {d.level}</div>
                 <div className="pn-bar" style={{ marginTop: 6 }}><i style={{ width: pct(Math.min(1, use / d.capacity)) }} /></div>
               </div>
-              <button className="btn sm" onClick={(e) => { e.stopPropagation(); run(game.expandDepot(d.id), 'Depot expanded'); }}>
+              <button className="btn sm" onClick={(e) => { e.stopPropagation(); runAct(act('expandDepot', d.id), 'Depot expanded'); }}>
                 Expand<span className="faint"> {game.money(ECON.depotExpandCost, { compact: true })}</span>
               </button>
             </div>
@@ -348,7 +351,7 @@ function FinOverview({ game }: { game: Game }) {
   const yest = dayTotals(st, day - 1);
   const fare = st.company.fare;
   const low = f.balance < 20_000 || st.company.status === 'warning' || st.company.status === 'insolvent';
-  const setFare = (x: number) => run(game.setFare(Math.round(Math.min(ECON.fareMax, Math.max(ECON.fareMin, x)) * 100) / 100));
+  const setFare = (x: number) => runAct(act('setFare', Math.round(Math.min(ECON.fareMax, Math.max(ECON.fareMin, x)) * 100) / 100));
   // cost breakdown for yesterday + today
   const cats = new Map<LedgerCategory, number>();
   for (const d of [day - 1, day]) for (const [c, v] of Object.entries(f.daily[d] ?? {}) as [LedgerCategory, number][]) cats.set(c, (cats.get(c) ?? 0) + v);
@@ -493,12 +496,12 @@ function FinLoans({ game }: { game: Game }) {
       <div className="section">
         <div className="section-head"><span style={{ fontWeight: 800, fontSize: 14 }}>Borrow</span></div>
         <div className="pn-actions">
-          {[25_000, 100_000].map((a) => <button key={a} className="btn money sm" disabled={room < 1} onClick={() => run(game.takeLoan(Math.min(a, room)), `Borrowed ${game.money(Math.min(a, room))}`)}>+ {game.money(a, { compact: true })}</button>)}
+          {[25_000, 100_000].map((a) => <button key={a} className="btn money sm" disabled={room < 1} onClick={() => runAct(act('takeLoan', Math.min(a, room)), `Borrowed ${game.money(Math.min(a, room))}`)}>+ {game.money(a, { compact: true })}</button>)}
         </div>
         <div className="section-head" style={{ marginTop: 12 }}><span style={{ fontWeight: 800, fontSize: 14 }}>Repay</span></div>
         <div className="pn-actions">
-          {[25_000, 100_000].map((a) => <button key={a} className="btn sm" disabled={f.loan < 1} onClick={() => run(game.repayLoan(Math.min(a, f.loan)), `Repaid ${game.money(Math.min(a, f.loan))}`)}>− {game.money(a, { compact: true })}</button>)}
-          <button className="btn sm" disabled={f.loan < 1} onClick={() => run(game.repayLoan(f.loan), 'Loan repaid')}>All</button>
+          {[25_000, 100_000].map((a) => <button key={a} className="btn sm" disabled={f.loan < 1} onClick={() => runAct(act('repayLoan', Math.min(a, f.loan)), `Repaid ${game.money(Math.min(a, f.loan))}`)}>− {game.money(a, { compact: true })}</button>)}
+          <button className="btn sm" disabled={f.loan < 1} onClick={() => runAct(act('repayLoan', f.loan), 'Loan repaid')}>All</button>
         </div>
         <div className="pn-note" style={{ marginTop: 8 }}>Interest is a daily operating cost. Borrowing is cheaper than the overdraft, but it still has to be repaid.</div>
       </div>
@@ -524,7 +527,7 @@ function CompanyPanel({ game }: { game: Game }) {
     .filter((i): i is NonNullable<typeof i> => !!i && !i.owned && i.adjacent)
     .sort((a, b) => a.cost - b.cost);
   const days = st.stats.days.slice(-10).reverse();
-  const commit = () => { const n = name.trim(); if (n && n !== c.name) run(game.setCompany({ name: n }), 'Company renamed'); else setName(c.name); };
+  const commit = () => { const n = name.trim(); if (n && n !== c.name) runAct(act('setCompany', { name: n }), 'Company renamed'); else setName(c.name); };
   return (
     <>
       <Head title="Company" sub={`Founded day ${Math.floor(c.founded / DAY) + 1} · day ${Math.floor(game.t / DAY) + 1} now`} />
@@ -571,7 +574,7 @@ function CompanyPanel({ game }: { game: Game }) {
               {i.blockers.map((b) => <div key={b} className="pn-note amber">{b}</div>)}
               <div className="pn-actions" style={{ marginTop: 6 }}>
                 <button className="btn sm" onClick={() => { useUI.getState().select({ kind: 'zone', id: i.zone.id }); focusZone(i.zone.id); }}>Show</button>
-                <button className="btn sm primary" disabled={!i.canBuy} onClick={() => run(game.buyLicence(i.zone.id), `Licence bought: ${i.zone.name}`)}>Buy licence</button>
+                <button className="btn sm primary" disabled={!i.canBuy} onClick={() => runAct(act('buyLicence', i.zone.id), `Licence bought: ${i.zone.name}`)}>Buy licence</button>
               </div>
             </div>
           ))}

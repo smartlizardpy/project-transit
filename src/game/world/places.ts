@@ -5,6 +5,7 @@
 // See docs/city-activity-engine-plan.md, section 6.
 
 import { distanceM, type LngLat } from './graph.ts';
+import { cmp, hypot } from '../dmath.ts';
 
 export type PlaceCategory =
   | 'airport' | 'rail_station' | 'metro_station' | 'tram_stop' | 'ferry_pier' | 'bus_station' | 'cable_car'
@@ -141,10 +142,10 @@ export class PlaceIndex {
     const [x, y] = this.toXY(lngLat[0], lngLat[1]);
     const out: { place: CityPlace; d: number }[] = [];
     for (const i of this.grid.near(x, y, radius)) {
-      const d = Math.hypot(this.xy[i][0] - x, this.xy[i][1] - y);
+      const d = hypot(this.xy[i][0] - x, this.xy[i][1] - y);
       if (d <= radius && (!pick || pick(this.places[i]))) out.push({ place: this.places[i], d });
     }
-    return out.sort((a, b) => a.d - b.d || a.place.id.localeCompare(b.place.id));
+    return out.sort((a, b) => a.d - b.d || cmp(a.place.id, b.place.id));
   }
 
   /** Places beyond the map (airports), nearest first. */
@@ -195,7 +196,7 @@ export const SNAPSHOT_MAX = 300;
 export function placeSnapshot(places: CityPlace[]): PlaceSnapshotState {
   const ranked = places
     .slice()
-    .sort((a, b) => Number(b.category === 'airport') - Number(a.category === 'airport') || placeSignificance(b) - placeSignificance(a) || a.id.localeCompare(b.id))
+    .sort((a, b) => Number(b.category === 'airport') - Number(a.category === 'airport') || placeSignificance(b) - placeSignificance(a) || cmp(a.id, b.id))
     .slice(0, SNAPSHOT_MAX);
   return {
     digest: placesDigest(places),

@@ -4,6 +4,7 @@
 // Derived from the region alone (deterministic), so they are never saved.
 import { EDGE_BRIDGE, EDGE_TUNNEL, STOP_CLASSES, RoadClass, type LngLat } from './world/graph.ts';
 import type { Region } from './world/region.ts';
+import { hypot } from './dmath.ts';
 
 export interface StopSpot {
   lngLat: LngLat;
@@ -50,7 +51,7 @@ function buildSpots(region: Region): StopSpot[] {
       for (let dy = -R; dy <= R; dy++) {
         const list = hash.get(hkey(cx + dx, cy + dy));
         if (!list) continue;
-        for (let i = 0; i < list.length; i += 2) if (Math.hypot(list[i] - x, list[i + 1] - y) < r) return true;
+        for (let i = 0; i < list.length; i += 2) if (hypot(list[i] - x, list[i + 1] - y) < r) return true;
       }
     return false;
   };

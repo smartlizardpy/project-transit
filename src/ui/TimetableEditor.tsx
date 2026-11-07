@@ -10,6 +10,7 @@ import type { Band, Timetable } from '../game/types.ts';
 import { MAX, MIN, STEP, PRESETS, addBandAt, applyPreset, raiseHeadways, setBandTimes, splitBand } from './timetableLogic.ts';
 import { ServicePlans } from './ServicePlans.tsx';
 import '../styles/timetable.css';
+import { act } from '../app/act.ts';
 
 const SPAN = MAX - MIN;
 const pct = (m: number) => ((m - MIN) / SPAN) * 100;
@@ -105,11 +106,11 @@ export function TimetableEditor({ routeId, onClose }: { routeId: string; onClose
     if (h) setBands(raiseHeadways(bands, h));
   };
 
-  const save = () => {
-    const res = game.setTimetable(routeId, { ...draft, plans: undefined });
+  const save = async () => {
+    const res = await act('setTimetable', routeId, { ...draft, plans: undefined });
     if (!res.ok) { setError(res.error); return; }
     if (JSON.stringify(draft.plans ?? []) !== JSON.stringify(initial.current?.plans ?? [])) {
-      const pr = game.setServicePlans(routeId, draft.plans ?? []);
+      const pr = await act('setServicePlans', routeId, draft.plans ?? []);
       if (!pr.ok) { setError(pr.error); return; }
     }
     useUI.getState().notify(`Timetable for line ${route.number} updated`, 'good');

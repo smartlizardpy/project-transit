@@ -6,6 +6,7 @@ import { useUI, type NetworkTab } from '../state/store.ts';
 import { useSession } from '../app/session.ts';
 import { companyLevel } from '../game/control.ts';
 import '../styles/network.css';
+import { act } from '../app/act.ts';
 
 const TOUR: { tab: NetworkTab; title: string; body: string }[] = [
   { tab: 'overview', title: '1 of 3 · Filters and overview', body: 'Pick a period, the days of the week and a time of day. Every figure on every tab follows them, and changes compare with the period before. Top problems link to the line or stop on the map.' },
@@ -25,7 +26,7 @@ export function NetworkUnlock() {
     const i = c.tour;
     const step = TOUR[i];
     const go = (n: number) => {
-      game.setNetworkIntro({ tour: n });
+      void act('setNetworkIntro', { tour: n });
       if (n < TOUR.length) useUI.getState().setNetworkTab(TOUR[n].tab);
     };
     return (
@@ -33,7 +34,7 @@ export function NetworkUnlock() {
         <div className="head"><span className="label">{step.title}</span></div>
         <div className="pn-note">{step.body}</div>
         <div className="acts">
-          <button className="btn sm" onClick={() => game.setNetworkIntro({ tour: 99 })}>Skip tour</button>
+          <button className="btn sm" onClick={() => void act('setNetworkIntro', { tour: 99 })}>Skip tour</button>
           <button className="btn sm primary" onClick={() => go(i + 1 < TOUR.length ? i + 1 : 99)}>{i + 1 < TOUR.length ? 'Next' : 'Done'}</button>
         </div>
       </div>
@@ -43,9 +44,9 @@ export function NetworkUnlock() {
   if (!c.unlocked || c.introSeen) return null;
   let journeys = 0;
   for (const d of [...a.days, a.today]) for (const x of d.net.j) journeys += x;
-  const close = () => game.setNetworkIntro({ seen: true });
+  const close = () => void act('setNetworkIntro', { seen: true });
   const open = (tour: boolean) => {
-    game.setNetworkIntro({ seen: true, ...(tour ? { tour: 0 } : {}) });
+    void act('setNetworkIntro', { seen: true, ...(tour ? { tour: 0 } : {}) });
     const ui = useUI.getState();
     ui.setNetworkTab('overview');
     ui.openPanel('network');

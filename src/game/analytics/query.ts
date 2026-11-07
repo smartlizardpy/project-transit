@@ -20,6 +20,7 @@ import { MIN_FERRY_M, TRANSIT_SERVICE } from '../activity/transit.ts';
 import { BANDS, TYPE_COUNT, type DayLabel, type DayRecord, type DaySummary } from './types.ts';
 import { DAY_KINDS, EVENT_DAYS, WEATHER_GROUPS, dayKind, eventDay, makeDayLabel, weatherGroup, type DayKind, type EventDay, type WeatherGroup } from './labels.ts';
 import { TRAVELLERS } from '../activity/params.ts';
+import { cmp } from '../dmath.ts';
 
 export type GroupBy = 'network' | 'line' | 'stop' | 'vehicle' | 'zone' | 'day' | 'hour' | 'weekday' | 'weather' | 'daykind' | 'eventday' | 'type';
 /** Groupings with one row per kind of day: they mean what a weekday grouping means. */
@@ -563,7 +564,7 @@ export function aggregate(game: Game, q: AnalyticsQuery): QueryResult {
   if (g === 'day' || g === 'hour' || g === 'weekday') rows.sort((a, b) => +a.key - +b.key);
   else if (order) rows.sort((a, b) => (order.indexOf(a.key) + 1 || 99) - (order.indexOf(b.key) + 1 || 99));
   else if (g === 'type') rows.sort((a, b) => (b.values.boardings ?? 0) - (a.values.boardings ?? 0) || +a.key - +b.key);
-  else rows.sort((a, b) => (b.values.boardings ?? 0) - (a.values.boardings ?? 0) || a.label.localeCompare(b.label));
+  else rows.sort((a, b) => (b.values.boardings ?? 0) - (a.values.boardings ?? 0) || cmp(a.label, b.label));
   const tot = emptyAcc();
   for (const a of groups.values()) merge(tot, a);
   // the network total of per-line journeys double counts nothing (each journey starts on one line)
@@ -863,7 +864,7 @@ export function estimatedDemand(game: Game, opts: { level: DemandLevel; view?: '
     else if (am.access[i]?.length && am.access[j]?.length) f.noLink += sum;
     else f.noStop += sum;
   }
-  const flows = [...out.values()].sort((a, b) => b.trips - a.trips || (a.o + a.d).localeCompare(b.o + b.d));
+  const flows = [...out.values()].sort((a, b) => b.trips - a.trips || cmp(a.o + a.d, b.o + b.d));
   return { flows: opts.limit ? flows.slice(0, opts.limit) : flows, total };
 }
 
@@ -975,7 +976,7 @@ export function stationLinks(game: Game, placeId: string): { links: StationLink[
       const kmh = TRANSIT_SERVICE[l.mode]?.kmh ?? 20;
       links.push({ name: o.name, place: o.place, mode: l.mode, m: l.m, min: (l.m / 1000 / kmh) * 60 });
     }
-  links.sort((a, b) => a.mode.localeCompare(b.mode) || a.m - b.m || a.name.localeCompare(b.name));
+  links.sort((a, b) => cmp(a.mode, b.mode) || a.m - b.m || cmp(a.name, b.name));
   // two stations with the same name (a pier mapped twice): keep the nearer
   const seen = new Set<string>();
   for (let i = 0; i < links.length; i++) {

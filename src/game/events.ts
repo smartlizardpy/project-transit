@@ -16,6 +16,7 @@ import type { LngLat } from './world/graph.ts';
 import type { CalendarDay, DayType } from './calendar.ts';
 import type { Curve } from './activity/params.ts';
 import { hashString, mix, unit } from './hash.ts';
+import { exp } from './dmath.ts';
 
 export const EVENTS_VERSION = 1;
 /** Days ahead the schedule is generated (the longest announcement lead). */
@@ -124,7 +125,7 @@ const erf = (x: number) => {
   const s = Math.sign(x);
   x = Math.abs(x);
   const t = 1 / (1 + 0.3275911 * x);
-  return s * (1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x));
+  return s * (1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x));
 };
 export function curveCdf(c: Curve, x: number): number {
   let w = 0, v = 0;

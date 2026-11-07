@@ -2,15 +2,16 @@ import { useState } from 'react';
 import type { Game } from '../../game/engine.ts';
 import type { SavedReport } from '../../game/analytics/query.ts';
 import { useUI } from '../../state/store.ts';
+import { act } from '../../app/act.ts';
 
 /** "Save as report": the current view (query, comparison or journeys) with its columns. */
-export function SaveReport({ game, kind, query, compare, od, columns, suggest }: {
+export function SaveReport({ kind, query, compare, od, columns, suggest }: {
   game: Game; kind: SavedReport['kind']; query?: SavedReport['query']; compare?: SavedReport['compare']; od?: SavedReport['od']; columns: string[]; suggest: string;
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
-  const save = () => {
-    const r = game.saveReport({ name: name.trim() || suggest, kind, query, compare, od, columns });
+  const save = async () => {
+    const r = await act('saveReport', { name: name.trim() || suggest, kind, query, compare, od, columns });
     if (!r.ok) return useUI.getState().notify(r.error, 'warn');
     useUI.getState().notify('Report saved. Find it under Reports.', 'good');
     setOpen(false);

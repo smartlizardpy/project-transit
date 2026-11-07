@@ -22,6 +22,7 @@ import { EVENT, EVENT_TEMPLATES, arriveShare, returnShareFrom, type GameEvent } 
 import { dayTiming, PROFILE, type DayTiming } from './profiles.ts';
 import { buildTransitSkim, transitLeg, transitPathLeg, transitWaitFactor, type TransitSkim } from './transit.ts';
 import { NO_WEATHER, tripFactor, type WeatherEffect } from './conditions.ts';
+import { exp, hypot, pow } from '../dmath.ts';
 
 /** a zone's walk to one of your stops */
 export interface AccessGroup {
@@ -103,7 +104,7 @@ const erf = (x: number) => {
   const s = Math.sign(x);
   x = Math.abs(x);
   const t = 1 / (1 + 0.3275911 * x);
-  return s * (1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x));
+  return s * (1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x));
 };
 const cdf = (c: Curve, x: number) => {
   let w = 0, v = 0;
@@ -179,10 +180,10 @@ function nestedInto(out: Float64Array, walk: number, bike: number, car: number, 
   const m = Math.min(walk, bike, car, taxi, net, transit, feed);
   if (!Number.isFinite(m)) return;
   const la = lam * NESTS.active, lp = lam * NESTS.private, lt = lam * NESTS.transport;
-  const e = (x: number, l: number) => (Number.isFinite(x) ? Math.exp(-(x - m) / l) : 0);
+  const e = (x: number, l: number) => (Number.isFinite(x) ? exp(-(x - m) / l) : 0);
   const ew = e(walk, la), eb = e(bike, la), ec = e(car, lp), et = e(taxi, lp), en = e(net, lt), ex = e(transit, lt), ef = e(feed, lt);
   const sa = ew + eb, sp = ec + et, st = en + ex + ef;
-  const na = sa > 0 ? sa ** NESTS.active : 0, np = sp > 0 ? sp ** NESTS.private : 0, nt = st > 0 ? st ** NESTS.transport : 0;
+  const na = sa > 0 ? pow(sa, NESTS.active) : 0, np = sp > 0 ? pow(sp, NESTS.private) : 0, nt = st > 0 ? pow(st, NESTS.transport) : 0;
   const all = na + np + nt;
   if (!(all > 0)) return;
   const fa = sa > 0 ? (wt * na) / all / sa : 0, fp = sp > 0 ? (wt * np) / all / sp : 0, ft = st > 0 ? (wt * nt) / all / st : 0;
@@ -221,18 +222,18 @@ function othersInto(o: Others, lam: number, walk: number, bike: number, car: num
   const la = lam * NESTS.active, lp = lam * NESTS.private;
   o.m = m;
   o.lt = lam * NESTS.transport;
-  const e = (x: number, l: number) => (Number.isFinite(x) ? Math.exp(-(x - m) / l) : 0);
+  const e = (x: number, l: number) => (Number.isFinite(x) ? exp(-(x - m) / l) : 0);
   const ew = e(walk, la), eb = e(bike, la);
   const sa = ew + eb;
-  o.na = sa > 0 ? sa ** NESTS.active : 0;
+  o.na = sa > 0 ? pow(sa, NESTS.active) : 0;
   o.fw = sa > 0 ? ew / sa : 0;
   o.fb = sa > 0 ? eb / sa : 0;
   const ec = e(car, lp), et = e(taxi, lp);
   const sp = ec + et;
-  o.npCar = sp > 0 ? sp ** NESTS.private : 0;
+  o.npCar = sp > 0 ? pow(sp, NESTS.private) : 0;
   o.fcCar = sp > 0 ? ec / sp : 0;
   o.ftCar = sp > 0 ? et / sp : 0;
-  o.npNoCar = et > 0 ? et ** NESTS.private : 0;
+  o.npNoCar = et > 0 ? pow(et, NESTS.private) : 0;
   o.withCar = o.na + o.npCar;
   o.noCar = o.na + o.npNoCar;
   o.ex = e(transit, o.lt);
@@ -248,7 +249,7 @@ function sharesFrom(out: Float64Array, o: Others, en: number, ef: number, carSha
   out.fill(0);
   if (!o.ok) return;
   const st = en + o.ex + ef;
-  const nt = st > 0 ? st ** NESTS.transport : 0;
+  const nt = st > 0 ? pow(st, NESTS.transport) : 0;
   const part = (w: number, np: number, fc: number, ft: number) => {
     const all = o.na + np + nt;
     if (!(w > 0) || !(all > 0)) return;
@@ -266,7 +267,7 @@ function sharesFrom(out: Float64Array, o: Others, en: number, ef: number, carSha
 }
 const pt = { net: 0, feed: 0 };
 /** The weight in the transport nest of generalised minutes `x` (Infinity: 0), given `othersInto`. */
-const ptWeight = (o: Others, x: number) => (o.ok && Number.isFinite(x) ? Math.exp(-(x - o.m) / o.lt) : 0);
+const ptWeight = (o: Others, x: number) => (o.ok && Number.isFinite(x) ? exp(-(x - o.m) / o.lt) : 0);
 /**
  * Shares of your network alone and of your network then existing transit, over people with and
  * without a car (`carShare`), given the other modes (`othersInto`) and the change to the train's
@@ -276,10 +277,10 @@ const ptWeight = (o: Others, x: number) => (o.ok && Number.isFinite(x) ? Math.ex
 function ptShares(o: Others, net: number, ef: number, carShare: number) {
   pt.net = pt.feed = 0;
   if (!o.ok) return pt;
-  const en = Number.isFinite(net) ? Math.exp(-(net - o.m) / o.lt) : 0;
+  const en = Number.isFinite(net) ? exp(-(net - o.m) / o.lt) : 0;
   const st = en + o.ex + ef;
   if (!(st > 0) || !(en + ef > 0)) return pt;
-  const nt = st ** NESTS.transport;
+  const nt = pow(st, NESTS.transport);
   const nest = carShare * (nt / (o.withCar + nt)) + (1 - carShare) * (nt / (o.noCar + nt));
   pt.net = (nest * en) / st;
   pt.feed = (nest * ef) / st;
@@ -397,14 +398,14 @@ export class ActivityModel {
     this.feeds = [];
     (game.region.transit?.stations ?? []).forEach((st, i) => {
       for (const x of grid.near(st.x, st.y, FEED_M)) {
-        const d = Math.hypot(xy[x][0] - st.x, xy[x][1] - st.y);
+        const d = hypot(xy[x][0] - st.x, xy[x][1] - st.y);
         if (d <= FEED_M) this.feeds.push({ id: this.feeds.length, x, st: i, w: Math.max(1, (d * CHOICE.detour) / CHOICE.walkSpeed) });
       }
     });
     const nearest = (x: number, y: number): { s: number; d: number } | null => {
       let best = -1, bd = Infinity;
       for (const s of grid.near(x, y, R)) {
-        const d = Math.hypot(xy[s][0] - x, xy[s][1] - y);
+        const d = hypot(xy[s][0] - x, xy[s][1] - y);
         if (d <= R && (d < bd || (d === bd && s < best))) {
           bd = d;
           best = s;
@@ -475,7 +476,7 @@ export class ActivityModel {
       const out: { s: number; extra: number }[] = [];
       for (const t of grid.near(x, y, NEAR_STOP_M)) {
         if (t === s) continue;
-        const d = Math.hypot(xy[t][0] - x, xy[t][1] - y);
+        const d = hypot(xy[t][0] - x, xy[t][1] - y);
         if (d <= NEAR_STOP_M) out.push({ s: t, extra: 0.6 * walkMin(d) });
       }
       out.sort((a, b) => a.extra - b.extra || a.s - b.s);
@@ -824,7 +825,7 @@ export class ActivityModel {
         const th = total * o.w;
         if (!(th > 1e-4)) continue;
         const zi = zs.list[o.z];
-        const d = Math.max(zi.inner / 2, Math.hypot(zi.x - set.x, zi.y - set.y));
+        const d = Math.max(zi.inner / 2, hypot(zi.x - set.x, zi.y - set.y));
         const others = otherModes(d, ty, ctx.traffic, zv.parking + tpl.parking, wx);
         others.taxi += tpl.taxiWait;
         const carShare = o.home ? Math.min(1, zi.car * ty.car) : 0;
@@ -871,7 +872,7 @@ export class ActivityModel {
     if (zone < 0) {
       let bd = Infinity;
       zs.list.forEach((z, i) => {
-        const d = Math.hypot(z.x - x, z.y - y);
+        const d = hypot(z.x - x, z.y - y);
         if (z.kind !== 'beyond' && d < bd) (bd = d), (zone = i);
       });
     }
@@ -882,11 +883,11 @@ export class ActivityModel {
     const gate = new Set(['rail_station', 'metro_station', 'ferry_pier', 'bus_station']);
     const hw: number[] = [], gw: number[] = [];
     zs.list.forEach((z, i) => {
-      const d = Math.hypot(z.x - x, z.y - y);
-      hw[i] = z.kind !== 'place' && z.residents > 0 ? z.residents * Math.exp(-d / EVENT.decay) : 0;
+      const d = hypot(z.x - x, z.y - y);
+      hw[i] = z.kind !== 'place' && z.residents > 0 ? z.residents * exp(-d / EVENT.decay) : 0;
       let prod = 0;
       if (z.kind === 'place' && z.place && gate.has(game.geo.places.byId.get(z.place)?.category ?? '')) for (let kk = 0; kk < K; kk++) prod += zs.prod[i * K + kk];
-      gw[i] = prod > 0 ? prod * Math.exp(-d / EVENT.gatewayDecay) : 0;
+      gw[i] = prod > 0 ? prod * exp(-d / EVENT.gatewayDecay) : 0;
       sumH += hw[i];
       sumG += gw[i];
     });
@@ -900,11 +901,11 @@ export class ActivityModel {
     const best = new Map<number, number>();
     for (const [px, py] of pts)
       for (const s of this.stopGrid.near(px, py, R)) {
-        const d = Math.hypot(this.stopXY[s][0] - px, this.stopXY[s][1] - py);
+        const d = hypot(this.stopXY[s][0] - px, this.stopXY[s][1] - py);
         if (d <= R && d < (best.get(s) ?? Infinity)) best.set(s, d);
       }
     const near = [...best.entries()].sort((a, b) => a[1] - b[1] || a[0] - b[0]).slice(0, 3);
-    const ws = near.map(([, d]) => Math.exp(-((d * CHOICE.detour) / CHOICE.walkSpeed) / 3));
+    const ws = near.map(([, d]) => exp(-((d * CHOICE.detour) / CHOICE.walkSpeed) / 3));
     const wsum = ws.reduce((a, b) => a + b, 0) || 1;
     const set: EventSetup = { zone, x, y, origins, stops: near.map(([s, d], i) => ({ s, w: (d * CHOICE.detour) / CHOICE.walkSpeed, share: ws[i] / wsum })) };
     this.eventCache.set(ev.id, set);

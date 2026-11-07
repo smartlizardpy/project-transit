@@ -8,6 +8,7 @@ import { startDrafting } from './routeDraft.ts';
 import type { Game } from '../game/engine.ts';
 import { ECON } from '../game/content.ts';
 import { useNewCompanyFlow } from './NewCompany.tsx';
+import { act } from '../app/act.ts';
 
 interface Step {
   id: string;
@@ -58,16 +59,14 @@ export function Onboarding() {
   const game = useGameUpdates(1);
   if (!game || !game.state.onboarding.active) return null;
   const idx = STEPS.findIndex((s) => !s.done(game));
-  if (idx < 0) {
-    game.state.onboarding.active = false;
-    return null;
-  }
+  // every step done: the guide just stays out of the way (rendering never changes the game)
+  if (idx < 0) return null;
   const step = STEPS[idx];
   return (
     <div className="card onboard" role="complementary" aria-label="First steps">
       <div className="ob-head">
         <span className="label">First steps · {idx + 1} of {STEPS.length}</span>
-        <button className="close-btn" onClick={() => { game.state.onboarding.active = false; useUI.getState().notify('Guide hidden. You can play at your own pace.'); }} aria-label="Hide guide">
+        <button className="close-btn" onClick={() => void act('setOnboarding', { active: false }).then(() => useUI.getState().notify('Guide hidden. You can play at your own pace.'))} aria-label="Hide guide">
           <X size={13} weight="bold" />
         </button>
       </div>

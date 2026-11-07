@@ -21,6 +21,7 @@ import { PlaceInspector } from './PlaceInspector.tsx';
 import { RouteCheck, DiagnosticButton } from './RouteCheck.tsx';
 import { lineDiagnostics } from '../game/diagnostics.ts';
 import { LineCharacter } from './LineCharacter.tsx';
+import { act } from '../app/act.ts';
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const km = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
@@ -89,7 +90,8 @@ function Gone({ what }: { what: string }) {
   );
 }
 
-function run(res: { ok: true } | { ok: false; error: string }, good?: string) {
+async function run(pending: Promise<{ ok: true } | { ok: false; error: string }>, good?: string) {
+  const res = await pending;
   const ui = useUI.getState();
   if (!res.ok) ui.notify(res.error, 'bad');
   else if (good) ui.notify(good, 'good');
@@ -131,7 +133,7 @@ function ControlNotes({ game, v }: { game: Game; v: Vehicle }) {
             {hold.until ? `Held at ${s.stops[hold.stop ?? '']?.name ?? 'the stop'} until ${hhmm(hold.until)}, doors open.` : `Will wait ${hold.min} min at ${s.stops[hold.stop ?? '']?.name ?? 'its next stop'} after its normal stop.`}
             {askedBy(game, hold.src)}
           </span>
-          <button className="link" onClick={() => run(game.cancelControl(v.id, 'hold'), 'Hold called off')}>Call off</button>
+          <button className="link" onClick={() => run(act('cancelControl', v.id, 'hold'), 'Hold called off')}>Call off</button>
         </div>
       )}
       {turn && pat && (
@@ -141,7 +143,7 @@ function ControlNotes({ game, v }: { game: Game; v: Vehicle }) {
             Turns back at {s.stops[pat.stops[turn.at]]?.name ?? 'a stop'} instead of {s.stops[pat.stops[pat.stops.length - 1]]?.name ?? 'the end of the line'}; people going further change to the next bus.
             {askedBy(game, turn.src)}
           </span>
-          <button className="link" onClick={() => run(game.cancelControl(v.id, 'turn'), 'Turn back called off')}>Call off</button>
+          <button className="link" onClick={() => run(act('cancelControl', v.id, 'turn'), 'Turn back called off')}>Call off</button>
         </div>
       )}
     </>
@@ -190,9 +192,9 @@ function DepotMove({ game, v }: { game: Game; v: Vehicle }) {
             <button
               className="btn primary sm"
               disabled={!plan.ok}
-              onClick={() => {
+              onClick={async () => {
                 const name = game.state.depots[to!]?.name ?? 'the depot';
-                const r = game.moveToDepot(v.id, to!);
+                const r = await act('moveToDepot', v.id, to!);
                 if (r.ok) {
                   useUI.getState().notify(r.value === 'driving' ? `Bus ${v.fleetNo} is driving to ${name}` : `Bus ${v.fleetNo} is now based at ${name}`, 'good');
                   if (r.value === 'driving') focusVehicle(v.id);
@@ -287,7 +289,7 @@ function VehicleInspector({ id }: { id: string }) {
               disabled={!!v.sell}
               onChange={(e) => {
                 const to = e.target.value || null;
-                run(game.assignVehicle(v.id, to), to ? `Bus ${v.fleetNo} assigned to line ${game.state.routes[to].number}` : `Bus ${v.fleetNo} will return to ${depot?.name ?? 'its depot'}`);
+                run(act('assignVehicle', v.id, to), to ? `Bus ${v.fleetNo} assigned to line ${game.state.routes[to].number}` : `Bus ${v.fleetNo} will return to ${depot?.name ?? 'its depot'}`);
               }}
               aria-label="Assign to line"
             >
@@ -314,16 +316,16 @@ function VehicleInspector({ id }: { id: string }) {
         <button className={`btn ${isFollowing ? 'primary' : ''}`} style={{ flex: 1 }} disabled={v.status === 'parked' || v.status === 'maintenance'} onClick={() => { useUI.getState().follow(isFollowing ? null : v.id); if (!isFollowing) focusVehicle(v.id); }}>
           <Crosshair size={16} weight="bold" /> {isFollowing ? 'Following' : 'Follow'} <kbd className="key">F</kbd>
         </button>
-        <button className="btn has-tip" disabled={v.status === 'maintenance' || v.condition > 0.985} onClick={() => run(game.serviceVehicle(v.id), v.status === 'parked' ? 'Maintenance started' : 'Will go for maintenance after this trip')} aria-label="Service">
+        <button className="btn has-tip" disabled={v.status === 'maintenance' || v.condition > 0.985} onClick={() => run(act('serviceVehicle', v.id), v.status === 'parked' ? 'Maintenance started' : 'Will go for maintenance after this trip')} aria-label="Service">
           <Wrench size={16} weight="bold" />
           <Tip label="Send for maintenance" hint={`Restores condition. About ${game.money(quote.cost)}.`} side="below" />
         </button>
         {confirmSell ? (
-          <button className="btn danger" onClick={() => { const r = game.sellVehicle(v.id); if (r.ok) useUI.getState().notify(r.value === 'sold' ? `Bus ${v.fleetNo} sold for ${game.money(game.resaleValue(v))}` : `Bus ${v.fleetNo} will be sold at the depot`, 'good'); else useUI.getState().notify(r.error, 'bad'); setConfirmSell(false); if (r.ok && r.value === 'sold') useUI.getState().select(null); }}>
+          <button className="btn danger" onClick={async () => { const price = game.money(game.resaleValue(v)); const r = await act('sellVehicle', v.id); if (r.ok) useUI.getState().notify(r.value === 'sold' ? `Bus ${v.fleetNo} sold for ${price}` : `Bus ${v.fleetNo} will be sold at the depot`, 'good'); else useUI.getState().notify(r.error, 'bad'); setConfirmSell(false); if (r.ok && r.value === 'sold') useUI.getState().select(null); }}>
             Sell for {game.money(game.resaleValue(v), { compact: true })}?
           </button>
         ) : v.sell ? (
-          <button className="btn" onClick={() => run(game.cancelSale(v.id), 'Sale cancelled')}>Keep bus</button>
+          <button className="btn" onClick={() => run(act('cancelSale', v.id), 'Sale cancelled')}>Keep bus</button>
         ) : (
           <button className="btn has-tip" onClick={() => setConfirmSell(true)} aria-label="Sell">
             <CurrencyCircleDollar size={16} weight="bold" />
@@ -395,7 +397,7 @@ function LineInspector({ id }: { id: string }) {
               {detours.every((d) => d.state === 'end') ? 'Going back to its usual route: each stretch switches once no bus is on it.' : `On a temporary detour until ${hhmm(detours[0].until)}${detours[0].why ? ` (${detours[0].why})` : ''}: ${detours.length} stretch${detours.length === 1 ? '' : 'es'} on other roads, same stops.`}
               {askedBy(game, detours[0].src)}
             </span>
-            {!detours.every((d) => d.state === 'end') && <button className="link" onClick={() => run(game.endDetour(id), `Line ${r.number} goes back to its usual route`)}>End now</button>}
+            {!detours.every((d) => d.state === 'end') && <button className="link" onClick={() => run(act('endDetour', id), `Line ${r.number} goes back to its usual route`)}>End now</button>}
           </div>
         )}
         {short && !r.suspended && busDiag && <DiagnosticButton d={busDiag} onOpen={() => useUI.getState().openModal({ kind: 'timetable', route: id })} />}
@@ -446,7 +448,7 @@ function LineInspector({ id }: { id: string }) {
                         )}
                       </div>
                       {!bus && (
-                        <button className="icon-btn sm has-tip" onClick={() => run(game.cancelExtra(id, x.id), `Extra departure at ${hhmm(x.dep)} cancelled`)} aria-label="Cancel extra departure">
+                        <button className="icon-btn sm has-tip" onClick={() => run(act('cancelExtra', id, x.id), `Extra departure at ${hhmm(x.dep)} cancelled`)} aria-label="Cancel extra departure">
                           <X size={13} weight="bold" />
                           <Tip label="Cancel" hint="Automations do not plan it again for 24 hours" side="left" />
                         </button>
@@ -462,7 +464,7 @@ function LineInspector({ id }: { id: string }) {
           <div className="row" style={{ minHeight: 0, marginBottom: 6 }}>
             <span className="label">Buses ({assigned})</span>
             {spare.length > 0 && (
-              <button className="link" onClick={() => run(game.assignVehicle(spare[0].id, id), `Bus ${spare[0].fleetNo} assigned`)}>
+              <button className="link" onClick={() => run(act('assignVehicle', spare[0].id, id), `Bus ${spare[0].fleetNo} assigned`)}>
                 <Plus size={12} weight="bold" /> Assign spare bus
               </button>
             )}
@@ -477,7 +479,7 @@ function LineInspector({ id }: { id: string }) {
                     <span className={`status-dot ${st.cls}`} /> #{v.fleetNo} <span className="faint">{MODEL[v.model].name}</span>
                   </button>
                   <span className="faint num" style={{ fontSize: 12 }}>{st.text.replace('In service · ', '')}</span>
-                  <button className="icon-btn sm has-tip" onClick={() => run(game.assignVehicle(v.id, null), `Bus ${v.fleetNo} will return to the depot`)} aria-label="Unassign">
+                  <button className="icon-btn sm has-tip" onClick={() => run(act('assignVehicle', v.id, null), `Bus ${v.fleetNo} will return to the depot`)} aria-label="Unassign">
                     <Minus size={13} weight="bold" />
                     <Tip label="Take off this line" side="left" />
                   </button>
@@ -512,7 +514,7 @@ function LineInspector({ id }: { id: string }) {
           <PencilSimple size={16} weight="bold" />
           <Tip label="Edit route" hint="Change stops, order or streets" side="below" />
         </button>
-        <button className="btn has-tip" onClick={() => run(game.updateRoute(id, { suspended: !r.suspended }), r.suspended ? `Line ${r.number} resumed` : `Line ${r.number} suspended`)} aria-label={r.suspended ? 'Resume' : 'Suspend'}>
+        <button className="btn has-tip" onClick={() => run(act('updateRoute', id, { suspended: !r.suspended }), r.suspended ? `Line ${r.number} resumed` : `Line ${r.number} suspended`)} aria-label={r.suspended ? 'Resume' : 'Suspend'}>
           {r.suspended ? <Play size={16} weight="fill" /> : <Pause size={16} weight="fill" />}
           <Tip label={r.suspended ? 'Resume service' : 'Suspend service'} side="below" />
         </button>
@@ -521,7 +523,7 @@ function LineInspector({ id }: { id: string }) {
           <Tip label="Show whole line" side="below" />
         </button>
         {confirmDelete ? (
-          <button className="btn danger" onClick={() => { if (run(game.deleteRoute(id), `Line ${r.number} closed`)) useUI.getState().select(null); }}>Delete?</button>
+          <button className="btn danger" onClick={() => void run(act('deleteRoute', id), `Line ${r.number} closed`).then((ok) => ok && useUI.getState().select(null))}>Delete?</button>
         ) : (
           <button className="btn has-tip" onClick={() => setConfirmDelete(true)} aria-label="Delete line">
             <Trash size={16} weight="bold" />
@@ -571,7 +573,7 @@ function StopInspector({ id }: { id: string }) {
   const road = game.geo.streetNear(s.lngLat);
   const c = catchment(game, s.lngLat);
   const commit = () => {
-    if (name !== null && name.trim() && name !== s.name) run(game.renameStop(id, name), 'Stop renamed');
+    if (name !== null && name.trim() && name !== s.name) run(act('renameStop', id, name), 'Stop renamed');
     setName(null);
   };
   return (
@@ -623,7 +625,7 @@ function StopInspector({ id }: { id: string }) {
         <button className="btn primary" style={{ flex: 1 }} onClick={() => { startDrafting(null); useUI.getState().editDraft(() => ({ stops: [id] })); }}>
           <Path size={16} weight="bold" /> Start a line here
         </button>
-        <button className="btn has-tip" disabled={lines.length > 0} onClick={() => { if (run(game.removeStop(id), 'Stop removed')) useUI.getState().select(null); }} aria-label="Remove stop">
+        <button className="btn has-tip" disabled={lines.length > 0} onClick={() => void run(act('removeStop', id), 'Stop removed').then((ok) => ok && useUI.getState().select(null))} aria-label="Remove stop">
           <Trash size={16} weight="bold" />
           <Tip label={lines.length ? 'Remove it from its lines first' : 'Remove stop'} hint="Construction costs are not refunded" side="below" />
         </button>
@@ -689,7 +691,7 @@ function DepotInspector({ id }: { id: string }) {
         <button className="btn primary" style={{ flex: 1 }} onClick={() => useUI.getState().openPanel('fleet')}>
           <Plus size={16} weight="bold" /> Buy buses
         </button>
-        <button className="btn has-tip" disabled={d.level >= 4} onClick={() => run(game.expandDepot(id), `${d.name} expanded`)} aria-label="Expand">
+        <button className="btn has-tip" disabled={d.level >= 4} onClick={() => run(act('expandDepot', id), `${d.name} expanded`)} aria-label="Expand">
           <ArrowsOutSimple size={16} weight="bold" />
           <Tip label="Expand depot" hint={`+${ECON.depotExpandCapacity} spaces for ${game.money(ECON.depotExpandCost)}`} side="below" />
         </button>
@@ -751,7 +753,7 @@ function ZoneInspector({ id }: { id: string }) {
       </div>
       {!info.owned && (
         <div className="p-foot">
-          <button className="btn primary" style={{ flex: 1 }} disabled={!info.canBuy} onClick={() => run(game.buyLicence(id))}>
+          <button className="btn primary" style={{ flex: 1 }} disabled={!info.canBuy} onClick={() => run(act('buyLicence', id))}>
             <LockOpen size={16} weight="bold" /> Buy licence · {game.money(info.cost, { compact: true })}
           </button>
         </div>

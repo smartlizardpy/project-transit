@@ -4,12 +4,13 @@ import { useRef, useState } from 'react';
 import { X, Flask, Check, ArrowCounterClockwise, ArrowsClockwise, Bus, Clock, Path } from '@phosphor-icons/react';
 import type { Game } from '../game/engine.ts';
 import { useUI } from '../state/store.ts';
-import { applyPlan, planService, testPlan, TEST_HOURS, type Applied, type Plan, type PlanTest, type Step } from '../game/optimise.ts';
+import { planService, testPlan, TEST_HOURS, type Plan, type PlanTest, type Step } from '../game/optimise.ts';
 import type { LabMetrics } from '../game/automation/lab.ts';
 import { SAT_COMPONENTS } from '../game/progress.ts';
 import { LineBadge, LoadBar, Segmented, Tip } from './primitives.tsx';
 import { Switch } from './automation/common.tsx';
 import { focusLine } from './camera.ts';
+import { actionKey, send } from '../app/act.ts';
 
 const notify = (text: string, tone: 'good' | 'bad' | 'warn' | 'info') => useUI.getState().notify(text, tone);
 const tone = (v: number) => (v >= 0.72 ? 'var(--mint)' : v >= 0.55 ? 'var(--amber)' : 'var(--coral)');
@@ -46,7 +47,7 @@ export function ImproveService({ game }: { game: Game }) {
   const [busy, setBusy] = useState(false);
   const [pct, setPct] = useState(0);
   const [res, setRes] = useState<PlanTest | null>(null);
-  const [applied, setApplied] = useState<Applied | null>(null);
+  const [applied, setApplied] = useState<{ done: string[]; problems: string[]; key: string } | null>(null);
   const stop = useRef(false);
   const d = plan.diagnosis;
   const chosen = plan.steps.filter((s) => on.has(s.id));
@@ -75,15 +76,16 @@ export function ImproveService({ game }: { game: Game }) {
     } catch (e) { notify(e instanceof Error ? e.message : 'The test could not run.', 'bad'); }
     setBusy(false);
   };
-  const apply = () => {
-    const r = applyPlan(game, plan, on);
-    setApplied(r);
+  const apply = async () => {
+    const key = actionKey();
+    const r = (await send({ m: 'applyPlan', args: [plan, [...on], key] })) as { done: string[]; problems: string[] };
+    setApplied({ ...r, key });
     if (r.done.length) notify(`${r.done.length} change${r.done.length === 1 ? '' : 's'} made. Buses join their new lines once they have run the trips they have.`, 'good');
     for (const p of r.problems) notify(p, 'bad');
   };
-  const undo = () => {
+  const undo = async () => {
     if (!applied) return;
-    const errs = applied.undo();
+    const errs = (await send({ m: 'undoApplied', args: [applied.key] })) as string[];
     if (errs.length) for (const e of errs) notify(e, 'bad');
     else notify('Changes undone. Buses bought for the plan stay in your fleet.', 'info');
     replan();
@@ -167,7 +169,7 @@ export function ImproveService({ game }: { game: Game }) {
             {applied.done.length > 0 && <div className="pn-note"><Check size={13} weight="bold" style={{ color: 'var(--mint)', verticalAlign: -2 }} /> Done: {applied.done.join('; ')}. New timetables start now; for the next hour or so, buses getting into place may miss a few departures.</div>}
             {applied.problems.map((p, i) => <div className="pn-warn bad" key={i} style={{ marginTop: 6 }}>{p}</div>)}
             <div className="pn-actions" style={{ marginTop: 8 }}>
-              {applied.done.length > 0 && <button className="btn" onClick={undo}><ArrowCounterClockwise size={14} weight="bold" />Undo</button>}
+              {applied.done.length > 0 && <button className="btn" onClick={() => void undo()}><ArrowCounterClockwise size={14} weight="bold" />Undo</button>}
               <button className="btn" onClick={replan}><ArrowsClockwise size={14} weight="bold" />Plan again</button>
             </div>
           </div>

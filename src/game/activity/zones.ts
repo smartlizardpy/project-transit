@@ -16,6 +16,7 @@ import type { Season } from '../calendar.ts';
 import { tileAt, zoneId } from '../world/zoneTiles.ts';
 import { KINDS, KIND, KIND_COUNT, HOME_RATE, JOB_RATE, GUEST_RATE, HOTEL, OCCUPANCY, GATEWAY_SHARE, GATEWAY_MIX, OUTDOOR_SEASON, type Attraction } from './params.ts';
 import { PROFILE, profileOf } from './profiles.ts';
+import { cmp, hypot } from '../dmath.ts';
 
 export type ZoneKind = 'square' | 'area' | 'place' | 'beyond';
 
@@ -172,7 +173,7 @@ export function buildActivityZones(inp: ZoneInputs): ActivityZones {
   // ── places that get their own zone claim the cells inside their outline (or the cell at their entrance)
   const places = (region.cityPlaces ?? [])
     .filter((p) => (PLACE_ZONE[p.category] ?? 0) >= p.scale.tier)
-    .sort((a, b) => a.scale.tier - b.scale.tier || a.id.localeCompare(b.id));
+    .sort((a, b) => a.scale.tier - b.scale.tier || cmp(a.id, b.id));
   const claimedBy = new Int32Array(N).fill(-1);
   const shiftOf = new Float32Array(N);
   const uniCell = new Uint8Array(N);
@@ -339,7 +340,7 @@ export function buildActivityZones(inp: ZoneInputs): ActivityZones {
     if (zone.kind === 'square' || zone.kind === 'area') {
       const km2 = zone.kind === 'square' ? 0.36 : Math.max(0.3, areas.get(zone.area)?.landKm2 ?? areas.get(zone.area)?.areaKm2 ?? 3.4);
       const dens = zone.residents / km2, jobsDens = zone.jobs / km2;
-      const distKm = Math.hypot(zone.x - cx0, zone.y - cy0) / 1000;
+      const distKm = hypot(zone.x - cx0, zone.y - cy0) / 1000;
       zone.car = Math.max(0.15, Math.min(0.75, 0.45 + 0.025 * distKm - 6e-6 * dens));
       zone.parking = 1 + 7 * Math.min(1, jobsDens / 40000);
     }

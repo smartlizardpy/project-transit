@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Play, Plus, FolderOpen, GearSix, Power, X } from '@phosphor-icons/react';
+import { Play, Plus, FolderOpen, GearSix, Power, X, UsersThree } from '@phosphor-icons/react';
 import '../styles/menu.css';
 import { useSession, session } from '../app/session.ts';
 import { exitApp, isDesktop } from '../app/persistence.ts';
 import { LoadDialog, MenuBtn, SettingsDialog, relTime } from './GameMenu.tsx';
 import { useNewCompanyFlow } from './NewCompany.tsx';
+import { JoinDialog } from './Coop.tsx';
 
 export function StartMenu() {
   const phase = useSession((s) => s.phase);
   const saves = useSession((s) => s.saves);
   const error = useSession((s) => s.error);
   const flowOpen = useNewCompanyFlow((s) => s.open);
-  const [dlg, setDlg] = useState<'load' | 'settings' | null>(null);
+  const [dlg, setDlg] = useState<'load' | 'settings' | 'join' | null>(null);
   useEffect(() => {
     void session.refreshSaves();
   }, []);
@@ -40,6 +41,7 @@ export function StartMenu() {
             />
           )}
           <MenuBtn icon={<Plus />} label="New company" autoFocus={!latest} onClick={() => useNewCompanyFlow.setState({ open: true })} />
+          <MenuBtn icon={<UsersThree />} label="Join a friend" onClick={() => setDlg('join')} />
           <MenuBtn icon={<FolderOpen />} label="Load game" meta={saves.length ? `${saves.length} saved` : undefined} onClick={() => setDlg('load')} />
           <MenuBtn icon={<GearSix />} label="Settings" onClick={() => setDlg('settings')} />
           {isDesktop() && <MenuBtn icon={<Power />} label="Exit" onClick={() => void exitApp()} />}
@@ -48,6 +50,7 @@ export function StartMenu() {
       </div>
       {dlg === 'load' && <LoadDialog onClose={() => setDlg(null)} />}
       {dlg === 'settings' && <SettingsDialog onClose={() => setDlg(null)} />}
+      {dlg === 'join' && <JoinDialog onClose={() => setDlg(null)} />}
     </div>
   );
 }

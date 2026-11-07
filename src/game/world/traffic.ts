@@ -7,6 +7,7 @@ import { EDGE_BRIDGE, EDGE_TUNNEL, type RoadGraph } from './graph.ts';
 import type { DemandGrid } from './region.ts';
 import { DAY } from '../content.ts';
 import { weekdayOf } from '../time.ts';
+import { exp, pow, sq } from '../dmath.ts';
 
 export interface TrafficProvider {
   /** shown in the UI legend */
@@ -23,7 +24,7 @@ export interface TrafficProvider {
   profile(hour: number, weekend: boolean): number;
 }
 
-const gauss = (x: number, mu: number, sigma: number) => Math.exp(-((x - mu) ** 2) / (2 * sigma * sigma));
+const gauss = (x: number, mu: number, sigma: number) => exp(-(sq(x - mu)) / (2 * sigma * sigma));
 
 export function weekdayProfile(h: number): number {
   const v = 0.1 + 0.62 * gauss(h, 8.2, 1.1) + 0.74 * gauss(h, 18.0, 1.45) + 0.3 * gauss(h, 13.2, 2.6) + 0.12 * gauss(h, 21, 1.5) - (h < 5.5 || h > 23.5 ? 0.06 : 0);
@@ -117,7 +118,7 @@ export class SimulatedTraffic implements TrafficProvider {
   }
 
   speedFactor(c: number): number {
-    return 1 - 0.74 * Math.pow(Math.max(0, Math.min(1, c)), 1.25);
+    return 1 - 0.74 * pow(Math.max(0, Math.min(1, c)), 1.25);
   }
 
   private compute(de: number, t: number, noise: boolean): number {

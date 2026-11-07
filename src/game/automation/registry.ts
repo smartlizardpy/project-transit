@@ -21,6 +21,7 @@ import { turnPlan } from '../operations.ts';
 import type { LngLat } from '../world/graph.ts';
 import { PEAK_SOURCES, busesNotNeeded, busesToBorrow, currentOrNextPeak, linePeaks, needAt, needOver, needSteps, nowMinute, overlapMinutes, peaksText, periodLabel, ridersByHour, type Peak, type PeakSource } from './peaks.ts';
 import { DAY_FILTER, EVENT_FILTER, EVENT_FILTER_SHORT, FORECAST_FILTER, PLACE_FILTER, PLACE_SERVED_M, WEATHER_FILTER, calendarRec, demandForecast, eventRec, eventsAhead, linesNearEvent, placeRec, placesOf, weatherRecs } from './city.ts';
+import { cmp, hypot } from '../dmath.ts';
 
 /** Marker for "this branch is not active". Never stored in the save. */
 export const OFF: { readonly __off: true } = Object.freeze({ __off: true as const });
@@ -347,7 +348,7 @@ function pairKm(ctx: NodeCtx, pa: LngLat | null, la: string | null, pb: LngLat |
   if (lb && pa) { const n = nearestStopOfLine(ctx.game, lb, pa); return n ? km(n.m) : null; }
   if (!pa || !pb) return null;
   const [ax, ay] = ctx.game.geo.xy(pa), [bx, by] = ctx.game.geo.xy(pb);
-  return km(Math.hypot(ax - bx, ay - by));
+  return km(hypot(ax - bx, ay - by));
 }
 function pairRec(a: Value, b: Value, score: number): Rec {
   const pickId = (kind: string) => {
@@ -1077,7 +1078,7 @@ export const NODES: NodeDef[] = [
         if (typeof x === 'number' && typeof y === 'number') return (x - y) * dir;
         if (x === null || x === undefined) return 1;
         if (y === null || y === undefined) return -1;
-        return String(x).localeCompare(String(y)) * dir;
+        return cmp(String(x), String(y)) * dir;
       });
       return { out: { list }, note: list.length ? `First: ${fmt(list[0])} (${f} ${fmt(val(list[0]))}).` : 'Empty list.' };
     },

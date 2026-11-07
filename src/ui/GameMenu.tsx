@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { X, Play, FloppyDisk, FolderOpen, GearSix, SignOut, Power, Trash, ArrowLeft } from '@phosphor-icons/react';
+import { X, Play, FloppyDisk, FolderOpen, GearSix, SignOut, Power, Trash, ArrowLeft, UsersThree } from '@phosphor-icons/react';
 import '../styles/menu.css';
 import { useSession, session, loadSettings, saveSettings, type AppSettings } from '../app/session.ts';
 import { exitApp, isDesktop, isFullscreen, setFullscreen, type SaveMeta } from '../app/persistence.ts';
@@ -10,6 +10,9 @@ import { Segmented } from './primitives.tsx';
 import { APP_VERSION, checkForUpdates, installAndRestart, useUpdates } from '../app/updates.ts';
 import { claudeCodeCommand, copyText, jsonConfig, mcpSetup, type McpSetup } from '../app/agents.ts';
 import { setAgentLive, useAgentLive } from '../app/agentBridge.ts';
+import { act } from '../app/act.ts';
+import { CoopPanel } from './Coop.tsx';
+import { useCoop } from '../net/coop.ts';
 
 export function relTime(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -153,7 +156,7 @@ export function SettingsDialog({ onClose }: { onClose?: () => void }) {
                 role="switch"
                 aria-checked={gs.autoService}
                 className={'mn-switch' + (gs.autoService ? ' on' : '')}
-                onClick={() => { game.setSettings({ autoService: !gs.autoService }); force((x) => x + 1); }}
+                onClick={() => void act('setSettings', { autoService: !gs.autoService }).then(() => force((x) => x + 1))}
               ><i /></button>
             </div>
             <div className={'mn-set-row' + (gs.autoService ? '' : ' off')}>
@@ -161,7 +164,7 @@ export function SettingsDialog({ onClose }: { onClose?: () => void }) {
               <input
                 type="range" min={0.5} max={0.9} step={0.05} value={gs.serviceBelow} disabled={!gs.autoService}
                 aria-label="Service threshold"
-                onChange={(e) => { game.setSettings({ serviceBelow: Number(e.target.value) }); force((x) => x + 1); }}
+                onChange={(e) => void act('setSettings', { serviceBelow: Number(e.target.value) }).then(() => force((x) => x + 1))}
               />
             </div>
           </>
@@ -250,7 +253,9 @@ export function GameMenu() {
   const modal = useUI((s) => s.modal);
   const openModal = useUI((s) => s.openModal);
   const saving = useSession((s) => s.saving);
-  const [view, setView] = useState<'main' | 'load' | 'quit'>('main');
+  const [view, setView] = useState<'main' | 'load' | 'quit' | 'coop'>('main');
+  const coopRole = useCoop((s) => s.role);
+  const coopPlayers = useCoop((s) => s.players.length);
   const [saved, setSaved] = useState(false);
   const isMenu = modal?.kind === 'menu';
   useEffect(() => {
@@ -270,15 +275,22 @@ export function GameMenu() {
       <div className="card mn-dialog" role="dialog" aria-modal="true" aria-label="Game menu">
         {view === 'main' && (
           <>
-            <div className="mn-dialog-head"><h2>Paused</h2><button className="close-btn" onClick={close} aria-label="Close"><X size={14} weight="bold" /></button></div>
+            <div className="mn-dialog-head"><h2>{coopRole ? 'Menu' : 'Paused'}</h2><button className="close-btn" onClick={close} aria-label="Close"><X size={14} weight="bold" /></button></div>
             <div className="mn-list">
               <MenuBtn icon={<Play weight="fill" />} label="Resume" onClick={close} primary autoFocus />
-              <MenuBtn icon={<FloppyDisk />} label={saving ? 'Saving…' : saved ? 'Saved' : 'Save game'} disabled={saving} onClick={save} />
+              <MenuBtn icon={<UsersThree />} label="Play with friends" meta={coopRole ? `${coopPlayers} playing` : undefined} onClick={() => setView('coop')} />
+              <MenuBtn icon={<FloppyDisk />} label={saving ? 'Saving…' : saved ? 'Saved' : coopRole === 'guest' ? 'Save a copy' : 'Save game'} disabled={saving} onClick={save} />
               <MenuBtn icon={<FolderOpen />} label="Load game" onClick={() => setView('load')} />
               <MenuBtn icon={<GearSix />} label="Settings" onClick={() => openModal({ kind: 'settings' })} />
               <MenuBtn icon={<SignOut />} label="Quit to main menu" onClick={() => setView('quit')} />
               {isDesktop() && <MenuBtn icon={<Power />} label="Exit game" onClick={() => void exitApp()} />}
             </div>
+          </>
+        )}
+        {view === 'coop' && (
+          <>
+            <div className="mn-dialog-head"><button className="icon-btn" onClick={() => setView('main')} aria-label="Back"><ArrowLeft size={16} /></button><h2>Play with friends</h2></div>
+            <CoopPanel />
           </>
         )}
         {view === 'load' && (

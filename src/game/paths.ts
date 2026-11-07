@@ -1,6 +1,7 @@
 // Path geometry and vehicle kinematics shared by buses and run-time estimates.
 
 import { freeSpeed, head, type RoadGraph } from './world/graph.ts';
+import { acos, hypot } from './dmath.ts';
 
 export interface Path {
   nodes: Int32Array;
@@ -31,16 +32,16 @@ export function buildPath(g: RoadGraph, nodes: number[], dedges: number[], contr
   for (let i = 0; i < n; i++) {
     p.x[i] = g.x[nodes[i]];
     p.y[i] = g.y[nodes[i]];
-    if (i > 0) p.cum[i] = p.cum[i - 1] + Math.hypot(p.x[i] - p.x[i - 1], p.y[i] - p.y[i - 1]);
+    if (i > 0) p.cum[i] = p.cum[i - 1] + hypot(p.x[i] - p.x[i - 1], p.y[i] - p.y[i - 1]);
   }
   p.length = p.cum[n - 1] ?? 0;
   // curvature over a ±14 m window so gentle multi-vertex bends also slow the bus
   for (let i = 1; i < n - 1; i++) {
     const a = pointAt(p, p.cum[i] - 14), b = pointAt(p, p.cum[i]), c = pointAt(p, p.cum[i] + 14);
     const ux = b.x - a.x, uy = b.y - a.y, vx = c.x - b.x, vy = c.y - b.y;
-    const lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy);
+    const lu = hypot(ux, uy), lv = hypot(vx, vy);
     if (lu < 1 || lv < 1) continue;
-    const ang = Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (lu * lv))));
+    const ang = acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (lu * lv))));
     let lim = 99;
     if (ang > 2.4) lim = 2.2; // hairpin / U-turn
     else if (ang > 1.25) lim = 4; // right-angle turn

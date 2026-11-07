@@ -96,6 +96,11 @@ export function updateWorkflow(game: Game, id: string, patch: WorkflowPatch): Re
   // connections to removed nodes disappear with them
   edges = edges.filter((e) => nodeIds.has(e.from) && nodeIds.has(e.to));
   if (patch.nodes) wf.nodes = patch.nodes.map((n) => ({ id: n.id, type: n.type, x: Math.round(n.x), y: Math.round(n.y), config: cleanConfig(n.config), label: n.label?.slice(0, 40) || undefined, disabled: n.disabled || undefined, group: n.group || undefined }));
+  // ids made for a draft (Game.draftNodeId) are never handed out again
+  if (patch.nodes) for (const n of patch.nodes) {
+    const k = /^n(\d+)$/.exec(n.id);
+    if (k) a.counters.node = Math.max(a.counters.node, Number(k[1]));
+  }
   if (patch.nodes || patch.edges) wf.edges = edges.map((e) => ({ id: e.id, from: e.from, out: e.out, to: e.to, in: e.in }));
   if (patch.groups) wf.groups = patch.groups.slice(0, 30).map((g) => ({ ...g, label: g.label.slice(0, 40) }));
   if (patch.name !== undefined) wf.name = patch.name.trim().slice(0, 60) || wf.name;

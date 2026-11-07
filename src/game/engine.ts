@@ -40,6 +40,7 @@ import { detourClock, endDetours } from './operations.ts';
 import * as auto from './automation/manage.ts';
 import type { RunRecord, Workflow } from './automation/types.ts';
 import type { Validation } from './automation/validate.ts';
+import { exp, hypot, sq } from './dmath.ts';
 
 export interface ExtraPlan {
   route: Id;
@@ -94,7 +95,7 @@ export interface NewGameOptions {
 }
 
 export function newGameState(o: NewGameOptions): GameState {
-  const seed = (o.seed ?? Math.floor(Math.random() * 2 ** 31)) >>> 0;
+  const seed = (o.seed ?? Math.floor(Math.random() * 2147483648)) >>> 0;
   const startWeekday = o.startWeekday ?? 0;
   const state: GameState = {
     version: SAVE_VERSION,
@@ -215,6 +216,20 @@ export class Game {
     if (this.recentStops.length > 200) this.recentStops.splice(0, this.recentStops.length - 200);
   }
 
+  /**
+   * The demand model for this hour, rebuilt first if a change made it stale. Its inputs are saved
+   * state and the hour, so a game loaded mid-hour (a co-op guest) reads the same numbers as the
+   * game it was copied from, even between minutes.
+   */
+  freshDemand(): DemandModel {
+    const slot = Math.floor(this.t / HOUR);
+    if (this.demand.dirty || this.demand.slot !== slot) {
+      this.refreshQuality();
+      this.demand.refresh(this, slot * HOUR);
+    }
+    return this.demand;
+  }
+
   private changed() {
     this.rev++;
     this.vlist = null;
@@ -238,8 +253,11 @@ export class Game {
     this.emit('speed', this.speed);
   }
 
-  /** Advance by real seconds at the current speed; returns ticks run. */
-  advance(realDt: number): number {
+  /**
+   * Advance by real seconds at the current speed; returns ticks run. `limit`: never run past this
+   * game second (co-op: a guest waits for the host's clock).
+   */
+  advance(realDt: number, limit = Infinity): number {
     const rate = SPEEDS[this.speed];
     if (!rate || this.halted) return 0;
     this.state.meta.playSeconds += realDt;
@@ -249,13 +267,21 @@ export class Game {
       n = 4000;
       this.acc = n * DT;
     }
+    const room = Math.max(0, Math.floor((limit - this.state.clock.t) / DT));
+    const held = n > room;
+    if (held) n = room;
     for (let i = 0; i < n; i++) {
       if (i === n - 1) this.snapshotPoses();
       this.tick();
     }
     this.acc -= n * DT;
+    // waiting at the limit: do not bank time (the guest would race ahead later)
+    if (held) this.acc = Math.min(this.acc, DT * 0.999);
     return n;
   }
+
+  /** Called before every tick with the current game second (co-op applies actions due then). */
+  beforeTick: ((t: number) => void) | null = null;
 
   /** Interpolation factor between the last two ticks, for rendering. */
   get alpha() {
@@ -269,6 +295,7 @@ export class Game {
 
   tick() {
     const s = this.state;
+    this.beforeTick?.(s.clock.t);
     s.clock.t += DT;
     this.ticks++;
     for (const v of this.vehicleList()) tickVehicle(this, v, DT);
@@ -284,12 +311,7 @@ export class Game {
     detourClock(this);
     for (const r of Object.values(this.state.routes)) this.ensureTrips(r.id);
     dispatch(this);
-    // demand inputs depend only on saved state and the hour slot, so a loaded game rebuilds the same rates
-    const slot = Math.floor(t / HOUR);
-    if (this.demand.dirty || this.demand.slot !== slot) {
-      this.refreshQuality();
-      this.demand.refresh(this, slot * HOUR);
-    }
+    this.freshDemand();
     generatePassengers(this);
     abandonAndReplan(this);
     minuteVehicles(this);
@@ -562,7 +584,7 @@ export class Game {
     for (const ev of this.eventList()) {
       if (!CROWD_KINDS.has(ev.kind) || ev.cancelled || t < ev.start - 5 * HOUR || t > actualEnd(ev) + 3 * HOUR) continue;
       const [vx, vy] = this.geo.xy(ev.at);
-      const d = Math.hypot(vx - x, vy - y);
+      const d = hypot(vx - x, vy - y);
       if (d < bd) (bd = d), (best = ev);
     }
     return best;
@@ -610,7 +632,7 @@ export class Game {
     const out: Id[] = [];
     for (const ev of evs) {
       const [vx, vy] = this.geo.xy(ev.at);
-      if (stops.some(([x, y]) => Math.hypot(x - vx, y - vy) <= 1000) && !out.includes(ev.place)) out.push(ev.place);
+      if (stops.some(([x, y]) => hypot(x - vx, y - vy) <= 1000) && !out.includes(ev.place)) out.push(ev.place);
     }
     return out;
   }
@@ -624,7 +646,7 @@ export class Game {
       const end = actualEnd(ev);
       if (t < ev.start - 3 * HOUR || t > end + 1.5 * HOUR) continue;
       // peaks half an hour before the start and a quarter of an hour after the end
-      const bell = (x: number, mu: number, sd: number) => Math.exp(-0.5 * ((x - mu) / sd) ** 2);
+      const bell = (x: number, mu: number, sd: number) => exp(-0.5 * sq((x - mu) / sd));
       const shape = tpl.stay
         ? 0.6 * Math.min(1, Math.max(0, (t - ev.start + HOUR) / (2 * HOUR))) * (t < end ? 1 : bell(t, end, 0.4 * HOUR))
         : Math.max(bell(t, ev.start - 0.5 * HOUR, 0.8 * HOUR), bell(t, end + 0.25 * HOUR, 0.45 * HOUR));
@@ -646,7 +668,7 @@ export class Game {
     const e: number[] = [], w: number[] = [];
     for (let i = 0; i < g.m; i++) {
       const a = g.ea[i], b = g.eb[i];
-      const d = Math.hypot((g.x[a] + g.x[b]) / 2 - vx, (g.y[a] + g.y[b]) / 2 - vy);
+      const d = hypot((g.x[a] + g.x[b]) / 2 - vx, (g.y[a] + g.y[b]) / 2 - vy);
       if (d < R) {
         e.push(i);
         w.push(1 - d / R);
@@ -789,7 +811,7 @@ export class Game {
     const prev = this.prevPose.get(v.id);
     if (!prev || prev.key !== this.poseKey(v) || this.speed === 0) return cur;
     const a = this.alpha;
-    if (Math.hypot(cur.x - prev.x, cur.y - prev.y) > 60) return cur;
+    if (hypot(cur.x - prev.x, cur.y - prev.y) > 60) return cur;
     let dh = cur.heading - prev.heading;
     while (dh > Math.PI) dh -= 2 * Math.PI;
     while (dh < -Math.PI) dh += 2 * Math.PI;
@@ -1689,6 +1711,12 @@ export class Game {
     this.changed();
   }
 
+  /** Hide or show the first-steps guide. */
+  setOnboarding(patch: { active: boolean }) {
+    this.state.onboarding.active = patch.active;
+    this.changed();
+  }
+
   // ───────────────────────────────────────── Automation Studio
 
   workflowList(): Workflow[] {
@@ -1740,6 +1768,19 @@ export class Game {
   /** A fresh node id for the editor (ids are never reused). */
   newNodeId(): string {
     return auto.newNodeId(this);
+  }
+
+  /**
+   * A node id for an unsaved draft that changes nothing in the game: the next counter value not in
+   * `taken`. Saving the workflow moves the counter past it (see auto.updateWorkflow), so in co-op
+   * the editor can make ids without touching the shared state.
+   */
+  draftNodeId(taken: Iterable<string>): string {
+    const used = new Set(taken);
+    for (const wf of Object.values(this.state.automation.workflows)) for (const n of wf.nodes) used.add(n.id);
+    let k = this.state.automation.counters.node;
+    while (used.has(`n${++k}`));
+    return `n${k}`;
   }
 
   /** Run now from the editor. `test`: nothing changes in the game; actions are described only. */

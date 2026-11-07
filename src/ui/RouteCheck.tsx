@@ -15,8 +15,9 @@ import type { Game } from '../game/engine.ts';
 import type { Pattern } from '../game/network.ts';
 import type { Id } from '../game/types.ts';
 import { distanceM, nearestNode, type LngLat } from '../game/world/graph.ts';
-import { CAUSE_LABEL, applyFix, fmtM, legGeometry, lineStats, routeShape, routeTarget, suggestFixes, tradeoffs, type Diagnostic, type FixKind, type FixPlan, type LineShape, type LineStats, type ShapeTarget, type StopPlacement } from '../game/diagnostics.ts';
+import { CAUSE_LABEL, fmtM, legGeometry, lineStats, routeShape, suggestFixes, tradeoffs, type Diagnostic, type FixKind, type FixPlan, type LineShape, type LineStats, type ShapeTarget, type StopPlacement } from '../game/diagnostics.ts';
 import { checkStop } from '../game/network.ts';
+import { actionKey, send } from '../app/act.ts';
 
 // ───────────────────────────────────────────── session state (client only)
 
@@ -24,8 +25,8 @@ interface Commit {
   title: string;
   before: LineStats;
   after: LineStats;
-  undo: () => string | null;
-  redo: () => string | null;
+  undo: () => Promise<string | null>;
+  redo: () => Promise<string | null>;
 }
 
 type Mode = 'idle' | 'move' | 'via';
@@ -84,10 +85,13 @@ function shapeOfDraft(): LineShape | null {
 
 const defOf = (s: LineShape) => ({ kind: s.kind, stops: s.stops, returnStops: s.kind === 'linear' && s.returnStops && s.returnStops.length >= 2 ? s.returnStops : null, via: s.via });
 
-/** Commit a plan (nothing changes before the player accepts). Draft fixes go through the draft's own undo. */
-function commitPlan(game: Game, target: RouteCheckTarget, base: LineShape, plan: FixPlan, stats: { before: LineStats; after: LineStats }): Commit | string {
-  const dest: ShapeTarget = target.route !== null
-    ? routeTarget(game, target.route, base)
+/**
+ * Commit a plan (nothing changes before the player accepts). Draft fixes go through the draft's own
+ * undo. The fix is an action (every computer in co-op applies it); the draft is only this computer's.
+ */
+async function commitPlan(target: RouteCheckTarget, base: LineShape, plan: FixPlan, stats: { before: LineStats; after: LineStats }): Promise<Commit | string> {
+  const draft: ShapeTarget | undefined = target.route !== null
+    ? undefined
     : {
         apply: (s) => {
           useUI.getState().editDraft(() => ({ kind: s.kind, stops: s.stops, returnStops: s.kind === 'linear' ? s.returnStops : null, via: s.via }));
@@ -96,9 +100,14 @@ function commitPlan(game: Game, target: RouteCheckTarget, base: LineShape, plan:
         revert: () => (useUI.getState().undoDraft(), null),
         reapply: () => (useUI.getState().redoDraft(), null),
       };
-  const res = applyFix(game, base, plan, dest);
+  const key = actionKey();
+  const res = (await send({ m: 'applyFix', args: [base, plan, target.route !== null ? { route: target.route } : { draft: true }, key] }, { draft })) as { title: string } | string;
   if (typeof res === 'string') return res;
-  return { title: plan.title, before: stats.before, after: stats.after, undo: res.undo, redo: res.redo };
+  return {
+    title: plan.title, before: stats.before, after: stats.after,
+    undo: async () => (await send({ m: 'undoApplied', args: [key] })) as string | null,
+    redo: async () => (await send({ m: 'redoApplied', args: [key] })) as string | null,
+  };
 }
 
 const FIX_ICON: Record<FixKind, typeof Path> = {
@@ -193,8 +202,8 @@ export function RouteCheck({ target }: { target: RouteCheckTarget }) {
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && target.route !== null && (s.history.length || s.future.length)) {
         e.stopPropagation();
         e.preventDefault();
-        if (e.shiftKey) redo(game);
-        else undo(game);
+        if (e.shiftKey) void redo(game);
+        else void undo(game);
       }
     };
     window.addEventListener('keydown', h, true);
@@ -234,7 +243,7 @@ export function RouteCheck({ target }: { target: RouteCheckTarget }) {
         {ses.plan ? (
           <>
             <button className="btn" onClick={() => setSession({ plan: null, note: null })}>Cancel</button>
-            <button className="btn primary" style={{ flex: 1 }} disabled={!ses.stats || !ses.stats.after.valid} onClick={() => accept(game, target, shape, d)}>
+            <button className="btn primary" style={{ flex: 1 }} disabled={!ses.stats || !ses.stats.after.valid} onClick={() => void accept(target, shape, d)}>
               <Check size={16} weight="bold" /> Apply change
             </button>
           </>
@@ -247,11 +256,11 @@ export function RouteCheck({ target }: { target: RouteCheckTarget }) {
               <Crosshair size={16} weight="bold" />
               <Tip label="Show this leg" side="below" />
             </button>
-            <button className="btn has-tip" disabled={!ses.history.length} onClick={() => undo(game)} aria-label="Undo">
+            <button className="btn has-tip" disabled={!ses.history.length} onClick={() => void undo(game)} aria-label="Undo">
               <ArrowCounterClockwise size={16} weight="bold" />
               <Tip label="Undo last fix" k={target.route !== null ? '⌘Z' : undefined} side="below" />
             </button>
-            <button className="btn has-tip" disabled={!ses.future.length} onClick={() => redo(game)} aria-label="Redo">
+            <button className="btn has-tip" disabled={!ses.future.length} onClick={() => void redo(game)} aria-label="Redo">
               <ArrowClockwise size={16} weight="bold" />
               <Tip label="Redo" side="below" />
             </button>
@@ -448,10 +457,10 @@ function Applied({ commit }: { commit: Commit }) {
 
 // ───────────────────────────────────────────── actions
 
-function accept(game: Game, target: RouteCheckTarget, shape: LineShape, d: Diagnostic | null) {
+async function accept(target: RouteCheckTarget, shape: LineShape, d: Diagnostic | null) {
   const s = useCheckSession.getState();
   if (!s.plan || !s.stats) return;
-  const res = commitPlan(game, target, shape, s.plan, s.stats);
+  const res = await commitPlan(target, shape, s.plan, s.stats);
   const ui = useUI.getState();
   if (typeof res === 'string') {
     ui.notify(res, 'bad');
@@ -461,21 +470,21 @@ function accept(game: Game, target: RouteCheckTarget, shape: LineShape, d: Diagn
   ui.notify(`${res.title}. ${target.route !== null ? 'Buses follow the new route from their next stop.' : 'The draft is updated.'}`, 'good');
 }
 
-function undo(game: Game | null) {
+async function undo(game: Game | null) {
   const s = useCheckSession.getState();
   const c = s.history[s.history.length - 1];
   if (!game || !c) return;
-  const err = c.undo();
+  const err = await c.undo();
   if (err) return useUI.getState().notify(err, 'bad');
   setSession({ history: s.history.slice(0, -1), future: [...s.future, c], applied: null, plan: null });
   useUI.getState().notify(`Undone: ${c.title}`, 'info');
 }
 
-function redo(game: Game | null) {
+async function redo(game: Game | null) {
   const s = useCheckSession.getState();
   const c = s.future[s.future.length - 1];
   if (!game || !c) return;
-  const err = c.redo();
+  const err = await c.redo();
   if (err) return useUI.getState().notify(err, 'bad');
   setSession({ future: s.future.slice(0, -1), history: [...s.history, c], applied: c, plan: null });
 }
