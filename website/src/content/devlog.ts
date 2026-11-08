@@ -30,6 +30,12 @@ export interface Update {
 /** Newest first. */
 export const UPDATES: Update[] = [
   {
+    date: '2026-11-08',
+    title: '0.6.1: Longer races, a tidier menu',
+    body: 'Races now run 7, 14 or 30 game days instead of 1, 3 or 7, so there is time to grow a real network before the clock runs out. At the fastest speed that is about 15 minutes, half an hour or an hour. On the start screen, Join a friend and Race a friend now sit under one Multiplayer button.',
+    href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.6.1',
+  },
+  {
     date: '2026-11-07',
     title: '0.6.0: Race a friend',
     body: 'Choose Race a friend on the start screen, pick a city and a length, and send the code. Everyone founds a company in the same home area, with the same money, at the same moment, and one clock runs for all. A scoreboard under the clock counts each company’s journeys, your rivals’ lines show dashed on your map, and whoever has carried the most when time runs out wins. This is also the first download with playing together: the 0.5.0 build never reached the downloads page.',
