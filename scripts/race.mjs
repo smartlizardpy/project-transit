@@ -33,16 +33,20 @@ const info = (page) => page.evaluate(() => {
 
 step('A opens a race');
 const A = await open('A');
+await A.page.getByRole('button', { name: /^multiplayer/i }).click();
 await A.page.getByRole('button', { name: /race a friend/i }).click();
 await A.page.locator('.co-field input').fill('Ana');
-await A.page.getByRole('button', { name: '1 day' }).click();
 await A.page.getByRole('button', { name: /open a race/i }).click();
 await A.page.waitForSelector('.co-code span', { timeout: 30000 });
 const code = (await A.page.locator('.co-code span').textContent()).trim();
 console.log('code', code);
+// races run 7 days or more; a 1-day race keeps this test short
+await A.page.waitForFunction(() => !!window.__race.state().setup, null, { timeout: 30000 });
+await A.page.evaluate(() => window.__race.change(window.__race.state().setup.preset, 1));
 
 step('B joins with the code');
 const B = await open('B');
+await B.page.getByRole('button', { name: /^multiplayer/i }).click();
 await B.page.getByRole('button', { name: /join a friend/i }).click();
 await B.page.locator('.co-field input').first().fill('Ben');
 await B.page.locator('.co-code-in').fill(code);

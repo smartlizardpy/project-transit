@@ -2,8 +2,8 @@ import { Film, hasFilm } from '../components/Film.tsx';
 import { SectionHead } from '../components/SectionHead.tsx';
 
 const STEPS = [
-  { title: 'Open a race', body: 'On the start screen, choose Race a friend. Pick a city and a length (1, 3 or 7 game days) and you get a code.' },
-  { title: 'Friends join', body: 'They choose Join a friend and type the code. Their screen shows the city and the length while everyone gathers.' },
+  { title: 'Open a race', body: 'On the start screen, choose Multiplayer, then Race a friend. Pick a city and a length (7, 14 or 30 game days) and you get a code.' },
+  { title: 'Friends join', body: 'They choose Multiplayer, then Join a friend, and type the code. Their screen shows the city and the length while everyone gathers.' },
   { title: 'Start', body: 'Everyone gets the same map, and the clock starts as soon as every computer has it.' },
 ] as const;
 

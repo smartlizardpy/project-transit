@@ -18,6 +18,13 @@ import { Dialog } from './GameMenu.tsx';
 import { Segmented } from './primitives.tsx';
 
 const days = (n: number) => (n === 1 ? '1 day' : `${n} days`);
+/** Real time for a race at the fastest speed (a game day takes about 2 minutes). */
+function realTime(n: number) {
+  const m = n * 2;
+  if (m < 50) return `about ${m < 10 ? m : Math.round(m / 5) * 5} minutes`;
+  if (m <= 75) return 'about an hour';
+  return `about ${Math.round(m / 60)} hours`;
+}
 const num = (n: number) => n.toLocaleString();
 
 /** "2 d 4 h", "3 h 20 min", "45 min" */
@@ -60,7 +67,7 @@ function LengthPicker({ value, onChange }: { value: number; onChange: (n: number
   return (
     <>
       <Segmented options={RACE_DAYS.map((n) => ({ value: String(n), label: days(n) }))} value={String(value)} onChange={(v) => onChange(Number(v))} />
-      <p className="co-hint rc-len">A game day takes about 2 minutes at the fastest speed, or 12 minutes at the speed before it.</p>
+      <p className="co-hint rc-len">At the fastest speed a game day takes about 2 minutes, so {days(value)} take {realTime(value)}. Anyone can pause the race, and the clock waits for everyone.</p>
     </>
   );
 }
@@ -76,7 +83,7 @@ export function RaceDialog({ onClose }: { onClose: () => void }) {
   const ended = useRace((s) => s.ended);
   const [name, setName] = useState(savedName);
   const [city, setCity] = useState(PRESETS[0].id);
-  const [length, setLength] = useState<number>(3);
+  const [length, setLength] = useState<number>(RACE_DAYS[0]);
   const [copied, setCopied] = useState(false);
   const hosting = role === 'host';
   const close = () => {
@@ -104,7 +111,7 @@ export function RaceDialog({ onClose }: { onClose: () => void }) {
           {!hosting && <NameField value={name} onChange={setName} autoFocus={!name} />}
           {hosting && code && (
             <>
-              <p className="mn-note">Send this code to your friends. They choose <b>Join a friend</b> on the start screen and type it in.</p>
+              <p className="mn-note">Send this code to your friends. On the start screen they choose <b>Multiplayer</b>, then <b>Join a friend</b>, and type it in.</p>
               <div className="co-code">
                 <span>{code}</span>
                 <button className="btn sm" onClick={() => void copy()}>{copied ? <><Check size={13} weight="bold" />Copied</> : <><Copy size={13} weight="bold" />Copy</>}</button>

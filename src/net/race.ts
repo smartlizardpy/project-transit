@@ -19,7 +19,7 @@ import { connect, makeCode, rememberName } from './room.ts';
 export type RacePhase = 'off' | 'lobby' | 'loading' | 'racing' | 'finished' | 'ended';
 
 /** How long a race can run, in game days. */
-export const RACE_DAYS = [1, 3, 7] as const;
+export const RACE_DAYS = [7, 14, 30] as const;
 /** The clock starts at this speed (anyone can change it). */
 const START_SPEED = 1;
 
@@ -254,4 +254,4 @@ export function dismissRace() {
   useRace.setState({ ...initial, ghosts: useRace.getState().ghosts });
 }
 
-if (typeof window !== 'undefined') Object.assign(window, { __race: { state: useRace.getState, open: openRace, start: startRace, leave: leaveRace } });
+if (typeof window !== 'undefined') Object.assign(window, { __race: { state: useRace.getState, open: openRace, change: changeRace, start: startRace, leave: leaveRace } });
