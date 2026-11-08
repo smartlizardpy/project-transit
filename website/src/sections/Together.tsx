@@ -4,7 +4,7 @@ import { SectionHead } from '../components/SectionHead.tsx';
 const STEPS = [
   { title: 'Invite', body: 'The host opens the menu (Esc), chooses Play with friends, then Invite friends. The game shows a code such as RYY4-QC6N.' },
   { title: 'Send the code', body: 'In a message, on a call, any way you like. It works while the host’s game is open.' },
-  { title: 'Join', body: 'Friends choose Join a friend on the start screen and type the code. A copy of the company arrives in a few seconds.' },
+  { title: 'Join', body: 'Friends choose Multiplayer, then Join a friend, on the start screen and type the code. A copy of the company arrives in a few seconds.' },
 ] as const;
 
 const FACTS = [

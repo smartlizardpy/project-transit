@@ -190,14 +190,16 @@ const build = (ui, dir) => ui(async (dir) => {
 console.log('# Ana opens a race, Ben joins');
 // through the real buttons: a module imported from the page can be a second copy of the app's
 const A = await player('ana');
+await A.page.getByRole('button', { name: /^multiplayer/i }).click();
 await A.page.getByRole('button', { name: /race a friend/i }).click();
 await A.page.locator('.co-field input').fill('Ana');
-await A.page.getByRole('button', { name: '1 day' }).click();
+await A.page.getByRole('button', { name: '7 days' }).click();
 await A.page.getByRole('button', { name: /open a race/i }).click();
 await A.page.waitForSelector('.co-code span', { timeout: 30000 });
 const code = (await A.page.locator('.co-code span').textContent()).trim();
 console.log('code', code);
 const B = await player('ben');
+await B.page.getByRole('button', { name: /^multiplayer/i }).click();
 await B.page.getByRole('button', { name: /join a friend/i }).click();
 await B.page.locator('.co-field input').first().fill('Ben');
 await B.page.locator('.co-code-in').fill(code);

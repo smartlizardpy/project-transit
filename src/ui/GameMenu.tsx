@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { X, Play, FloppyDisk, FolderOpen, GearSix, SignOut, Power, Trash, ArrowLeft, UsersThree } from '@phosphor-icons/react';
+import { X, Play, FloppyDisk, FolderOpen, GearSix, SignOut, Power, Trash, ArrowLeft, UsersThree, CaretDown } from '@phosphor-icons/react';
 import '../styles/menu.css';
 import { useSession, session, loadSettings, saveSettings, type AppSettings } from '../app/session.ts';
 import { exitApp, isDesktop, isFullscreen, setFullscreen, type SaveMeta } from '../app/persistence.ts';
@@ -318,12 +318,14 @@ export function GameMenu() {
   );
 }
 
-export function MenuBtn({ icon, label, onClick, primary, disabled, autoFocus, meta }: { icon: ReactNode; label: string; onClick: () => void; primary?: boolean; disabled?: boolean; autoFocus?: boolean; meta?: string }) {
+/** A menu row. Pass `expanded` to make it open and close a group of rows below it. */
+export function MenuBtn({ icon, label, onClick, primary, disabled, autoFocus, meta, expanded }: { icon: ReactNode; label: string; onClick: () => void; primary?: boolean; disabled?: boolean; autoFocus?: boolean; meta?: string; expanded?: boolean }) {
   return (
-    <button className={'mn-item' + (primary ? ' primary' : '')} onClick={onClick} disabled={disabled} autoFocus={autoFocus}>
+    <button className={'mn-item' + (primary ? ' primary' : '')} onClick={onClick} disabled={disabled} autoFocus={autoFocus} aria-expanded={expanded}>
       <span className="mn-item-icon">{icon}</span>
       <span className="mn-item-label">{label}</span>
       {meta && <span className="mn-item-meta">{meta}</span>}
+      {expanded !== undefined && <CaretDown size={14} weight="bold" className={'mn-item-caret' + (expanded ? ' open' : '')} aria-hidden="true" />}
     </button>
   );
 }

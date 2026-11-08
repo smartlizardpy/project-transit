@@ -28,21 +28,25 @@ async function open(name) {
 }
 const info = (page) => page.evaluate(() => {
   const g = window.__game, r = window.__race.state();
-  return g ? { t: g.state.clock.t, speed: g.speed, fp: g.region.fingerprint, rng: g.state.rng, balance: g.state.finance.balance, home: g.state.territory.home, company: g.state.company.name, phase: r.phase, players: r.players.map((p) => p.name) } : { phase: r.phase };
+  return g ? { t: g.state.clock.t, speed: g.speed, fp: g.region.fingerprint, rng: g.state.rng, balance: g.state.finance.balance, home: g.state.territory.home, owned: g.state.territory.owned.slice().sort().join(' '), company: g.state.company.name, phase: r.phase, players: r.players.map((p) => p.name) } : { phase: r.phase };
 });
 
 step('A opens a race');
 const A = await open('A');
+await A.page.getByRole('button', { name: /^multiplayer/i }).click();
 await A.page.getByRole('button', { name: /race a friend/i }).click();
 await A.page.locator('.co-field input').fill('Ana');
-await A.page.getByRole('button', { name: '1 day' }).click();
 await A.page.getByRole('button', { name: /open a race/i }).click();
 await A.page.waitForSelector('.co-code span', { timeout: 30000 });
 const code = (await A.page.locator('.co-code span').textContent()).trim();
 console.log('code', code);
+// races run 7 days or more; a 1-day race keeps this test short
+await A.page.waitForFunction(() => !!window.__race.state().setup, null, { timeout: 30000 });
+await A.page.evaluate(() => window.__race.change(window.__race.state().setup.preset, 1));
 
 step('B joins with the code');
 const B = await open('B');
+await B.page.getByRole('button', { name: /^multiplayer/i }).click();
 await B.page.getByRole('button', { name: /join a friend/i }).click();
 await B.page.locator('.co-field input').first().fill('Ben');
 await B.page.locator('.co-code-in').fill(code);
@@ -64,6 +68,7 @@ console.log('A', a0);
 console.log('B', b0);
 if (a0.fp !== b0.fp) fail('different maps');
 if (a0.home !== b0.home) fail('different home areas');
+if (a0.owned !== b0.owned) fail('different starting areas');
 if (a0.balance !== b0.balance) fail('different starting money');
 if (a0.company === b0.company) fail('the same company name');
 

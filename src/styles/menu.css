@@ -20,6 +20,13 @@
 .mn-item-icon { display: grid; place-items: center; width: 22px; font-size: 18px; flex: none; }
 .mn-item-label { flex: none; }
 .mn-item-meta { flex: 1; min-width: 0; text-align: right; font-size: 11px; font-weight: 600; opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a row that opens a group (start menu → Multiplayer) */
+.mn-item-caret { flex: none; margin-left: auto; opacity: 0.6; transition: transform var(--t-fast); }
+.mn-item-caret.open { transform: rotate(180deg); }
+.mn-item-meta + .mn-item-caret { margin-left: 0; }
+.mn-sub { display: flex; flex-direction: column; gap: 2px; margin: 0 0 4px 22px; padding-left: 10px; border-left: 2px solid var(--hairline-strong); animation: mn-drop 180ms var(--ease-out); }
+.mn-sub .mn-item { min-height: 40px; font-size: 13.5px; }
+@keyframes mn-drop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 
 .mn-backdrop { position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(8,11,10,0.5); backdrop-filter: blur(3px); pointer-events: auto !important; font-family: var(--font); color: var(--text); }
 .mn-dialog { width: min(400px, 92vw); max-height: 86vh; overflow: auto; padding: 18px; box-shadow: var(--shadow-pop), inset 0 0 0 1px var(--hairline); }
@@ -160,10 +167,12 @@
 .mn-start .mn-item:nth-child(3) { animation-delay: 600ms; }
 .mn-start .mn-item:nth-child(4) { animation-delay: 660ms; }
 .mn-start .mn-item:nth-child(5) { animation-delay: 720ms; }
+.mn-start .mn-item:nth-child(6) { animation-delay: 780ms; }
+.mn-start .mn-sub .mn-item { animation: none; }
 .mn-foot { animation: mn-rise 600ms var(--ease-out) 820ms backwards; }
 .mn-flow .mn-panel { animation: mn-glide 360ms var(--ease-out) backwards; }
 @media (prefers-reduced-motion: reduce) {
-  .mn-title h1, .mn-title p, .mn-start .mn-menu, .mn-start .mn-item, .mn-foot, .mn-flow .mn-panel { animation: none; }
+  .mn-title h1, .mn-title p, .mn-start .mn-menu, .mn-start .mn-item, .mn-sub, .mn-foot, .mn-flow .mn-panel { animation: none; }
 }
 .mn-zone-start { display: block; margin-top: 6px; font-size: 11.5px; font-weight: 700; color: var(--accent, #2f7fd6); line-height: 1.35; }
 

@@ -6,6 +6,7 @@ import { Game, newGameState } from '../game/engine.ts';
 import { prepareRegion } from '../game/world/geo.ts';
 import { moveToRegion } from '../game/growth.ts';
 import { tilesNeeded } from '../game/world/zoneTiles.ts';
+import { startingZones } from '../game/progress.ts';
 import type { Region, RegionData, RegionSpec } from '../game/world/region.ts';
 import { SAVE_VERSION, type GameState } from '../game/types.ts';
 import { upgradeState } from '../game/upgrade.ts';
@@ -293,13 +294,25 @@ class Session {
   }
 
   /**
-   * Race: load the race city for the host (with the loading screen). Returns null if it failed;
-   * the start menu shows why.
+   * Race: load the race city for the host (with the loading screen), and the home area `pickHome`
+   * chooses on it. Returns null if it failed; the start menu shows why.
    */
-  async loadRaceCity(spec: RegionSpec): Promise<Region | null> {
+  async loadRaceCity(spec: RegionSpec, pickHome: (r: Region) => string): Promise<{ region: Region; home: string } | null> {
     useSession.setState({ phase: 'loading', pending: null, error: null });
     try {
-      return await this.loadRegion(spec);
+      let region = await this.loadRegion(spec);
+      const home = pickHome(region);
+      // The starting areas can reach past the city's tiles. Load that map now: every company is
+      // founded on this one map, so all start with the same areas, and no map has to grow (and
+      // download more) once the clock runs. If it cannot load, the maps grow after the start.
+      for (let i = 0; i < 3; i++) {
+        const tiles = tilesNeeded(region.spec, startingZones(region.zones, home));
+        if (!tiles) break;
+        const bigger = await this.loadRegion({ ...region.spec, tiles }).catch(() => null);
+        if (!bigger || bigger.coverage.missingTiles > region.coverage.missingTiles) break;
+        region = bigger;
+      }
+      return { region, home };
     } catch (e) {
       useSession.setState({ phase: 'menu', progress: null, error: (e as Error).message });
       return null;

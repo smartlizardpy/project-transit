@@ -7,9 +7,9 @@ export const ISSUES = `${REPO}/issues`;
 
 /** The newest published build. Update with each release (see website/README.md). */
 export const RELEASE = {
-  version: '0.6.0',
-  date: '2026-11-07',
-  url: `${REPO}/releases/tag/v0.6.0`,
+  version: '0.6.1',
+  date: '2026-11-08',
+  url: `${REPO}/releases/tag/v0.6.1`,
 };
 
 export const BASE = import.meta.env.BASE_URL;
