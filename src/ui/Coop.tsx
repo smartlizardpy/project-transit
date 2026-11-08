@@ -54,7 +54,7 @@ export function CoopPanel() {
     };
     return (
       <>
-        <p className="mn-note">Send this code to your friends. They choose <b>Join a friend</b> on the start screen and type it in.</p>
+        <p className="mn-note">Send this code to your friends. On the start screen they choose <b>Multiplayer</b>, then <b>Join a friend</b>, and type it in.</p>
         <div className="co-code">
           <span>{code}</span>
           <button className="btn sm" onClick={() => void copy()}>{copied ? <><Check size={13} weight="bold" />Copied</> : <><Copy size={13} weight="bold" />Copy</>}</button>
@@ -112,7 +112,7 @@ export function JoinDialog({ onClose }: { onClose: () => void }) {
     <Dialog title="Join a friend" onClose={cancel}>
       {!coopAvailable() ? <p className="mn-note warn">{NO_RTC}</p> : (
         <form className="co-join" onSubmit={(e) => { e.preventDefault(); go(); }}>
-          <p className="mn-note">Ask your friend for their code. To play in their game, they choose <b>Play with friends</b> in the menu (Esc); for a race, <b>Race a friend</b> on the start screen.</p>
+          <p className="mn-note">Ask your friend for their code. To play in their game, they choose <b>Play with friends</b> in the menu (Esc); for a race, <b>Multiplayer</b> → <b>Race a friend</b> on the start screen.</p>
           <NameField value={name} onChange={setName} autoFocus={!name} />
           <label className="co-field">
             <span>Code</span>

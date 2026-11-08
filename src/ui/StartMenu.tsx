@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Play, Plus, FolderOpen, GearSix, Power, X, UsersThree, FlagCheckered } from '@phosphor-icons/react';
+import { Play, Plus, FolderOpen, GearSix, Power, X, UsersThree, FlagCheckered, SignIn } from '@phosphor-icons/react';
 import '../styles/menu.css';
 import { useSession, session } from '../app/session.ts';
 import { exitApp, isDesktop } from '../app/persistence.ts';
@@ -14,12 +14,16 @@ export function StartMenu() {
   const error = useSession((s) => s.error);
   const flowOpen = useNewCompanyFlow((s) => s.open);
   const [dlg, setDlg] = useState<'load' | 'settings' | 'join' | 'race' | null>(null);
+  const [multi, setMulti] = useState(false);
   useEffect(() => {
     void session.refreshSaves();
   }, []);
   // a game opened (a friend's, a race, a save): the dialog that led there is done
   useEffect(() => {
-    if (phase === 'playing') setDlg(null);
+    if (phase === 'playing') {
+      setDlg(null);
+      setMulti(false);
+    }
   }, [phase]);
   if (phase !== 'menu' || flowOpen) return null;
   const latest = [...saves].sort((a, b) => b.savedAt - a.savedAt)[0];
@@ -46,8 +50,13 @@ export function StartMenu() {
             />
           )}
           <MenuBtn icon={<Plus />} label="New company" autoFocus={!latest} onClick={() => useNewCompanyFlow.setState({ open: true })} />
-          <MenuBtn icon={<UsersThree />} label="Join a friend" onClick={() => setDlg('join')} />
-          <MenuBtn icon={<FlagCheckered />} label="Race a friend" onClick={() => setDlg('race')} />
+          <MenuBtn icon={<UsersThree />} label="Multiplayer" expanded={multi} onClick={() => setMulti(!multi)} />
+          {multi && (
+            <div className="mn-sub" role="group" aria-label="Multiplayer">
+              <MenuBtn icon={<SignIn />} label="Join a friend" meta="Have a code?" onClick={() => setDlg('join')} />
+              <MenuBtn icon={<FlagCheckered />} label="Race a friend" meta="Same city, one clock" onClick={() => setDlg('race')} />
+            </div>
+          )}
           <MenuBtn icon={<FolderOpen />} label="Load game" meta={saves.length ? `${saves.length} saved` : undefined} onClick={() => setDlg('load')} />
           <MenuBtn icon={<GearSix />} label="Settings" onClick={() => setDlg('settings')} />
           {isDesktop() && <MenuBtn icon={<Power />} label="Exit" onClick={() => void exitApp()} />}
