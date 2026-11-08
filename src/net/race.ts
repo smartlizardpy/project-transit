@@ -177,16 +177,17 @@ export async function startRace() {
   const p = PRESETS.find((x) => x.id === h.setup.preset) ?? PRESETS[0];
   h.announce();
   useRace.setState({ phase: 'loading', loading: null });
-  const region = await session.loadRaceCity(presetSpec(p));
+  const loaded = await session.loadRaceCity(presetSpec(p), busiest);
   if (host !== h) return;
-  if (!region) {
+  if (!loaded) {
     // the race dialog says why; friends are told the race is off
     h.end('The host’s game could not load the city, so the race was called off.');
     const why = useSession.getState().error;
     useSession.setState({ error: null });
     return finish(`The city could not be loaded${why ? `: ${why}` : '.'} Check your connection and try again.`);
   }
-  const home = busiest(region);
+  // the city with the map everyone's starting areas need (see loadRaceCity)
+  const { region, home } = loaded;
   const seed = crypto.getRandomValues(new Uint32Array(1))[0] >>> 1;
   const game = session.startRace(region, { seed, home }, companyFor(h.me!));
   route(h);

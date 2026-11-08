@@ -28,7 +28,7 @@ async function open(name) {
 }
 const info = (page) => page.evaluate(() => {
   const g = window.__game, r = window.__race.state();
-  return g ? { t: g.state.clock.t, speed: g.speed, fp: g.region.fingerprint, rng: g.state.rng, balance: g.state.finance.balance, home: g.state.territory.home, company: g.state.company.name, phase: r.phase, players: r.players.map((p) => p.name) } : { phase: r.phase };
+  return g ? { t: g.state.clock.t, speed: g.speed, fp: g.region.fingerprint, rng: g.state.rng, balance: g.state.finance.balance, home: g.state.territory.home, owned: g.state.territory.owned.slice().sort().join(' '), company: g.state.company.name, phase: r.phase, players: r.players.map((p) => p.name) } : { phase: r.phase };
 });
 
 step('A opens a race');
@@ -68,6 +68,7 @@ console.log('A', a0);
 console.log('B', b0);
 if (a0.fp !== b0.fp) fail('different maps');
 if (a0.home !== b0.home) fail('different home areas');
+if (a0.owned !== b0.owned) fail('different starting areas');
 if (a0.balance !== b0.balance) fail('different starting money');
 if (a0.company === b0.company) fail('the same company name');
 

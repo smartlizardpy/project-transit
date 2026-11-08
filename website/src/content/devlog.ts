@@ -32,7 +32,7 @@ export const UPDATES: Update[] = [
   {
     date: '2026-11-08',
     title: '0.6.1: Longer races, a tidier menu',
-    body: 'Races now run 7, 14 or 30 game days instead of 1, 3 or 7, so there is time to grow a real network before the clock runs out. At the fastest speed that is about 15 minutes, half an hour or an hour. On the start screen, Join a friend and Race a friend now sit under one Multiplayer button.',
+    body: 'Races now run 7, 14 or 30 game days instead of 1, 3 or 7, so there is time to grow a real network before the clock runs out. At the fastest speed that is about 15 minutes, half an hour or an hour. On the start screen, Join a friend and Race a friend now sit under one Multiplayer button. Fixed: a friend could start a race on a slightly smaller map than the host and download the rest while the clock was already running; everyone now starts on the same map.',
     href: 'https://github.com/smartlizardpy/project-transit/releases/tag/v0.6.1',
   },
   {
